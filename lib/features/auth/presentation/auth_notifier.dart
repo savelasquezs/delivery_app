@@ -1,6 +1,8 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/api/dio_client.dart';
 import '../data/auth_models.dart';
 import '../data/auth_repository.dart';
+import '../../notifications/fcm_service.dart';
 
 enum AuthStatus { initial, loading, authenticated, unauthenticated, error }
 
@@ -28,8 +30,9 @@ class AuthState {
 
 class AuthNotifier extends StateNotifier<AuthState> {
   final AuthRepository _repository;
+  final DioClient _client;
 
-  AuthNotifier(this._repository) : super(const AuthState()) {
+  AuthNotifier(this._repository, this._client) : super(const AuthState()) {
     _checkSession();
   }
 
@@ -61,6 +64,11 @@ class AuthNotifier extends StateNotifier<AuthState> {
         status: AuthStatus.authenticated,
         user: user,
       );
+      // Solicitar permiso y registrar token FCM tras login exitoso
+      final granted = await FcmService.requestPermission();
+      if (granted) {
+        await FcmService.registerToken(_client);
+      }
     } catch (e) {
       state = state.copyWith(
         status: AuthStatus.error,
@@ -70,6 +78,8 @@ class AuthNotifier extends StateNotifier<AuthState> {
   }
 
   Future<void> logout() async {
+    // Eliminar token FCM antes de cerrar sesión
+    await FcmService.unregisterToken(_client);
     await _repository.logout();
     state = const AuthState(status: AuthStatus.unauthenticated);
   }
@@ -77,5 +87,8 @@ class AuthNotifier extends StateNotifier<AuthState> {
 
 final authNotifierProvider =
     StateNotifierProvider<AuthNotifier, AuthState>((ref) {
-  return AuthNotifier(ref.watch(authRepositoryProvider));
+  return AuthNotifier(
+    ref.watch(authRepositoryProvider),
+    ref.watch(dioClientProvider),
+  );
 });

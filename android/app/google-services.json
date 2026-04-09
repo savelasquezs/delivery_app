@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "347957868437",
+    "project_id": "restaurante-railway",
+    "storage_bucket": "restaurante-railway.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:347957868437:android:7373ce1d53aca555e1e89c",
+        "android_client_info": {
+          "package_name": "com.senorarroz.delivery_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDj8pllA1z5tGA49RsI2EE3WcufXY_QIhY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

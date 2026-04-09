@@ -67,6 +67,7 @@ class HistoryNotifier extends StateNotifier<HistoryState> {
   }
 
   Future<void> load({String? fromDate, String? toDate}) async {
+    if (!mounted) return;
     final from = fromDate ?? state.fromDate;
     final to = toDate ?? state.toDate;
 
@@ -94,6 +95,7 @@ class HistoryNotifier extends StateNotifier<HistoryState> {
         status: 'Delivered',
       );
 
+      if (!mounted) return;
       state = state.copyWith(
         orders: result.items,
         branchSummaries: summaries,
@@ -101,11 +103,13 @@ class HistoryNotifier extends StateNotifier<HistoryState> {
         isLoading: false,
       );
     } catch (e) {
+      if (!mounted) return;
       state = state.copyWith(isLoading: false, error: e.toString());
     }
   }
 
   Future<void> loadMore() async {
+    if (!mounted) return;
     if (!state.hasMore || state.isLoadingMore) return;
     final nextPage = state.currentPage + 1;
     state = state.copyWith(isLoadingMore: true);
@@ -118,12 +122,14 @@ class HistoryNotifier extends StateNotifier<HistoryState> {
         page: nextPage,
         pageSize: 20,
       );
+      if (!mounted) return;
       state = state.copyWith(
         orders: [...state.orders, ...result.items],
         currentPage: nextPage,
         isLoadingMore: false,
       );
     } catch (e) {
+      if (!mounted) return;
       state = state.copyWith(isLoadingMore: false, error: e.toString());
     }
   }

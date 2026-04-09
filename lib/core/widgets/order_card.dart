@@ -70,8 +70,8 @@ class OrderCard extends StatelessWidget {
                   ],
                 ),
               ],
-              if (order.address != null &&
-                  order.address!.fullAddress.isNotEmpty) ...[
+              if (order.displayAddressLine != null &&
+                  order.displayAddressLine!.isNotEmpty) ...[
                 const SizedBox(height: 4),
                 Row(
                   children: [
@@ -80,13 +80,29 @@ class OrderCard extends StatelessWidget {
                     const SizedBox(width: 4),
                     Expanded(
                       child: Text(
-                        order.address!.fullAddress,
+                        order.displayAddressLine!,
                         style: Theme.of(context).textTheme.bodySmall,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
                   ],
+                ),
+              ],
+              if (order.addressAdditionalInfo != null &&
+                  order.addressAdditionalInfo!.trim().isNotEmpty) ...[
+                const SizedBox(height: 2),
+                Padding(
+                  padding: const EdgeInsets.only(left: 18),
+                  child: Text(
+                    order.addressAdditionalInfo!,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: AppColors.hint,
+                          fontSize: 11,
+                        ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
               ],
               if (order.notes != null && order.notes!.isNotEmpty) ...[

@@ -15,7 +15,6 @@ enum OrderStatus {
         OrderStatus.cancelled => 'Cancelado',
       };
 
-  // Mapeo al valor que espera el backend .NET
   String get apiValue => switch (this) {
         OrderStatus.taken => 'taken',
         OrderStatus.inPreparation => 'inPreparation',
@@ -55,15 +54,16 @@ class OrderAddress {
 
   factory OrderAddress.fromJson(Map<String, dynamic> json) => OrderAddress(
         id: json['id'] as int?,
-        street: json['street'] as String?,
+        street: json['street'] as String? ?? json['address'] as String?,
         neighborhood: json['neighborhood'] as String?,
         city: json['city'] as String?,
-        notes: json['notes'] as String?,
+        notes: json['notes'] as String? ?? json['additionalInfo'] as String?,
       );
 
   String get fullAddress {
     final parts = [street, neighborhood, city]
-        .where((p) => p != null && p.isNotEmpty)
+        .whereType<String>()
+        .where((p) => p.isNotEmpty)
         .toList();
     return parts.join(', ');
   }
@@ -109,8 +109,28 @@ class OrderItem {
         productName: json['productName'] as String? ?? '',
         quantity: json['quantity'] as int,
         unitPrice: (json['unitPrice'] as num).toDouble(),
-        subtotal: (json['subtotal'] as num).toDouble(),
+        subtotal: (json['subtotal'] as num?)?.toDouble() ??
+            ((json['quantity'] as int) * (json['unitPrice'] as num).toDouble()),
         notes: json['notes'] as String?,
+      );
+}
+
+class OrderLineSummary {
+  final String productName;
+  final int quantity;
+  final String? categoryName;
+
+  const OrderLineSummary({
+    required this.productName,
+    required this.quantity,
+    this.categoryName,
+  });
+
+  factory OrderLineSummary.fromJson(Map<String, dynamic> json) =>
+      OrderLineSummary(
+        productName: json['productName'] as String? ?? '',
+        quantity: json['quantity'] as int? ?? 0,
+        categoryName: json['categoryName'] as String?,
       );
 }
 
@@ -130,6 +150,18 @@ class Order {
   final int? deliveryManId;
   final String? deliveryManName;
 
+  /// Campos planos del API (OrderDto), alineados con el front web.
+  final int? customerId;
+  final int? addressId;
+  final String? addressDescription;
+  final String? addressAdditionalInfo;
+  final int? neighborhoodId;
+  final String? neighborhoodName;
+  final double? latitude;
+  final double? longitude;
+  final String? deliveryRoutePlanningWarnings;
+  final List<OrderLineSummary> summaryLines;
+
   const Order({
     required this.id,
     required this.status,
@@ -145,32 +177,162 @@ class Order {
     this.branchName,
     this.deliveryManId,
     this.deliveryManName,
+    this.customerId,
+    this.addressId,
+    this.addressDescription,
+    this.addressAdditionalInfo,
+    this.neighborhoodId,
+    this.neighborhoodName,
+    this.latitude,
+    this.longitude,
+    this.deliveryRoutePlanningWarnings,
+    this.summaryLines = const [],
   });
 
-  factory Order.fromJson(Map<String, dynamic> json) => Order(
-        id: json['id'] as int,
-        status: OrderStatus.fromApi(json['status'] as String? ?? 'taken'),
-        type: json['type'] as String? ?? 'delivery',
-        createdAt: DateTime.tryParse(json['createdAt'] as String? ?? '') ??
-            DateTime.now(),
-        total: (json['total'] as num?)?.toDouble() ?? 0,
-        deliveryFee: (json['deliveryFee'] as num?)?.toDouble(),
-        notes: json['notes'] as String?,
-        customer: json['customer'] != null
-            ? OrderCustomer.fromJson(
-                json['customer'] as Map<String, dynamic>)
-            : null,
-        address: json['address'] != null
-            ? OrderAddress.fromJson(json['address'] as Map<String, dynamic>)
-            : null,
-        items: (json['orderDetails'] as List<dynamic>? ?? [])
-            .map((e) => OrderItem.fromJson(e as Map<String, dynamic>))
-            .toList(),
-        branchId: json['branchId'] as int? ?? 0,
-        branchName: json['branchName'] as String?,
-        deliveryManId: json['deliveryManId'] as int?,
-        deliveryManName: json['deliveryManName'] as String?,
+  /// Línea principal de dirección para UI (flat o anidada).
+  String? get displayAddressLine {
+    final d = addressDescription?.trim();
+    if (d != null && d.isNotEmpty) return d;
+    final a = address?.fullAddress.trim();
+    if (a != null && a.isNotEmpty) return a;
+    return null;
+  }
+
+  static double? _toDouble(dynamic v) {
+    if (v == null) return null;
+    if (v is num) return v.toDouble();
+    return null;
+  }
+
+  factory Order.fromJson(Map<String, dynamic> json) {
+    final nestedCustomer = json['customer'] != null
+        ? OrderCustomer.fromJson(json['customer'] as Map<String, dynamic>)
+        : null;
+    final flatCustomerId = json['customerId'] as int?;
+    final flatName = json['customerName'] as String?;
+    final flatPhone = json['customerPhone'] as String?;
+    final customer = nestedCustomer ??
+        ((flatCustomerId != null && flatCustomerId > 0) ||
+                (flatName != null && flatName.isNotEmpty)
+            ? OrderCustomer(
+                id: flatCustomerId ?? 0,
+                name: flatName ?? '',
+                phone: flatPhone,
+              )
+            : null);
+
+    final flatAddrDesc = json['addressDescription'] as String?;
+    final flatAddrInfo = json['addressAdditionalInfo'] as String?;
+    final flatNeighborhoodName = json['neighborhoodName'] as String?;
+    final flatAddressId = json['addressId'] as int?;
+
+    final nestedAddress = json['address'] != null
+        ? OrderAddress.fromJson(json['address'] as Map<String, dynamic>)
+        : null;
+
+    final address = nestedAddress ??
+        ((flatAddrDesc != null && flatAddrDesc.isNotEmpty) ||
+                flatAddressId != null
+            ? OrderAddress(
+                id: flatAddressId,
+                street: flatAddrDesc,
+                neighborhood: flatNeighborhoodName,
+                city: null,
+                notes: flatAddrInfo,
+              )
+            : null);
+
+    final details = json['orderDetails'] as List<dynamic>? ?? [];
+
+    return Order(
+      id: json['id'] as int,
+      status: OrderStatus.fromApi(json['status'] as String? ?? 'taken'),
+      type: json['type'] as String? ?? 'delivery',
+      createdAt: DateTime.tryParse(json['createdAt'] as String? ?? '') ??
+          DateTime.now(),
+      total: (json['total'] as num?)?.toDouble() ?? 0,
+      deliveryFee: (json['deliveryFee'] as num?)?.toDouble(),
+      notes: json['notes'] as String?,
+      customer: customer,
+      address: address,
+      items: details
+          .map((e) => OrderItem.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      branchId: json['branchId'] as int? ?? 0,
+      branchName: json['branchName'] as String?,
+      deliveryManId: json['deliveryManId'] as int?,
+      deliveryManName: json['deliveryManName'] as String?,
+      customerId: flatCustomerId ?? nestedCustomer?.id,
+      addressId: flatAddressId ?? nestedAddress?.id,
+      addressDescription: flatAddrDesc,
+      addressAdditionalInfo: flatAddrInfo,
+      neighborhoodId: json['neighborhoodId'] as int?,
+      neighborhoodName: flatNeighborhoodName,
+      latitude: _toDouble(json['latitude']),
+      longitude: _toDouble(json['longitude']),
+      deliveryRoutePlanningWarnings:
+          json['deliveryRoutePlanningWarnings'] as String?,
+      summaryLines: (json['summaryLines'] as List<dynamic>? ?? [])
+          .map((e) => OrderLineSummary.fromJson(e as Map<String, dynamic>))
+          .toList(),
+    );
+  }
+
+  Order copyWithAddressFields({
+    String? addressDescription,
+    String? addressAdditionalInfo,
+    double? latitude,
+    double? longitude,
+    int? neighborhoodId,
+    String? neighborhoodName,
+  }) {
+    final nextDesc = addressDescription ??
+        this.addressDescription ??
+        address?.street;
+    final nextInfo = addressAdditionalInfo ?? this.addressAdditionalInfo;
+    final nextNeighborhoodName = neighborhoodName ?? this.neighborhoodName;
+    final nextNeighborhoodId = neighborhoodId ?? this.neighborhoodId;
+    final nextLat = latitude ?? this.latitude;
+    final nextLng = longitude ?? this.longitude;
+
+    OrderAddress? nextAddress;
+    if ((nextDesc != null && nextDesc.isNotEmpty) || address != null) {
+      nextAddress = OrderAddress(
+        id: addressId ?? address?.id,
+        street: (nextDesc != null && nextDesc.isNotEmpty) ? nextDesc : address?.street,
+        neighborhood: nextNeighborhoodName ?? address?.neighborhood,
+        city: address?.city,
+        notes: nextInfo ?? address?.notes,
       );
+    }
+
+    return Order(
+      id: id,
+      status: status,
+      type: type,
+      createdAt: createdAt,
+      total: total,
+      deliveryFee: deliveryFee,
+      notes: notes,
+      customer: customer,
+      address: nextAddress,
+      items: items,
+      branchId: branchId,
+      branchName: branchName,
+      deliveryManId: deliveryManId,
+      deliveryManName: deliveryManName,
+      customerId: customerId,
+      addressId: addressId,
+      addressDescription: nextDesc,
+      addressAdditionalInfo: nextInfo,
+      neighborhoodId: nextNeighborhoodId,
+      neighborhoodName: nextNeighborhoodName,
+      latitude: nextLat,
+      longitude: nextLng,
+      deliveryRoutePlanningWarnings: deliveryRoutePlanningWarnings,
+      summaryLines: summaryLines,
+    );
+  }
 }
 
 class PagedOrders {

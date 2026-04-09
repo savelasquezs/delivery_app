@@ -33,6 +33,7 @@ class RouteNotifier extends StateNotifier<RouteState> {
       : super(const RouteState());
 
   Future<void> load() async {
+    if (!mounted) return;
     state = state.copyWith(isLoading: true, error: null);
     try {
       final today = _todayString();
@@ -43,8 +44,10 @@ class RouteNotifier extends StateNotifier<RouteState> {
         status: 'OnTheWay',
         pageSize: 100,
       );
+      if (!mounted) return;
       state = state.copyWith(orders: result.items, isLoading: false);
     } catch (e) {
+      if (!mounted) return;
       state = state.copyWith(isLoading: false, error: e.toString());
     }
   }
@@ -57,6 +60,31 @@ class RouteNotifier extends StateNotifier<RouteState> {
   Future<void> markOnTheWay(int orderId) async {
     await _repository.updateOrderStatus(orderId, OrderStatus.onTheWay);
     await load();
+  }
+
+  /// Actualización optimista tras editar dirección (misma firma que el front).
+  void applyAddressPatch({
+    required int orderId,
+    String? addressDescription,
+    String? addressAdditionalInfo,
+    double? latitude,
+    double? longitude,
+    int? neighborhoodId,
+    String? neighborhoodName,
+  }) {
+    if (!mounted) return;
+    final next = state.orders.map((o) {
+      if (o.id != orderId) return o;
+      return o.copyWithAddressFields(
+        addressDescription: addressDescription,
+        addressAdditionalInfo: addressAdditionalInfo,
+        latitude: latitude,
+        longitude: longitude,
+        neighborhoodId: neighborhoodId,
+        neighborhoodName: neighborhoodName,
+      );
+    }).toList();
+    state = state.copyWith(orders: next);
   }
 
   String _todayString() {

@@ -15,19 +15,39 @@ class OrderRepository {
     return _client.get<List<Order>>(
       ApiConstants.deliveryAvailable,
       queryParameters: params.isEmpty ? null : params,
+      fromJson: _parseOrderList,
+    );
+  }
+
+  Future<List<Order>> getPreparationOrders({int? branchId}) async {
+    final body = <String, dynamic>{
+      'type': 'delivery',
+      'status': 'in_preparation',
+      'page': 1,
+      'pageSize': 100,
+    };
+    if (branchId != null) body['branchId'] = branchId;
+
+    return _client.post<List<Order>>(
+      ApiConstants.ordersSearch,
+      data: body,
       fromJson: (data) {
-        if (data is List) {
-          return data
-              .map((e) => Order.fromJson(e as Map<String, dynamic>))
-              .toList();
-        }
-        // Puede venir envuelto en paginación
-        final items = (data as Map<String, dynamic>)['items'] as List?;
-        return (items ?? [])
+        final list = data is List
+            ? data
+            : (data as Map<String, dynamic>)['items'] as List? ?? [];
+        return list
             .map((e) => Order.fromJson(e as Map<String, dynamic>))
             .toList();
       },
     );
+  }
+
+  static List<Order> _parseOrderList(dynamic data) {
+    if (data is List) {
+      return data.map((e) => Order.fromJson(e as Map<String, dynamic>)).toList();
+    }
+    final items = (data as Map<String, dynamic>)['items'] as List?;
+    return (items ?? []).map((e) => Order.fromJson(e as Map<String, dynamic>)).toList();
   }
 
   Future<PagedOrders> getAssignedOrders({
@@ -65,6 +85,14 @@ class OrderRepository {
     await _client.post<dynamic>(
       ApiConstants.deliverySelfAssign,
       data: {'orderIds': orderIds, 'password': password},
+    );
+  }
+
+  /// Detalle completo (líneas, pagos, etc.) — equivalente a `GET .../details` del front.
+  Future<Order> getOrderWithDetails(int orderId) async {
+    return _client.get<Order>(
+      ApiConstants.orderWithDetails(orderId),
+      fromJson: (data) => Order.fromJson(data as Map<String, dynamic>),
     );
   }
 

@@ -47,12 +47,24 @@ class OrderHubService {
     if (_status == HubConnectionStatus.connected) return;
     _notifyStatus(HubConnectionStatus.connecting);
 
+    // Intentar primero con WebSockets, si falla hacer fallback a LongPolling
+    final connected = await _tryConnect(
+      transport: HttpTransportType.WebSockets,
+    );
+    if (!connected) {
+      await _tryConnect(transport: HttpTransportType.LongPolling);
+    }
+  }
+
+  Future<bool> _tryConnect({required HttpTransportType transport}) async {
     try {
       final token = await _storage.getAuthToken();
       _connection = HubConnectionBuilder()
           .withUrl(
             ApiConstants.signalrHubUrl,
             options: HttpConnectionOptions(
+              transport: transport,
+              skipNegotiation: transport == HttpTransportType.WebSockets,
               accessTokenFactory: () async => token ?? '',
             ),
           )
@@ -62,33 +74,38 @@ class OrderHubService {
       _connection!.onclose(({error}) {
         _notifyStatus(HubConnectionStatus.disconnected);
       });
-
       _connection!.onreconnecting(({error}) {
         _notifyStatus(HubConnectionStatus.connecting);
       });
-
       _connection!.onreconnected(({connectionId}) {
         _notifyStatus(HubConnectionStatus.connected);
       });
 
-      // Eventos relevantes para domiciliario
-      for (final event in [
-        'OrderReady',
-        'OrderAssignedToDelivery',
-        'OrderStatusChanged',
-        'OrderCancelled',
-      ]) {
-        _connection!.on(event, (args) {
-          for (final listener in _eventListeners) {
-            listener(event, args);
-          }
-        });
-      }
+      _registerEvents();
 
       await _connection!.start();
       _notifyStatus(HubConnectionStatus.connected);
+      return true;
     } catch (_) {
+      await _connection?.stop();
+      _connection = null;
       _notifyStatus(HubConnectionStatus.error);
+      return false;
+    }
+  }
+
+  void _registerEvents() {
+    for (final event in [
+      'OrderReady',
+      'OrderAssignedToDelivery',
+      'OrderStatusChanged',
+      'OrderCancelled',
+    ]) {
+      _connection!.on(event, (args) {
+        for (final listener in _eventListeners) {
+          listener(event, args);
+        }
+      });
     }
   }
 

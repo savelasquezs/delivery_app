@@ -1,14 +1,23 @@
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:intl/date_symbol_data_local.dart';
 import 'core/router/app_router.dart';
 import 'core/theme/app_theme.dart';
+import 'features/notifications/fcm_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  await dotenv.load(fileName: '.env');
+  await Future.wait([
+    dotenv.load(fileName: '.env'),
+    initializeDateFormatting('es_CO'),
+    Firebase.initializeApp(),
+  ]);
+
+  await FcmService.initialize();
 
   SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,

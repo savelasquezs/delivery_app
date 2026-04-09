@@ -51,6 +51,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     hubService.addStatusListener(_onHubStatusChange);
     hubService.addEventListener(_onHubEvent);
     await hubService.connect(user!.branchId!);
+    // Tras await el widget puede haberse dispuesto; no usar ref aquí.
   }
 
   void _onHubStatusChange(HubConnectionStatus status) {
@@ -58,7 +59,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   void _onHubEvent(String event, List<Object?>? args) {
-    // Refrescar pantallas relevantes según el evento
+    if (!mounted) return;
     if (event == 'OrderReady' || event == 'OrderAssignedToDelivery') {
       ref.invalidate(availableNotifierProvider);
     }

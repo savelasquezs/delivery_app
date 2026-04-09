@@ -18,6 +18,7 @@ abstract class ApiConstants {
 
   // Orders delivery
   static const String deliveryAvailable = '/orders/delivery/available';
+  static const String ordersSearch = '/orders/search';
   static const String deliveryReady = '/orders/delivery/ready';
   static const String deliverySelfAssign = '/orders/delivery/self-assign';
   static String deliveryAssigned(int deliverymanId) =>
@@ -27,9 +28,17 @@ abstract class ApiConstants {
   static String deliveryAssignedNeighborhoods(int deliverymanId) =>
       '/orders/delivery/assigned/$deliverymanId/neighborhoods';
   static String orderStatus(int orderId) => '/orders/$orderId/status';
+  static String orderWithDetails(int orderId) => '/orders/$orderId/details';
+
+  // Customers (direcciones — mismo contrato que el front web)
+  static const String customerNeighborhoods = '/customers/neighborhoods';
+  static String customerAddress(int customerId, int addressId) =>
+      '/customers/$customerId/addresses/$addressId';
 
   // Deliveryman
   static const String myDayState = '/deliverymen/me/day-state';
+  static const String myAdvances = '/deliverymen/advances';
+  static const String myDeviceToken = '/deliverymen/me/device-token';
 
   // Dashboard
   static const String dashboardDeliveryMe = '/dashboard/delivery/me';

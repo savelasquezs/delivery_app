@@ -145,6 +145,15 @@ class DioClient {
     final response = await _dio.put<dynamic>(path, data: data);
     return fromJson != null ? fromJson(response.data) : response.data as T;
   }
+
+  Future<T> delete<T>(
+    String path, {
+    dynamic data,
+    T Function(dynamic)? fromJson,
+  }) async {
+    final response = await _dio.delete<dynamic>(path, data: data);
+    return fromJson != null ? fromJson(response.data) : response.data as T;
+  }
 }
 
 final dioClientProvider = Provider<DioClient>((ref) {

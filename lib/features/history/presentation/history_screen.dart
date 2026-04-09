@@ -7,6 +7,7 @@ import '../../../core/widgets/empty_state_widget.dart';
 import '../../../core/widgets/error_banner.dart';
 import '../../../core/widgets/order_card.dart';
 import '../../orders/models/order_models.dart';
+import '../../route/presentation/widgets/delivery_order_detail_sheet.dart';
 import 'history_notifier.dart';
 
 final _currencyFormat =
@@ -39,6 +40,7 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
   }
 
   void _onScroll() {
+    if (!mounted) return;
     if (_scrollController.position.pixels >=
         _scrollController.position.maxScrollExtent - 200) {
       ref.read(historyNotifierProvider.notifier).loadMore();
@@ -80,6 +82,18 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
           .read(historyNotifierProvider.notifier)
           .changeDateRange(fmt.format(picked.start), fmt.format(picked.end));
     }
+  }
+
+  Future<void> _openOrderDetail(Order order) async {
+    await showDeliveryOrderDetailSheet(
+      context: context,
+      ref: ref,
+      initialOrder: order,
+      onAddressUpdated: (_) {
+        ref.read(historyNotifierProvider.notifier).load();
+      },
+      onAfterDelivered: () => ref.read(historyNotifierProvider.notifier).load(),
+    );
   }
 
   @override
@@ -140,7 +154,10 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
                       return Padding(
                         padding:
                             const EdgeInsets.only(bottom: AppTheme.spacingSm),
-                        child: OrderCard(order: order),
+                        child: OrderCard(
+                          order: order,
+                          onTap: () => _openOrderDetail(order),
+                        ),
                       );
                     },
                     childCount: state.orders.length,
