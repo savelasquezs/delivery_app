@@ -2,6 +2,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../orders/data/order_repository.dart';
 import '../../orders/models/order_models.dart';
 import '../../auth/presentation/auth_notifier.dart';
+import '../../tracking/location_tracking_service.dart';
+import '../../../core/api/api_constants.dart';
+import '../../../core/storage/secure_storage.dart';
 
 class RouteState {
   final List<Order> orders;
@@ -28,8 +31,9 @@ class RouteState {
 class RouteNotifier extends StateNotifier<RouteState> {
   final OrderRepository _repository;
   final int _deliverymanId;
+  final SecureStorage _storage;
 
-  RouteNotifier(this._repository, this._deliverymanId)
+  RouteNotifier(this._repository, this._deliverymanId, this._storage)
       : super(const RouteState());
 
   Future<void> load() async {
@@ -46,15 +50,32 @@ class RouteNotifier extends StateNotifier<RouteState> {
       );
       if (!mounted) return;
       state = state.copyWith(orders: result.items, isLoading: false);
+      await _syncTracking(result.items);
     } catch (e) {
       if (!mounted) return;
       state = state.copyWith(isLoading: false, error: e.toString());
     }
   }
 
+  /// Starts or stops location tracking based on whether there are onTheWay orders.
+  Future<void> _syncTracking(List<Order> orders) async {
+    final hasActiveOrders = orders.isNotEmpty;
+    if (hasActiveOrders) {
+      final token = await _storage.getAuthToken();
+      if (token != null) {
+        await LocationTrackingService.startTracking(
+          authToken: token,
+          baseUrl: ApiConstants.baseUrl,
+        );
+      }
+    } else {
+      await LocationTrackingService.stopTracking();
+    }
+  }
+
   Future<void> markDelivered(int orderId) async {
     await _repository.updateOrderStatus(orderId, OrderStatus.delivered);
-    await load();
+    await load(); // load() already calls _syncTracking
   }
 
   Future<void> markOnTheWay(int orderId) async {
@@ -99,5 +120,6 @@ final routeNotifierProvider =
   return RouteNotifier(
     ref.watch(orderRepositoryProvider),
     user?.id ?? 0,
+    ref.watch(secureStorageProvider),
   );
 });

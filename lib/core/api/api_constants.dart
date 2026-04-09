@@ -39,6 +39,8 @@ abstract class ApiConstants {
   static const String myDayState = '/deliverymen/me/day-state';
   static const String myAdvances = '/deliverymen/advances';
   static const String myDeviceToken = '/deliverymen/me/device-token';
+  static const String deliverymanLocation = '/deliverymen/location';
+  static String deliverymanLastLocation(int id) => '/deliverymen/$id/last-location';
 
   // Dashboard
   static const String dashboardDeliveryMe = '/dashboard/delivery/me';

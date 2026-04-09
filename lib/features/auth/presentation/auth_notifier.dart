@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:geolocator/geolocator.dart';
 import '../../../core/api/dio_client.dart';
 import '../data/auth_models.dart';
 import '../data/auth_repository.dart';
@@ -69,6 +70,8 @@ class AuthNotifier extends StateNotifier<AuthState> {
       if (granted) {
         await FcmService.registerToken(_client);
       }
+      // Solicitar permisos de ubicación para el tracking GPS
+      await _requestLocationPermissions();
     } catch (e) {
       state = state.copyWith(
         status: AuthStatus.error,
@@ -82,6 +85,22 @@ class AuthNotifier extends StateNotifier<AuthState> {
     await FcmService.unregisterToken(_client);
     await _repository.logout();
     state = const AuthState(status: AuthStatus.unauthenticated);
+  }
+
+  /// Requests foreground location permission, then background location (Android 10+).
+  Future<void> _requestLocationPermissions() async {
+    try {
+      var status = await Geolocator.checkPermission();
+      if (status == LocationPermission.denied) {
+        status = await Geolocator.requestPermission();
+      }
+      // Request background permission separately (Android 10+ requires it after foreground)
+      if (status == LocationPermission.whileInUse) {
+        await Geolocator.requestPermission();
+      }
+    } catch (_) {
+      // Permission errors should not block login flow
+    }
   }
 }
 

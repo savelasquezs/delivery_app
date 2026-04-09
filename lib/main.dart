@@ -1,15 +1,20 @@
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'core/router/app_router.dart';
 import 'core/theme/app_theme.dart';
 import 'features/notifications/fcm_service.dart';
+import 'features/tracking/location_tracking_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Initialize communication port for foreground task ↔ main isolate
+  FlutterForegroundTask.initCommunicationPort();
 
   await Future.wait([
     dotenv.load(fileName: '.env'),
@@ -18,6 +23,7 @@ Future<void> main() async {
   ]);
 
   await FcmService.initialize();
+  LocationTrackingService.initialize();
 
   SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
@@ -31,7 +37,7 @@ Future<void> main() async {
     systemNavigationBarIconBrightness: Brightness.light,
   ));
 
-  runApp(const ProviderScope(child: DeliveryApp()));
+  runApp(const ProviderScope(child: WithForegroundTask(child: DeliveryApp())));
 }
 
 class DeliveryApp extends ConsumerWidget {

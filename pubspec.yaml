@@ -48,6 +48,8 @@ dependencies:
 
   # Env
   flutter_dotenv: ^5.2.1
+  flutter_foreground_task: ^9.2.2
+  shared_preferences: ^2.5.5
 
 dev_dependencies:
   flutter_test:

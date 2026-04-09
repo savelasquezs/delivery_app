@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/api/api_constants.dart';
+import '../../core/storage/secure_storage.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/app_logo.dart';
@@ -11,6 +13,7 @@ import '../route/presentation/route_screen.dart';
 import '../history/presentation/history_screen.dart';
 import '../analytics/presentation/analytics_screen.dart';
 import '../realtime/order_hub_service.dart';
+import '../tracking/location_tracking_service.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -19,7 +22,8 @@ class HomeScreen extends ConsumerStatefulWidget {
   ConsumerState<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends ConsumerState<HomeScreen> {
+class _HomeScreenState extends ConsumerState<HomeScreen>
+    with WidgetsBindingObserver {
   int _currentIndex = 0;
   HubConnectionStatus _hubStatus = HubConnectionStatus.disconnected;
   OrderHubService? _hubService;
@@ -41,7 +45,31 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _connectSignalR();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _restartTrackingIfNeeded();
+    }
+  }
+
+  /// Re-starts location tracking when the app resumes from background,
+  /// in case the service was killed by the OS.
+  Future<void> _restartTrackingIfNeeded() async {
+    final routeState = ref.read(routeNotifierProvider);
+    if (routeState.orders.isEmpty) return;
+
+    final storage = ref.read(secureStorageProvider);
+    final token = await storage.getAuthToken();
+    if (token == null) return;
+
+    await LocationTrackingService.startTracking(
+      authToken: token,
+      baseUrl: ApiConstants.baseUrl,
+    );
   }
 
   Future<void> _connectSignalR() async {
@@ -71,6 +99,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _hubService?.removeStatusListener(_onHubStatusChange);
     _hubService?.removeEventListener(_onHubEvent);
     super.dispose();
