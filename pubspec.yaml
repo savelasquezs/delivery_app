@@ -1,0 +1,52 @@
+name: delivery_app
+description: App móvil para domiciliarios de Señor Arroz
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Estado
+  flutter_riverpod: ^2.6.1
+  riverpod_annotation: ^2.6.1
+
+  # HTTP
+  dio: ^5.8.0+1
+
+  # Almacenamiento seguro
+  flutter_secure_storage: ^9.2.4
+
+  # Navegación
+  go_router: ^14.8.1
+
+  # SignalR
+  signalr_netcore: ^1.3.6
+
+  # Formateo
+  intl: ^0.20.2
+
+  # Utilidades
+  equatable: ^2.0.7
+
+  # Imágenes
+  cached_network_image: ^3.4.1
+
+  # Env
+  flutter_dotenv: ^5.2.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+  build_runner: ^2.4.14
+  riverpod_generator: ^2.6.3
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/images/
+    - .env
