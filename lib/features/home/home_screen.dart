@@ -22,6 +22,7 @@ class HomeScreen extends ConsumerStatefulWidget {
 class _HomeScreenState extends ConsumerState<HomeScreen> {
   int _currentIndex = 0;
   HubConnectionStatus _hubStatus = HubConnectionStatus.disconnected;
+  OrderHubService? _hubService;
 
   static const _screens = [
     AvailableScreen(),
@@ -47,11 +48,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final user = ref.read(authNotifierProvider).user;
     if (user?.branchId == null) return;
 
-    final hubService = ref.read(orderHubServiceProvider);
-    hubService.addStatusListener(_onHubStatusChange);
-    hubService.addEventListener(_onHubEvent);
-    await hubService.connect(user!.branchId!);
-    // Tras await el widget puede haberse dispuesto; no usar ref aquí.
+    // Guardamos la referencia para poder usarla en dispose() sin tocar ref
+    _hubService = ref.read(orderHubServiceProvider);
+    _hubService!.addStatusListener(_onHubStatusChange);
+    _hubService!.addEventListener(_onHubEvent);
+    await _hubService!.connect(user!.branchId!);
   }
 
   void _onHubStatusChange(HubConnectionStatus status) {
@@ -70,9 +71,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   @override
   void dispose() {
-    final hubService = ref.read(orderHubServiceProvider);
-    hubService.removeStatusListener(_onHubStatusChange);
-    hubService.removeEventListener(_onHubEvent);
+    _hubService?.removeStatusListener(_onHubStatusChange);
+    _hubService?.removeEventListener(_onHubEvent);
     super.dispose();
   }
 
