@@ -5,10 +5,23 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/error_banner.dart';
 import '../models/advance_model.dart';
+import '../models/analytics_dashboard_models.dart';
+import 'analytics_charts.dart';
 import 'analytics_notifier.dart';
 
 final _money = NumberFormat.currency(locale: 'es_CO', symbol: '\$', decimalDigits: 0);
 final _dateLabel = DateFormat('dd/MM/yyyy');
+
+String _advancesPeriodSubtitle(AnalyticsState state) {
+  final a = state.advancesFromDate;
+  final b = state.advancesToDate;
+  final sameDay =
+      a.year == b.year && a.month == b.month && a.day == b.day;
+  if (sameDay) {
+    return 'Por defecto solo hoy (${_dateLabel.format(a)}). Al elegir otro rango arriba, los abonos usan ese mismo período.';
+  }
+  return 'Período de abonos: ${_dateLabel.format(a)} – ${_dateLabel.format(b)} (igual que el filtro).';
+}
 
 class AnalyticsScreen extends ConsumerStatefulWidget {
   const AnalyticsScreen({super.key});
@@ -97,23 +110,90 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen> {
                 ),
               )
             else if (state.stats != null) ...[
+              if (state.payrollError != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Text(
+                    'No se cargó el detalle de nómina; ganancias estimadas con el ${(state.effectivePayRate * 100).round()} % típico.',
+                    style: TextStyle(
+                      color: AppColors.warning.withValues(alpha: 0.9),
+                      fontSize: 11,
+                    ),
+                  ),
+                ),
               _SectionLabel('RENDIMIENTO DEL PERÍODO'),
               const SizedBox(height: 8),
-              _KpiGrid(stats: state.stats!),
+              _KpiGrid(
+                stats: state.stats!,
+                payableFees: state.displayPayableFees,
+                payRate: state.effectivePayRate,
+                totalFeesRecaudo: state.stats!.totalFeesRecaudo,
+              ),
               const SizedBox(height: 16),
 
+              // ── Gráficas evolución ─────────────────────────────
+              _SectionLabel('EVOLUCIÓN'),
+              const SizedBox(height: 8),
+              DeliveryEvolutionCharts(
+                labels: state.stats!.evolutionLabels,
+                deliveries: state.stats!.evolutionDeliveries,
+                feesPayable: [
+                  for (var i = 0; i < state.stats!.evolutionFees.length; i++)
+                    state.stats!.evolutionFees[i] * state.effectivePayRate,
+                ],
+              ),
+              const SizedBox(height: 16),
+
+              if (state.stats!.routeMetrics != null) ...[
+                RouteMetricsSection(metrics: state.stats!.routeMetrics!),
+                const SizedBox(height: 16),
+              ],
+
               // ── Detalle diario ─────────────────────────────────
-              if (state.stats!.dailyBreakdown.isNotEmpty) ...[
+              if (state.dailyRowsForUi.isNotEmpty) ...[
                 _SectionLabel('DETALLE POR DÍA'),
                 const SizedBox(height: 8),
-                _DailyBreakdownCard(items: state.stats!.dailyBreakdown),
+                _DailyBreakdownCard(items: state.dailyRowsForUi),
                 const SizedBox(height: 16),
               ],
             ],
 
-            // ── Préstamos / Abonos ────────────────────────────────
+            // ── Préstamos (nómina) + abonos caja ──────────────────
             _SectionLabel('PRÉSTAMOS / DESCUENTOS'),
+            const SizedBox(height: 4),
+            Text(
+              'Préstamos: líneas de gasto vinculadas a tu nómina (mismo dato que el panel web).',
+              style: TextStyle(
+                color: AppColors.hint.withValues(alpha: 0.95),
+                fontSize: 11,
+                height: 1.25,
+              ),
+            ),
             const SizedBox(height: 8),
+            _PayrollExpenseLinesCard(
+              payroll: state.payrollInsights,
+              mainLoading: state.isLoading,
+              payrollError: state.payrollError,
+            ),
+            const SizedBox(height: 14),
+            Text(
+              'Abonos en caja',
+              style: TextStyle(
+                color: AppColors.hint.withValues(alpha: 0.9),
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.4,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              _advancesPeriodSubtitle(state),
+              style: TextStyle(
+                color: AppColors.hint.withValues(alpha: 0.8),
+                fontSize: 10,
+              ),
+            ),
+            const SizedBox(height: 6),
             _AdvancesCard(
               advances: state.advances,
               isLoading: state.isLoadingAdvances,
@@ -225,10 +305,19 @@ class _PeriodCard extends StatelessWidget {
 
 class _KpiGrid extends StatelessWidget {
   final DashboardStats stats;
-  const _KpiGrid({required this.stats});
+  final double payableFees;
+  final double payRate;
+  final double totalFeesRecaudo;
+  const _KpiGrid({
+    required this.stats,
+    required this.payableFees,
+    required this.payRate,
+    required this.totalFeesRecaudo,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final pct = (payRate * 100).round();
     final cards = [
       _KpiData(
         icon: Icons.local_shipping_outlined,
@@ -238,9 +327,15 @@ class _KpiGrid extends StatelessWidget {
       ),
       _KpiData(
         icon: Icons.savings_outlined,
-        label: 'Ganancias en fees',
-        value: _money.format(stats.totalEarnings),
+        label: 'Ganancias en fees ($pct %)',
+        value: _money.format(payableFees),
         color: AppColors.warning,
+      ),
+      _KpiData(
+        icon: Icons.payments_outlined,
+        label: 'Recaudo total fees domicilio',
+        value: _money.format(totalFeesRecaudo),
+        color: AppColors.hint,
       ),
       if (stats.avgDeliveryMinutes != null)
         _KpiData(
@@ -408,7 +503,236 @@ class _BlockedDayBanner extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tabla de préstamos / abonos
+// Préstamos desde payroll-insights (period.expenseLines)
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _PayrollExpenseLinesCard extends StatelessWidget {
+  final UserPayrollInsights? payroll;
+  final bool mainLoading;
+  final String? payrollError;
+
+  const _PayrollExpenseLinesCard({
+    required this.payroll,
+    required this.mainLoading,
+    required this.payrollError,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (mainLoading && payroll == null && payrollError == null) {
+      return Container(
+        height: 88,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: AppColors.card,
+          borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+          border: Border.all(color: AppColors.divider),
+        ),
+        child: const CircularProgressIndicator(
+          color: AppColors.primary,
+          strokeWidth: 2,
+        ),
+      );
+    }
+
+    if (payroll == null) {
+      return Container(
+        padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 14),
+        decoration: BoxDecoration(
+          color: AppColors.card,
+          borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+          border: Border.all(color: AppColors.divider),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              payrollError != null ? Icons.info_outline : Icons.lock_outline,
+              color: AppColors.hint,
+              size: 18,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                payrollError != null
+                    ? 'No se pudo cargar la nómina; los préstamos por gasto no están disponibles. Reintenta o revisa tu conexión.'
+                    : 'Inicia sesión y espera a cargar el período para ver tus préstamos (líneas de gasto).',
+                style: const TextStyle(color: AppColors.hint, fontSize: 13),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final period = payroll!.period;
+    final lines = List<PayrollExpenseLineItem>.from(period.expenseLines)
+      ..sort((a, b) => b.headerCreatedAt.compareTo(a.headerCreatedAt));
+
+    if (lines.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.symmetric(vertical: 20),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: AppColors.card,
+          borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+          border: Border.all(color: AppColors.divider),
+        ),
+        child: const Text(
+          'Sin préstamos (líneas de gasto) en este período',
+          style: TextStyle(color: AppColors.hint, fontSize: 13),
+        ),
+      );
+    }
+
+    final totalDisplay = period.expenseLinesTotal > 0
+        ? period.expenseLinesTotal
+        : lines.fold<double>(0, (s, e) => s + e.lineTotal);
+
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+        border: Border.all(color: AppColors.divider),
+      ),
+      child: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            decoration: BoxDecoration(
+              color: AppColors.error.withValues(alpha: 0.08),
+              borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(AppTheme.radiusMd)),
+              border: Border(
+                bottom: BorderSide(
+                    color: AppColors.error.withValues(alpha: 0.2)),
+              ),
+            ),
+            child: Row(
+              children: [
+                const Text('Fecha gasto',
+                    style: TextStyle(
+                        color: AppColors.hint,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600)),
+                const Spacer(),
+                const Text('Notas',
+                    style: TextStyle(
+                        color: AppColors.hint,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600)),
+                const SizedBox(width: 12),
+                const Text('Monto',
+                    style: TextStyle(
+                        color: AppColors.hint,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600)),
+              ],
+            ),
+          ),
+          ...lines.asMap().entries.map((entry) {
+            final i = entry.key;
+            final line = entry.value;
+            final dateStr = _dateLabel.format(line.headerCreatedAt.toLocal());
+            return Column(
+              children: [
+                if (i > 0) const Divider(height: 1, indent: 14, endIndent: 14),
+                Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SizedBox(
+                        width: 76,
+                        child: Text(
+                          dateStr,
+                          style: const TextStyle(
+                              color: AppColors.onSurface, fontSize: 11),
+                        ),
+                      ),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            Text(
+                              line.notes.trim().isNotEmpty
+                                  ? line.notes
+                                  : 'Gasto #${line.headerId}',
+                              style: const TextStyle(
+                                color: AppColors.hint,
+                                fontSize: 12,
+                              ),
+                              textAlign: TextAlign.center,
+                              maxLines: 3,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            Text(
+                              'Detalle ${line.detailId}',
+                              style: TextStyle(
+                                color:
+                                    AppColors.hint.withValues(alpha: 0.7),
+                                fontSize: 10,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        _money.format(line.lineTotal),
+                        style: const TextStyle(
+                          color: AppColors.error,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            );
+          }),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: AppColors.error.withValues(alpha: 0.06),
+              borderRadius: const BorderRadius.vertical(
+                  bottom: Radius.circular(AppTheme.radiusMd)),
+              border: Border(
+                top: BorderSide(
+                    color: AppColors.error.withValues(alpha: 0.2)),
+              ),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  'Total préstamos / gastos',
+                  style: TextStyle(
+                    color: AppColors.onSurface,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                  ),
+                ),
+                Text(
+                  _money.format(totalDisplay),
+                  style: const TextStyle(
+                    color: AppColors.error,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 15,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tabla de abonos en caja (deliverymen/me/advances)
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _AdvancesCard extends StatelessWidget {

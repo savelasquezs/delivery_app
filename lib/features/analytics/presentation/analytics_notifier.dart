@@ -1,34 +1,35 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../core/api/dio_client.dart';
 import '../../../core/api/api_constants.dart';
+import '../../../core/api/dio_client.dart';
+import '../../../core/constants/delivery_payroll.dart';
+import '../../auth/presentation/auth_notifier.dart';
 import '../models/advance_model.dart';
+import '../models/analytics_dashboard_models.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Modelos — alineados con DashboardDeliveryApiResponse del backend
+// Modelos — GET /dashboard/delivery/me (+ routeMetrics)
 // ─────────────────────────────────────────────────────────────────────────────
 
 class DashboardStats {
-  /// Total de entregas en el período (suma evolutionDeliveries)
   final int totalDeliveries;
-  /// Total de fees/ganancias en el período
-  final double totalEarnings;
-  /// Tiempo promedio de entrega en minutos
+  /// Suma de fees de envío recaudados (100 %) en el período.
+  final double totalFeesRecaudo;
   final double? avgDeliveryMinutes;
-  /// Puntos de la evolución de entregas (por bucket de fecha)
   final List<String> evolutionLabels;
   final List<int> evolutionDeliveries;
   final List<double> evolutionFees;
+  final RouteDashboardMetrics? routeMetrics;
 
   const DashboardStats({
     required this.totalDeliveries,
-    required this.totalEarnings,
+    required this.totalFeesRecaudo,
     this.avgDeliveryMinutes,
     required this.evolutionLabels,
     required this.evolutionDeliveries,
     required this.evolutionFees,
+    this.routeMetrics,
   });
 
-  /// Construye desde la respuesta real de GET /dashboard/delivery/me
   factory DashboardStats.fromDeliveryApi(Map<String, dynamic> json) {
     final deliverymen = json['deliverymen'] as List<dynamic>? ?? [];
     final me = deliverymen.isNotEmpty
@@ -45,29 +46,38 @@ class DashboardStats {
         .map((e) => (e as num).toDouble())
         .toList();
 
-    final total = deliveries.fold(0, (a, b) => a + b);
+    final totalDel = deliveries.fold(0, (a, b) => a + b);
     final totalFee = fees.fold(0.0, (a, b) => a + b);
 
+    RouteDashboardMetrics? routeMetrics;
+    final rm = json['routeMetrics'];
+    if (rm is Map<String, dynamic>) {
+      routeMetrics = RouteDashboardMetrics.fromJson(rm);
+    }
+
     return DashboardStats(
-      totalDeliveries: (me['deliveredCount'] as num?)?.toInt() ?? total,
-      totalEarnings: (me['deliveryFeeTotal'] as num?)?.toDouble() ?? totalFee,
+      totalDeliveries: (me['deliveredCount'] as num?)?.toInt() ?? totalDel,
+      totalFeesRecaudo:
+          (me['deliveryFeeTotal'] as num?)?.toDouble() ?? totalFee,
       avgDeliveryMinutes:
           (json['avgDeliveryMinutes'] as num?)?.toDouble() ??
-          (me['avgDeliveryMinutes'] as num?)?.toDouble(),
+              (me['avgDeliveryMinutes'] as num?)?.toDouble(),
       evolutionLabels: labels,
       evolutionDeliveries: deliveries,
       evolutionFees: fees,
+      routeMetrics: routeMetrics,
     );
   }
 
-  /// Convierte evolución en lista de DailyDelivery para la tabla por día
-  List<DailyDelivery> get dailyBreakdown {
+  /// Tabla por bucket usando fee recaudado × tasa (si no hay nómina por punto).
+  List<DailyDelivery> dailyBreakdownApplyRate(double payRate) {
     final result = <DailyDelivery>[];
     for (var i = 0; i < evolutionLabels.length; i++) {
+      final fee = i < evolutionFees.length ? evolutionFees[i] : 0.0;
       result.add(DailyDelivery(
         date: evolutionLabels[i],
         count: i < evolutionDeliveries.length ? evolutionDeliveries[i] : 0,
-        amount: i < evolutionFees.length ? evolutionFees[i] : 0,
+        amount: fee * payRate,
       ));
     }
     return result;
@@ -104,18 +114,25 @@ class DayBlockState {
 class AnalyticsState {
   final DashboardStats? stats;
   final DayBlockState? dayState;
+  final UserPayrollInsights? payrollInsights;
+  final String? payrollError;
   final List<DeliverymanAdvance> advances;
   final bool isLoading;
   final bool isLoadingAdvances;
   final String? error;
   final String? advancesError;
-  /// Fechas del rango activo (para mostrar en UI)
   final DateTime fromDate;
   final DateTime toDate;
+  /// Rango para abonos (`/me/advances`). Por defecto: solo hoy; al cambiar el
+  /// período en el filtro, coincide con [fromDate]/[toDate].
+  final DateTime advancesFromDate;
+  final DateTime advancesToDate;
 
   const AnalyticsState({
     this.stats,
     this.dayState,
+    this.payrollInsights,
+    this.payrollError,
     this.advances = const [],
     this.isLoading = false,
     this.isLoadingAdvances = false,
@@ -123,11 +140,47 @@ class AnalyticsState {
     this.advancesError,
     required this.fromDate,
     required this.toDate,
+    required this.advancesFromDate,
+    required this.advancesToDate,
   });
+
+  double get effectivePayRate =>
+      payrollInsights?.deliveryFeePayRate ?? kDeliveryFeeDriverShare;
+
+  /// Parte del domiciliario según nómina del API, o estimación desde dashboard.
+  double get displayPayableFees {
+    if (payrollInsights != null) {
+      return payrollInsights!.period.payableDeliveryFee;
+    }
+    final s = stats;
+    if (s == null) return 0;
+    return s.totalFeesRecaudo * effectivePayRate;
+  }
+
+  List<DailyDelivery> get dailyRowsForUi {
+    final payroll = payrollInsights;
+    if (payroll != null && payroll.series.isNotEmpty) {
+      return payroll.series
+          .map(
+            (p) => DailyDelivery(
+              date: p.label,
+              count: p.deliveredOrdersCount,
+              amount: p.payableDeliveryFee,
+            ),
+          )
+          .toList();
+    }
+    final s = stats;
+    if (s == null) return [];
+    return s.dailyBreakdownApplyRate(effectivePayRate);
+  }
 
   AnalyticsState copyWith({
     DashboardStats? stats,
     DayBlockState? dayState,
+    UserPayrollInsights? payrollInsights,
+    bool assignPayrollInsights = false,
+    String? payrollError,
     List<DeliverymanAdvance>? advances,
     bool? isLoading,
     bool? isLoadingAdvances,
@@ -135,12 +188,20 @@ class AnalyticsState {
     String? advancesError,
     DateTime? fromDate,
     DateTime? toDate,
+    DateTime? advancesFromDate,
+    DateTime? advancesToDate,
     bool clearError = false,
     bool clearAdvancesError = false,
+    bool clearPayrollError = false,
   }) =>
       AnalyticsState(
         stats: stats ?? this.stats,
         dayState: dayState ?? this.dayState,
+        payrollInsights: assignPayrollInsights
+            ? payrollInsights
+            : (payrollInsights ?? this.payrollInsights),
+        payrollError:
+            clearPayrollError ? null : (payrollError ?? this.payrollError),
         advances: advances ?? this.advances,
         isLoading: isLoading ?? this.isLoading,
         isLoadingAdvances: isLoadingAdvances ?? this.isLoadingAdvances,
@@ -150,13 +211,18 @@ class AnalyticsState {
             : (advancesError ?? this.advancesError),
         fromDate: fromDate ?? this.fromDate,
         toDate: toDate ?? this.toDate,
+        advancesFromDate: advancesFromDate ?? this.advancesFromDate,
+        advancesToDate: advancesToDate ?? this.advancesToDate,
       );
 
   static AnalyticsState initial() {
     final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
     return AnalyticsState(
       fromDate: DateTime(now.year, now.month, 1),
       toDate: now,
+      advancesFromDate: today,
+      advancesToDate: today,
     );
   }
 }
@@ -167,42 +233,83 @@ class AnalyticsState {
 
 class AnalyticsNotifier extends StateNotifier<AnalyticsState> {
   final DioClient _client;
+  final Ref _ref;
 
-  AnalyticsNotifier(this._client) : super(AnalyticsState.initial());
+  AnalyticsNotifier(this._client, this._ref) : super(AnalyticsState.initial());
 
   static String _fmt(DateTime d) =>
       '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+  static String _seriesGranularity(DateTime from, DateTime to) {
+    final days = to.difference(from).inDays.abs() + 1;
+    return days > 45 ? 'biweek' : 'day';
+  }
 
   Future<void> load({DateTime? from, DateTime? to}) async {
     if (!mounted) return;
     final fromD = from ?? state.fromDate;
     final toD = to ?? state.toDate;
+    final userId = _ref.read(authNotifierProvider).user?.id;
+
     state = state.copyWith(
       isLoading: true,
       clearError: true,
+      clearPayrollError: true,
       fromDate: fromD,
       toDate: toD,
     );
+
     try {
       final fromStr = '${_fmt(fromD)}T00:00:00Z';
       final toStr = '${_fmt(toD)}T23:59:59Z';
 
-      final results = await Future.wait([
-        _client.get<Map<String, dynamic>>(
-          ApiConstants.dashboardDeliveryMe,
-          queryParameters: {'from': fromStr, 'to': toStr},
-          fromJson: (d) => d as Map<String, dynamic>,
-        ),
-        _client.get<Map<String, dynamic>>(
-          ApiConstants.myDayState,
-          fromJson: (d) => d as Map<String, dynamic>,
-        ),
+      final dashFuture = _client.get<Map<String, dynamic>>(
+        ApiConstants.dashboardDeliveryMe,
+        queryParameters: {'from': fromStr, 'to': toStr},
+        fromJson: (d) => d as Map<String, dynamic>,
+      );
+      final dayFuture = _client.get<Map<String, dynamic>>(
+        ApiConstants.myDayState,
+        fromJson: (d) => d as Map<String, dynamic>,
+      );
+
+      Future<UserPayrollInsights?> loadPayroll() async {
+        if (userId == null) return null;
+        try {
+          final j = await _client.get<Map<String, dynamic>>(
+            ApiConstants.userPayrollInsights(userId),
+            queryParameters: {
+              'from': _fmt(fromD),
+              'to': _fmt(toD),
+              'seriesGranularity': _seriesGranularity(fromD, toD),
+            },
+            fromJson: (d) => d as Map<String, dynamic>,
+          );
+          return UserPayrollInsights.fromJson(j);
+        } catch (e) {
+          if (mounted) {
+            state = state.copyWith(payrollError: e.toString());
+          }
+          return null;
+        }
+      }
+
+      final results = await Future.wait<Object?>([
+        dashFuture,
+        dayFuture,
+        loadPayroll(),
       ]);
 
       if (!mounted) return;
+      final dash = results[0]! as Map<String, dynamic>;
+      final dayJson = results[1]! as Map<String, dynamic>;
+      final payroll = results[2] as UserPayrollInsights?;
+
       state = state.copyWith(
-        stats: DashboardStats.fromDeliveryApi(results[0]),
-        dayState: DayBlockState.fromJson(results[1]),
+        stats: DashboardStats.fromDeliveryApi(dash),
+        dayState: DayBlockState.fromJson(dayJson),
+        payrollInsights: payroll,
+        assignPayrollInsights: true,
         isLoading: false,
       );
     } catch (e) {
@@ -210,14 +317,13 @@ class AnalyticsNotifier extends StateNotifier<AnalyticsState> {
       state = state.copyWith(isLoading: false, error: e.toString());
     }
 
-    // Carga advances en paralelo
-    await _loadAdvances(from: fromD, to: toD);
+    await _loadAdvances();
   }
 
-  Future<void> _loadAdvances({DateTime? from, DateTime? to}) async {
+  Future<void> _loadAdvances() async {
     if (!mounted) return;
-    final fromD = from ?? state.fromDate;
-    final toD = to ?? state.toDate;
+    final fromD = state.advancesFromDate;
+    final toD = state.advancesToDate;
     state = state.copyWith(isLoadingAdvances: true, clearAdvancesError: true);
     try {
       final list = await _client.get<List<DeliverymanAdvance>>(
@@ -241,16 +347,24 @@ class AnalyticsNotifier extends StateNotifier<AnalyticsState> {
     } catch (e) {
       if (!mounted) return;
       state = state.copyWith(
-          isLoadingAdvances: false, advancesError: e.toString());
+        isLoadingAdvances: false,
+        advancesError: e.toString(),
+      );
     }
   }
 
   Future<void> changeDateRange(DateTime from, DateTime to) async {
+    final aFrom = DateTime(from.year, from.month, from.day);
+    final aTo = DateTime(to.year, to.month, to.day);
+    state = state.copyWith(
+      advancesFromDate: aFrom,
+      advancesToDate: aTo,
+    );
     await load(from: from, to: to);
   }
 }
 
 final analyticsNotifierProvider =
     StateNotifierProvider.autoDispose<AnalyticsNotifier, AnalyticsState>((ref) {
-  return AnalyticsNotifier(ref.watch(dioClientProvider));
+  return AnalyticsNotifier(ref.watch(dioClientProvider), ref);
 });

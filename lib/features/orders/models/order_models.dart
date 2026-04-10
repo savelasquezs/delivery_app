@@ -1,3 +1,5 @@
+import '../../../core/constants/delivery_payroll.dart';
+
 enum OrderStatus {
   taken,
   inPreparation,
@@ -198,6 +200,15 @@ class Order {
     return null;
   }
 
+  /// Barrio para UI (API plano o dirección anidada).
+  String? get displayNeighborhoodLabel {
+    final n = neighborhoodName?.trim();
+    if (n != null && n.isNotEmpty) return n;
+    final a = address?.neighborhood?.trim();
+    if (a != null && a.isNotEmpty) return a;
+    return null;
+  }
+
   static double? _toDouble(dynamic v) {
     if (v == null) return null;
     if (v is num) return v.toDouble();
@@ -221,9 +232,12 @@ class Order {
               )
             : null);
 
-    final flatAddrDesc = json['addressDescription'] as String?;
-    final flatAddrInfo = json['addressAdditionalInfo'] as String?;
-    final flatNeighborhoodName = json['neighborhoodName'] as String?;
+    final flatAddrDesc = json['addressDescription'] as String? ??
+        json['AddressDescription'] as String?;
+    final flatAddrInfo = json['addressAdditionalInfo'] as String? ??
+        json['AddressAdditionalInfo'] as String?;
+    final flatNeighborhoodName = json['neighborhoodName'] as String? ??
+        json['NeighborhoodName'] as String?;
     final flatAddressId = json['addressId'] as int?;
 
     final nestedAddress = json['address'] != null
@@ -258,15 +272,17 @@ class Order {
       items: details
           .map((e) => OrderItem.fromJson(e as Map<String, dynamic>))
           .toList(),
-      branchId: json['branchId'] as int? ?? 0,
-      branchName: json['branchName'] as String?,
+      branchId: json['branchId'] as int? ?? json['BranchId'] as int? ?? 0,
+      branchName:
+          json['branchName'] as String? ?? json['BranchName'] as String?,
       deliveryManId: json['deliveryManId'] as int?,
       deliveryManName: json['deliveryManName'] as String?,
       customerId: flatCustomerId ?? nestedCustomer?.id,
       addressId: flatAddressId ?? nestedAddress?.id,
       addressDescription: flatAddrDesc,
       addressAdditionalInfo: flatAddrInfo,
-      neighborhoodId: json['neighborhoodId'] as int?,
+      neighborhoodId: json['neighborhoodId'] as int? ??
+          json['NeighborhoodId'] as int?,
       neighborhoodName: flatNeighborhoodName,
       latitude: _toDouble(json['latitude']),
       longitude: _toDouble(json['longitude']),
@@ -367,19 +383,40 @@ class BranchSummary {
   final int branchId;
   final String branchName;
   final int deliveredCount;
-  final double totalAmount;
+  /// Suma de fees de envío de los pedidos (100 %).
+  final double totalDeliveryFee;
+  /// Parte del domiciliario según política de nómina del servidor.
+  final double payableDeliveryFee;
 
   const BranchSummary({
     required this.branchId,
     required this.branchName,
     required this.deliveredCount,
-    required this.totalAmount,
+    required this.totalDeliveryFee,
+    required this.payableDeliveryFee,
   });
 
-  factory BranchSummary.fromJson(Map<String, dynamic> json) => BranchSummary(
-        branchId: json['branchId'] as int? ?? 0,
-        branchName: json['branchName'] as String? ?? '',
-        deliveredCount: json['deliveredCount'] as int? ?? 0,
-        totalAmount: (json['totalAmount'] as num?)?.toDouble() ?? 0,
-      );
+  factory BranchSummary.fromJson(Map<String, dynamic> json) {
+    final delivered = (json['deliveredCount'] as num?)?.toInt() ??
+        (json['orderCount'] as num?)?.toInt() ??
+        0;
+    final totalFee = (json['totalDeliveryFee'] as num?)?.toDouble() ?? 0.0;
+    final payableExplicit = json['payableDeliveryFee'] as num?;
+    final double payableDeliveryFee;
+    if (payableExplicit != null) {
+      payableDeliveryFee = payableExplicit.toDouble();
+    } else if (totalFee > 0) {
+      payableDeliveryFee = totalFee * kDeliveryFeeDriverShare;
+    } else {
+      payableDeliveryFee =
+          ((json['totalAmount'] as num?)?.toDouble() ?? 0) * kDeliveryFeeDriverShare;
+    }
+    return BranchSummary(
+      branchId: json['branchId'] as int? ?? 0,
+      branchName: json['branchName'] as String? ?? '',
+      deliveredCount: delivered,
+      totalDeliveryFee: totalFee,
+      payableDeliveryFee: payableDeliveryFee,
+    );
+  }
 }

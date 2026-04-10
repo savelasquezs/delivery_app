@@ -1,10 +1,14 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../../core/api/api_constants.dart';
+import '../../core/router/app_router.dart';
 import '../../core/storage/secure_storage.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/app_logo.dart';
+import '../auth/data/auth_models.dart';
 import '../auth/presentation/auth_notifier.dart';
 import '../available/presentation/available_notifier.dart';
 import '../available/presentation/available_screen.dart';
@@ -12,6 +16,7 @@ import '../route/presentation/route_notifier.dart';
 import '../route/presentation/route_screen.dart';
 import '../history/presentation/history_screen.dart';
 import '../analytics/presentation/analytics_screen.dart';
+import '../profile/data/profile_image_url.dart';
 import '../realtime/order_hub_service.dart';
 import '../tracking/location_tracking_service.dart';
 
@@ -107,6 +112,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 
   void _showProfileMenu() {
     final user = ref.read(authNotifierProvider).user;
+    final navContext = context;
     showModalBottomSheet(
       context: context,
       backgroundColor: AppColors.surface,
@@ -156,6 +162,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
               const SizedBox(height: AppTheme.spacingLg),
               const Divider(),
               ListTile(
+                leading: const Icon(Icons.person_outline, color: AppColors.primaryLight),
+                title: const Text('Mi perfil'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  navContext.push(routeProfile);
+                },
+              ),
+              ListTile(
                 leading: const Icon(Icons.logout, color: AppColors.error),
                 title: const Text('Cerrar sesión',
                     style: TextStyle(color: AppColors.error)),
@@ -189,8 +203,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           _HubStatusIndicator(status: _hubStatus),
           const SizedBox(width: AppTheme.spacingSm),
           IconButton(
-            icon: const Icon(Icons.account_circle_outlined),
+            padding: EdgeInsets.zero,
+            splashRadius: 22,
             onPressed: _showProfileMenu,
+            icon: _ProfileAppBarAvatar(user: ref.watch(authNotifierProvider).user),
           ),
         ],
       ),
@@ -215,6 +231,69 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         ),
       ),
     );
+  }
+}
+
+class _ProfileAppBarAvatar extends StatelessWidget {
+  const _ProfileAppBarAvatar({required this.user});
+
+  final AuthUser? user;
+
+  @override
+  Widget build(BuildContext context) {
+    final url = resolveProfileImageUrl(user?.profileImageUrl);
+    final initials = _initialsFromName(user?.name ?? user?.email ?? '');
+
+    final child = url != null && url.isNotEmpty
+        ? ClipOval(
+            child: CachedNetworkImage(
+              imageUrl: url,
+              width: 36,
+              height: 36,
+              fit: BoxFit.cover,
+              placeholder: (_, __) => const SizedBox(
+                width: 36,
+                height: 36,
+                child: Center(
+                  child: SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ),
+              ),
+              errorWidget: (_, __, ___) => _fallbackAvatar(initials),
+            ),
+          )
+        : _fallbackAvatar(initials);
+
+    return SizedBox(
+      width: 36,
+      height: 36,
+      child: child,
+    );
+  }
+
+  Widget _fallbackAvatar(String initials) {
+    final letter = initials.isNotEmpty ? initials : '?';
+    return CircleAvatar(
+      radius: 18,
+      backgroundColor: AppColors.primaryContainer,
+      foregroundColor: AppColors.primaryLight,
+      child: letter.length <= 2
+          ? Text(letter, style: const TextStyle(fontWeight: FontWeight.w600))
+          : const Icon(Icons.person_outline, size: 22),
+    );
+  }
+
+  static String _initialsFromName(String name) {
+    final parts = name.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty);
+    if (parts.isEmpty) return '';
+    if (parts.length == 1) {
+      final p = parts.first;
+      return p.length >= 2 ? p.substring(0, 2).toUpperCase() : p.toUpperCase();
+    }
+    return (parts.first[0] + parts.elementAt(1)[0]).toUpperCase();
   }
 }
 

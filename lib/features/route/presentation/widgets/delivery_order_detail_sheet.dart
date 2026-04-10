@@ -275,6 +275,13 @@ class _DeliveryOrderDetailBodyState
                       Row(
                         children: [
                           StatusBadge(status: _order.status),
+                          if (_order.displayNeighborhoodLabel != null) ...[
+                            const SizedBox(width: 8),
+                            _Chip(
+                              label: _order.displayNeighborhoodLabel!,
+                              icon: Icons.location_city_outlined,
+                            ),
+                          ],
                           if (_order.branchName != null) ...[
                             const SizedBox(width: 8),
                             _Chip(

@@ -5,24 +5,47 @@ import '../../features/auth/presentation/auth_notifier.dart';
 import '../../features/auth/presentation/forgot_password_screen.dart';
 import '../../features/auth/presentation/login_screen.dart';
 import '../../features/home/home_screen.dart';
+import '../../features/profile/presentation/profile_screen.dart';
 
 const _routeLogin = '/login';
 const _routeHome = '/';
 const routeForgotPassword = '/forgot-password';
+const routeProfile = '/profile';
+
+/// Evita recrear [GoRouter] en cada `AuthStatus.loading` (p. ej. al pulsar login):
+/// una nueva instancia con `initialLocation: /` montaba Home y disparaba APIs sin token.
+class _RouterRefresh extends ChangeNotifier {
+  void notifyAuthChanged() => notifyListeners();
+}
 
 final appRouterProvider = Provider<GoRouter>((ref) {
-  final authState = ref.watch(authNotifierProvider);
+  final refresh = _RouterRefresh();
+  ref.onDispose(refresh.dispose);
+
+  ref.listen<AuthState>(authNotifierProvider, (prev, next) {
+    if (next.status == AuthStatus.loading) {
+      final p = prev?.status;
+      if (p == AuthStatus.unauthenticated || p == AuthStatus.initial) {
+        return;
+      }
+    }
+    refresh.notifyAuthChanged();
+  });
 
   return GoRouter(
+    refreshListenable: refresh,
     initialLocation: _routeHome,
     redirect: (context, state) {
+      final authState = ref.read(authNotifierProvider);
       final isAuthenticated = authState.status == AuthStatus.authenticated;
       final isLoading = authState.status == AuthStatus.initial ||
           authState.status == AuthStatus.loading;
       final isLoginRoute = state.matchedLocation == _routeLogin;
+      final isPublicAuthRoute =
+          isLoginRoute || state.matchedLocation == routeForgotPassword;
 
       if (isLoading) return null;
-      if (!isAuthenticated && !isLoginRoute) return _routeLogin;
+      if (!isAuthenticated && !isPublicAuthRoute) return _routeLogin;
       if (isAuthenticated && isLoginRoute) return _routeHome;
       return null;
     },
@@ -30,6 +53,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: _routeHome,
         builder: (_, __) => const HomeScreen(),
+      ),
+      GoRoute(
+        path: routeProfile,
+        builder: (_, __) => const ProfileScreen(),
       ),
       GoRoute(
         path: _routeLogin,

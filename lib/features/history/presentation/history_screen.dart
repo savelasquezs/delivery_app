@@ -242,7 +242,7 @@ class _BranchSummarySection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final total = summaries.fold(0.0, (s, b) => s + b.totalAmount);
+    final total = summaries.fold(0.0, (s, b) => s + b.payableDeliveryFee);
     final totalCount = summaries.fold(0, (s, b) => s + b.deliveredCount);
 
     return Container(
@@ -258,23 +258,43 @@ class _BranchSummarySection extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Resumen',
-                  style: TextStyle(
-                      color: AppColors.onBackground,
-                      fontWeight: FontWeight.bold)),
-              const Spacer(),
-              Text(
-                '$totalCount entrega${totalCount != 1 ? 's' : ''}',
-                style: const TextStyle(
-                    color: AppColors.hint, fontSize: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Resumen',
+                        style: TextStyle(
+                            color: AppColors.onBackground,
+                            fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Tu parte del fee de envío (≈70 % del recaudo domicilio)',
+                      style: TextStyle(
+                        color: AppColors.hint.withValues(alpha: 0.9),
+                        fontSize: 10,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              const SizedBox(width: 8),
-              Text(
-                _currencyFormat.format(total),
-                style: const TextStyle(
-                    color: AppColors.primary,
-                    fontWeight: FontWeight.bold),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    '$totalCount entrega${totalCount != 1 ? 's' : ''}',
+                    style: const TextStyle(
+                        color: AppColors.hint, fontSize: 12),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    _currencyFormat.format(total),
+                    style: const TextStyle(
+                        color: AppColors.primary,
+                        fontWeight: FontWeight.bold),
+                  ),
+                ],
               ),
             ],
           ),
@@ -298,7 +318,7 @@ class _BranchSummarySection extends StatelessWidget {
                           style: const TextStyle(
                               color: AppColors.hint, fontSize: 12)),
                       const SizedBox(width: 8),
-                      Text(_currencyFormat.format(s.totalAmount),
+                      Text(_currencyFormat.format(s.payableDeliveryFee),
                           style: const TextStyle(
                               color: AppColors.primary,
                               fontSize: 12,

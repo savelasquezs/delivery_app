@@ -1,4 +1,5 @@
 import 'dart:convert';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/api/dio_client.dart';
 import '../../../core/api/api_constants.dart';
@@ -42,6 +43,10 @@ class AuthRepository {
     } catch (e) {
       throw ApiException('Error al iniciar sesión: ${e.toString()}');
     }
+  }
+
+  Future<void> persistUser(AuthUser user) async {
+    await _storage.saveUserData(jsonEncode(user.toJson()));
   }
 
   Future<AuthUser?> getStoredUser() async {

@@ -124,32 +124,61 @@ class OrderCard extends StatelessWidget {
               ],
               const SizedBox(height: AppTheme.spacingSm),
               Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (order.branchName != null)
-                    Expanded(
-                      child: Row(
-                        children: [
-                          const Icon(Icons.store_outlined,
-                              size: 13, color: AppColors.hint),
-                          const SizedBox(width: 4),
-                          Flexible(
-                            child: Text(
-                              order.branchName!,
-                              style: const TextStyle(
-                                  color: AppColors.hint, fontSize: 11),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
+                  Expanded(
+                    child: Row(
+                      children: [
+                        const Icon(Icons.location_city_outlined,
+                            size: 13, color: AppColors.hint),
+                        const SizedBox(width: 4),
+                        Flexible(
+                          child: Text(
+                            order.displayNeighborhoodLabel ?? 'Sin barrio',
+                            style: TextStyle(
+                              color: order.displayNeighborhoodLabel != null
+                                  ? AppColors.hint
+                                  : AppColors.hint.withValues(alpha: 0.65),
+                              fontSize: 11,
+                              fontWeight: order.displayNeighborhoodLabel != null
+                                  ? FontWeight.w500
+                                  : FontWeight.normal,
                             ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
+                  ),
                   Text(
                     DateFormat('HH:mm').format(order.createdAt.toLocal()),
                     style: const TextStyle(color: AppColors.hint, fontSize: 11),
                   ),
                 ],
               ),
+              if (order.branchName != null &&
+                  order.branchName!.trim().isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    const Icon(Icons.store_outlined,
+                        size: 11, color: AppColors.hint),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: Text(
+                        'Sucursal · ${order.branchName}',
+                        style: TextStyle(
+                          color: AppColors.hint.withValues(alpha: 0.85),
+                          fontSize: 10,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
               if (trailing != null) ...[
                 const SizedBox(height: AppTheme.spacingSm),
                 const Divider(height: 1),

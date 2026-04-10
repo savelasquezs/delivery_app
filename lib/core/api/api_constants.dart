@@ -8,14 +8,28 @@ abstract class ApiConstants {
       dotenv.env['SIGNALR_HUB_URL'] ??
       'https://senorarrozapi.up.railway.app/hubs/orders';
 
-  static const Duration connectTimeout = Duration(seconds: 15);
-  static const Duration receiveTimeout = Duration(seconds: 15);
+  /// Red móvil / API en frío (p. ej. Railway): más holgura que el front web (10s).
+  static const Duration connectTimeout = Duration(seconds: 30);
+  static const Duration receiveTimeout = Duration(seconds: 30);
 
   // Auth
   static const String login = '/auth/login';
   static const String refresh = '/auth/refresh';
   static const String logout = '/auth/logout';
   static const String forgotPassword = '/auth/forgot-password';
+  static const String authChangePassword = '/auth/change-password';
+
+  static String userById(int id) => '/Users/$id';
+  static String userProfile(int id) => '/Users/$id/profile';
+  static String userProfileImage(int id) => '/Users/$id/profile-image';
+
+  /// Origen del API sin sufijo `/api` (imágenes estáticas).
+  static String get originUrl {
+    final base = baseUrl;
+    final i = base.toLowerCase().lastIndexOf('/api');
+    if (i <= 0) return base;
+    return base.substring(0, i);
+  }
 
   // Orders delivery
   static const String deliveryAvailable = '/orders/delivery/available';
@@ -38,7 +52,11 @@ abstract class ApiConstants {
 
   // Deliveryman
   static const String myDayState = '/deliverymen/me/day-state';
-  static const String myAdvances = '/deliverymen/advances';
+  static const String myAdvances = '/deliverymen/me/advances';
+  static const String myDaySummary = '/deliverymen/me/day-summary';
+
+  static String userPayrollInsights(int userId) =>
+      '/Users/$userId/payroll-insights';
   static const String myDeviceToken = '/deliverymen/me/device-token';
   static const String deliverymanLocation = '/deliverymen/location';
   static String deliverymanLastLocation(int id) => '/deliverymen/$id/last-location';

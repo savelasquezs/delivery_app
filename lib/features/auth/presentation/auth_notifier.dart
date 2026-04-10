@@ -87,6 +87,12 @@ class AuthNotifier extends StateNotifier<AuthState> {
     state = const AuthState(status: AuthStatus.unauthenticated);
   }
 
+  /// Persiste y actualiza el usuario en memoria (tras perfil, foto, etc.).
+  Future<void> updateSessionUser(AuthUser user) async {
+    await _repository.persistUser(user);
+    state = state.copyWith(user: user);
+  }
+
   /// Requests foreground location permission, then background location (Android 10+).
   Future<void> _requestLocationPermissions() async {
     try {
