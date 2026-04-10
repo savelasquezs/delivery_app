@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -1412,15 +1411,6 @@ class _PhoneActions extends StatelessWidget {
     }
   }
 
-  Future<void> _copy(BuildContext ctx) async {
-    await Clipboard.setData(ClipboardData(text: phone));
-    if (ctx.mounted) {
-      ScaffoldMessenger.of(ctx).showSnackBar(
-        SnackBar(content: Text('Número copiado: $phone')),
-      );
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return Row(
@@ -1440,13 +1430,6 @@ class _PhoneActions extends StatelessWidget {
             onTap: () => _whatsapp(context),
           ),
         ],
-        const SizedBox(width: 8),
-        _ContactBtn(
-          icon: Icons.copy_outlined,
-          label: 'Copiar',
-          color: AppColors.hint,
-          onTap: () => _copy(context),
-        ),
       ],
     );
   }
