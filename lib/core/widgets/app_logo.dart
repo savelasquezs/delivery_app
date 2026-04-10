@@ -21,7 +21,7 @@ class AppLogo extends StatelessWidget {
           'assets/images/favicon.png',
           width: size,
           height: size,
-          fit: BoxFit.cover,
+          fit: BoxFit.contain,
           errorBuilder: (_, __, ___) => Icon(
             Icons.delivery_dining,
             size: size * 0.6,

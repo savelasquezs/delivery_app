@@ -60,6 +60,20 @@ class AuthRepository {
     return token != null && user != null && user.isDeliveryman;
   }
 
+  Future<void> forgotPassword(String email) async {
+    try {
+      await _client.post<void>(
+        ApiConstants.forgotPassword,
+        data: {'email': email},
+        fromJson: (_) {},
+      );
+    } on ApiException {
+      rethrow;
+    } catch (e) {
+      throw ApiException('Error al enviar el correo: ${e.toString()}');
+    }
+  }
+
   Future<void> logout() => _storage.clearAll();
 }
 

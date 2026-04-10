@@ -2,11 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../features/auth/presentation/auth_notifier.dart';
+import '../../features/auth/presentation/forgot_password_screen.dart';
 import '../../features/auth/presentation/login_screen.dart';
 import '../../features/home/home_screen.dart';
 
 const _routeLogin = '/login';
 const _routeHome = '/';
+const routeForgotPassword = '/forgot-password';
 
 final appRouterProvider = Provider<GoRouter>((ref) {
   final authState = ref.watch(authNotifierProvider);
@@ -32,6 +34,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: _routeLogin,
         builder: (_, __) => const LoginScreen(),
+      ),
+      GoRoute(
+        path: routeForgotPassword,
+        builder: (_, __) => const ForgotPasswordScreen(),
       ),
     ],
     errorBuilder: (_, state) => Scaffold(

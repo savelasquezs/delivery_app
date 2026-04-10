@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_logo.dart';
+import '../../../core/router/app_router.dart';
 import 'auth_notifier.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
@@ -51,7 +53,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   const SizedBox(height: AppTheme.spacingXl),
-                  const AppLogo(size: 80),
+                  const AppLogo(size: 140),
                   const SizedBox(height: AppTheme.spacingLg),
                   Text(
                     'Señor Arroz',
@@ -124,6 +126,23 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                             }
                             return null;
                           },
+                        ),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: TextButton(
+                            onPressed: () =>
+                                context.push(routeForgotPassword),
+                            style: TextButton.styleFrom(
+                              foregroundColor: AppColors.primaryLight,
+                              padding: EdgeInsets.zero,
+                              minimumSize: Size.zero,
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                            child: const Text(
+                              'Olvidé mi contraseña',
+                              style: TextStyle(fontSize: 13),
+                            ),
+                          ),
                         ),
                         const SizedBox(height: AppTheme.spacingLg),
                         if (authState.errorMessage != null) ...[
