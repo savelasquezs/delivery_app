@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 const _kAuthToken = 'auth_token';
 const _kRefreshToken = 'refresh_token';
 const _kUserData = 'user_data';
+const _kSelfAssignPassword = 'self_assign_password';
 
 class SecureStorage {
   final FlutterSecureStorage _storage;
@@ -26,6 +27,15 @@ class SecureStorage {
 
   Future<void> saveUserData(String jsonData) =>
       _storage.write(key: _kUserData, value: jsonData);
+
+  Future<String?> getSelfAssignPassword() =>
+      _storage.read(key: _kSelfAssignPassword);
+
+  Future<void> saveSelfAssignPassword(String password) =>
+      _storage.write(key: _kSelfAssignPassword, value: password);
+
+  Future<void> deleteSelfAssignPassword() =>
+      _storage.delete(key: _kSelfAssignPassword);
 
   Future<void> clearAll() => _storage.deleteAll();
 }

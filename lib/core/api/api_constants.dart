@@ -63,4 +63,8 @@ abstract class ApiConstants {
 
   // Dashboard
   static const String dashboardDeliveryMe = '/dashboard/delivery/me';
+
+  /// Cola de impresión térmica (ticket domicilio — mismo contrato que el front web).
+  static String branchPrintJobs(int branchId) =>
+      '/branches/$branchId/print-jobs';
 }

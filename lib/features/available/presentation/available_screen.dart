@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/storage/secure_storage.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/empty_state_widget.dart';
@@ -68,12 +69,23 @@ class _AvailableScreenState extends ConsumerState<AvailableScreen>
   Future<void> _confirmAssignment() async {
     if (_selectedIds.isEmpty) return;
     final selectedList = List<int>.from(_selectedIds);
+    final storage = ref.read(secureStorageProvider);
+    final savedPassword = await storage.getSelfAssignPassword();
+    if (!mounted) return;
 
     final confirmed = await ConfirmPasswordDialog.show(
       context,
       title: 'Confirmar asignación',
       subtitle:
           'Se asignarán ${selectedList.length} pedido(s) a tu nombre. Ingresa tu contraseña para continuar.',
+      initialPassword: savedPassword,
+      onPersistPassword: (password, remember) async {
+        if (remember) {
+          await storage.saveSelfAssignPassword(password);
+        } else {
+          await storage.deleteSelfAssignPassword();
+        }
+      },
       onConfirm: (password) async {
         await ref.read(availableNotifierProvider.notifier).selfAssign(
               orderIds: selectedList,

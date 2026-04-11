@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../core/api/dio_client.dart';
 import '../../../core/api/api_constants.dart';
+import '../../../core/api/api_exception.dart';
+import '../../../core/api/dio_client.dart';
 import '../models/order_models.dart';
 
 class OrderRepository {
@@ -90,6 +91,33 @@ class OrderRepository {
       ApiConstants.deliverySelfAssign,
       data: {'orderIds': orderIds, 'password': password},
     );
+  }
+
+  /// Encola reimpresión de ticket de domicilio (`kind: delivery`).
+  Future<void> enqueueDeliveryPrintJob({
+    required int branchId,
+    required List<int> orderIds,
+  }) async {
+    await _client.post<dynamic>(
+      ApiConstants.branchPrintJobs(branchId),
+      data: {'kind': 'delivery', 'orderIds': orderIds},
+      fromJson: (data) {
+        _ensureApiEnvelopeSuccess(data);
+        return data;
+      },
+    );
+  }
+
+  static void _ensureApiEnvelopeSuccess(dynamic data) {
+    if (data is! Map) return;
+    final map = Map<String, dynamic>.from(data);
+    final ok = map['isSuccess'] as bool? ?? map['IsSuccess'] as bool?;
+    if (ok == false) {
+      final msg = map['message'] as String? ??
+          map['Message'] as String? ??
+          'No se pudo encolar la impresión';
+      throw ApiException(msg);
+    }
   }
 
   /// Detalle completo (líneas, pagos, etc.) — equivalente a `GET .../details` del front.

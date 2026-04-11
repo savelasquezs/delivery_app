@@ -1,16 +1,22 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import '../api/api_exception.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_theme.dart';
 
 class ConfirmPasswordDialog extends StatefulWidget {
   final String title;
   final String? subtitle;
+  final String? initialPassword;
+  final Future<void> Function(String password, bool remember)? onPersistPassword;
   final Future<void> Function(String password) onConfirm;
 
   const ConfirmPasswordDialog({
     super.key,
     required this.title,
     this.subtitle,
+    this.initialPassword,
+    this.onPersistPassword,
     required this.onConfirm,
   });
 
@@ -18,6 +24,8 @@ class ConfirmPasswordDialog extends StatefulWidget {
     BuildContext context, {
     required String title,
     String? subtitle,
+    String? initialPassword,
+    Future<void> Function(String password, bool remember)? onPersistPassword,
     required Future<void> Function(String password) onConfirm,
   }) async {
     final result = await showDialog<bool>(
@@ -26,6 +34,8 @@ class ConfirmPasswordDialog extends StatefulWidget {
       builder: (_) => ConfirmPasswordDialog(
         title: title,
         subtitle: subtitle,
+        initialPassword: initialPassword,
+        onPersistPassword: onPersistPassword,
         onConfirm: onConfirm,
       ),
     );
@@ -39,13 +49,32 @@ class ConfirmPasswordDialog extends StatefulWidget {
 class _ConfirmPasswordDialogState extends State<ConfirmPasswordDialog> {
   final _controller = TextEditingController();
   bool _obscure = true;
+  bool _remember = false;
   bool _isLoading = false;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    final initial = widget.initialPassword?.trim();
+    if (initial != null && initial.isNotEmpty) {
+      _controller.text = initial;
+      _remember = true;
+    }
+  }
 
   @override
   void dispose() {
     _controller.dispose();
     super.dispose();
+  }
+
+  String _formatError(Object e) {
+    if (e is ApiException) return e.message;
+    if (e is DioException && e.error is ApiException) {
+      return (e.error! as ApiException).message;
+    }
+    return e.toString();
   }
 
   Future<void> _confirm() async {
@@ -59,10 +88,14 @@ class _ConfirmPasswordDialogState extends State<ConfirmPasswordDialog> {
     });
     try {
       await widget.onConfirm(_controller.text);
+      final persist = widget.onPersistPassword;
+      if (persist != null) {
+        await persist(_controller.text, _remember);
+      }
       if (mounted) Navigator.of(context).pop(true);
     } catch (e) {
       setState(() {
-        _error = e.toString();
+        _error = _formatError(e);
         _isLoading = false;
       });
     }
@@ -105,6 +138,15 @@ class _ConfirmPasswordDialogState extends State<ConfirmPasswordDialog> {
               errorText: _error,
             ),
             onSubmitted: (_) => _confirm(),
+          ),
+          CheckboxListTile(
+            contentPadding: EdgeInsets.zero,
+            controlAffinity: ListTileControlAffinity.leading,
+            title: const Text('Recordar contraseña'),
+            value: _remember,
+            onChanged: _isLoading
+                ? null
+                : (v) => setState(() => _remember = v ?? false),
           ),
         ],
       ),

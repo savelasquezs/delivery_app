@@ -1,7 +1,9 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../../../../core/api/api_exception.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/widgets/error_banner.dart';
@@ -90,6 +92,7 @@ class _DeliveryOrderDetailBodyState
     extends ConsumerState<_DeliveryOrderDetailBody> {
   late Order _order;
   bool _loading = true;
+  bool _reprintLoading = false;
   String? _error;
 
   @override
@@ -167,6 +170,35 @@ class _DeliveryOrderDetailBodyState
       );
     } catch (e) {
       if (mounted) ErrorBanner.show(context, e.toString());
+    }
+  }
+
+  Future<void> _reprintTicket() async {
+    if (_reprintLoading) return;
+    setState(() => _reprintLoading = true);
+    try {
+      await ref.read(orderRepositoryProvider).enqueueDeliveryPrintJob(
+            branchId: _order.branchId,
+            orderIds: [_order.id],
+          );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Impresión enviada a la sucursal'),
+          backgroundColor: AppColors.accentContainer,
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        final msg = e is ApiException
+            ? e.message
+            : e is DioException && e.error is ApiException
+                ? (e.error! as ApiException).message
+                : e.toString();
+        ErrorBanner.show(context, msg);
+      }
+    } finally {
+      if (mounted) setState(() => _reprintLoading = false);
     }
   }
 
@@ -474,10 +506,37 @@ class _DeliveryOrderDetailBodyState
                     ),
                   ],
 
-                  // ── CTA: Marcar entregado ──────────────────────
+                  // ── CTA: Reimprimir / Marcar entregado ───────
+                  if (_isDelivery && _order.status == OrderStatus.onTheWay) ...[
+                    const SizedBox(height: 20),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: _reprintLoading ? null : _reprintTicket,
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: AppColors.onSurface,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius:
+                                BorderRadius.circular(AppTheme.radiusMd),
+                          ),
+                        ),
+                        icon: _reprintLoading
+                            ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : const Icon(Icons.print_outlined, size: 20),
+                        label: Text(
+                          _reprintLoading ? 'Enviando…' : 'Reimprimir ticket',
+                        ),
+                      ),
+                    ),
+                  ],
                   if (widget.allowMarkDelivered &&
                       _order.status == OrderStatus.onTheWay) ...[
-                    const SizedBox(height: 20),
+                    const SizedBox(height: 12),
                     SizedBox(
                       width: double.infinity,
                       child: FilledButton.icon(
