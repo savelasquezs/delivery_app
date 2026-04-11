@@ -13,7 +13,7 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
 
     <application
-        android:label="delivery_app"
+        android:label="Señor Arroz"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

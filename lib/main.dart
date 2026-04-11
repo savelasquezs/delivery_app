@@ -49,7 +49,7 @@ class DeliveryApp extends ConsumerWidget {
     final router = ref.watch(appRouterProvider);
 
     return MaterialApp.router(
-      title: 'Señor Arroz — Domiciliarios',
+      title: 'Señor Arroz',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.darkTheme,
       routerConfig: router,

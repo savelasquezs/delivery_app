@@ -1,0 +1,7 @@
+# Copiar a key.properties y completar (key.properties no se sube a git).
+# Generar keystore: ver documentación de Flutter "Deploy to Google Play"
+# o usar el archivo upload-keystore.jks ya creado en esta máquina.
+storePassword=CAMBIAR
+keyPassword=CAMBIAR
+keyAlias=upload
+storeFile=../upload-keystore.jks
