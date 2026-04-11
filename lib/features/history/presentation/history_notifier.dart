@@ -85,6 +85,7 @@ class HistoryNotifier extends StateNotifier<HistoryState> {
         fromDate: from,
         toDate: to,
         status: 'Delivered',
+        includeOnsiteActiveInHistory: true,
         pageSize: 20,
       );
 
@@ -93,6 +94,7 @@ class HistoryNotifier extends StateNotifier<HistoryState> {
         fromDate: from,
         toDate: to,
         status: 'Delivered',
+        includeOnsiteActiveInHistory: true,
       );
 
       if (!mounted) return;
@@ -119,6 +121,7 @@ class HistoryNotifier extends StateNotifier<HistoryState> {
         fromDate: state.fromDate,
         toDate: state.toDate,
         status: 'Delivered',
+        includeOnsiteActiveInHistory: true,
         page: nextPage,
         pageSize: 20,
       );

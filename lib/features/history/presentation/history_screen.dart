@@ -138,8 +138,9 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
               SliverFillRemaining(
                 child: EmptyStateWidget(
                   icon: Icons.history,
-                  title: 'Sin pedidos entregados',
-                  subtitle: 'No hay entregas en el período seleccionado',
+                  title: 'Sin pedidos en el historial',
+                  subtitle:
+                      'No hay entregas ni pedidos locales en camino en el período',
                   onRefresh: () =>
                       ref.read(historyNotifierProvider.notifier).load(),
                 ),
@@ -283,9 +284,9 @@ class _BranchSummarySection extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   Text(
-                    '$totalCount entrega${totalCount != 1 ? 's' : ''}',
-                    style: const TextStyle(
-                        color: AppColors.hint, fontSize: 12),
+                      '$totalCount pedido${totalCount != 1 ? 's' : ''}',
+                      style: const TextStyle(
+                          color: AppColors.hint, fontSize: 12),
                   ),
                   const SizedBox(height: 4),
                   Text(

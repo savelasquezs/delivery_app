@@ -58,6 +58,8 @@ class OrderRepository {
     String? toDate,
     int? branchId,
     String? status,
+    String? type,
+    bool includeOnsiteActiveInHistory = false,
     int? neighborhoodId,
   }) async {
     final params = <String, dynamic>{
@@ -68,6 +70,8 @@ class OrderRepository {
     if (toDate != null) params['ToDate'] = toDate;
     if (branchId != null) params['BranchId'] = branchId;
     if (status != null) params['Status'] = status;
+    if (type != null) params['Type'] = type;
+    if (includeOnsiteActiveInHistory) params['IncludeOnsiteActiveInHistory'] = true;
     if (neighborhoodId != null) params['NeighborhoodId'] = neighborhoodId;
 
     return _client.get<PagedOrders>(
@@ -109,12 +113,14 @@ class OrderRepository {
     required String fromDate,
     required String toDate,
     String? status,
+    bool includeOnsiteActiveInHistory = false,
   }) async {
     final params = <String, dynamic>{
       'fromDate': fromDate,
       'toDate': toDate,
     };
     if (status != null) params['status'] = status;
+    if (includeOnsiteActiveInHistory) params['includeOnsiteActiveInHistory'] = true;
 
     return _client.get<List<BranchSummary>>(
       ApiConstants.deliveryAssignedBranchSummary(deliverymanId),

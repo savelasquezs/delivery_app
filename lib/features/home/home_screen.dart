@@ -14,6 +14,7 @@ import '../available/presentation/available_notifier.dart';
 import '../available/presentation/available_screen.dart';
 import '../route/presentation/route_notifier.dart';
 import '../route/presentation/route_screen.dart';
+import '../history/presentation/history_notifier.dart';
 import '../history/presentation/history_screen.dart';
 import '../analytics/presentation/analytics_screen.dart';
 import '../profile/data/profile_image_url.dart';
@@ -97,8 +98,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     if (event == 'OrderReady' || event == 'OrderAssignedToDelivery') {
       ref.invalidate(availableNotifierProvider);
     }
+    if (event == 'OrderAssignedToDelivery') {
+      ref.invalidate(historyNotifierProvider);
+    }
     if (event == 'OrderStatusChanged') {
       ref.invalidate(routeNotifierProvider);
+      ref.invalidate(historyNotifierProvider);
     }
   }
 

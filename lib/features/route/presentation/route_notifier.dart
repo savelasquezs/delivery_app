@@ -46,6 +46,7 @@ class RouteNotifier extends StateNotifier<RouteState> {
         fromDate: today,
         toDate: today,
         status: 'OnTheWay',
+        type: 'Delivery',
         pageSize: 100,
       );
       if (!mounted) return;
