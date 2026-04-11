@@ -439,6 +439,24 @@ class _DeliveryOrderDetailBodyState
                           value: _money.format(_order.total),
                           highlight: true,
                         ),
+                        if (_order.paidInStoreCash) ...[
+                          const SizedBox(height: 6),
+                          Text(
+                            'Efectivo cobrado en tienda — nada que cobrar en entrega',
+                            style: TextStyle(
+                              color: AppColors.hint.withValues(alpha: 0.95),
+                              fontSize: 12,
+                            ),
+                          ),
+                        ] else if (_order.nonCashPaymentsTotal > 0 ||
+                            _order.cashToCollectOnDelivery > 0) ...[
+                          const SizedBox(height: 8),
+                          _TotalRow(
+                            label: 'A cobrar (efectivo)',
+                            value: _money.format(_order.cashToCollectOnDelivery),
+                            subtle: true,
+                          ),
+                        ],
                       ],
                     ),
                   ),

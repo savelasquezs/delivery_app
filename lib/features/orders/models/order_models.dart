@@ -162,7 +162,12 @@ class Order {
   final double? latitude;
   final double? longitude;
   final String? deliveryRoutePlanningWarnings;
-  final List<OrderLineSummary> summaryLines;
+   final List<OrderLineSummary> summaryLines;
+
+  /// Efectivo ya cobrado en sucursal (API).
+  final bool paidInStoreCash;
+  /// Suma pagos banco+app cuando el JSON los trae; si no, 0.
+  final double nonCashPaymentsTotal;
 
   const Order({
     required this.id,
@@ -189,7 +194,27 @@ class Order {
     this.longitude,
     this.deliveryRoutePlanningWarnings,
     this.summaryLines = const [],
+    this.paidInStoreCash = false,
+    this.nonCashPaymentsTotal = 0,
   });
+
+  /// Efectivo a cobrar en entrega (alineado con backend / web).
+  double get cashToCollectOnDelivery {
+    if (paidInStoreCash) return 0;
+    final raw = total - nonCashPaymentsTotal;
+    return raw > 0 ? raw : 0;
+  }
+
+  static double _sumPaymentAmounts(List<dynamic>? list) {
+    if (list == null) return 0;
+    var s = 0.0;
+    for (final e in list) {
+      if (e is Map<String, dynamic> && e['amount'] != null) {
+        s += (e['amount'] as num).toDouble();
+      }
+    }
+    return s;
+  }
 
   /// Línea principal de dirección para UI (flat o anidada).
   String? get displayAddressLine {
@@ -291,6 +316,9 @@ class Order {
       summaryLines: (json['summaryLines'] as List<dynamic>? ?? [])
           .map((e) => OrderLineSummary.fromJson(e as Map<String, dynamic>))
           .toList(),
+      paidInStoreCash: json['paidInStoreCash'] as bool? ?? false,
+      nonCashPaymentsTotal: _sumPaymentAmounts(json['bankPayments'] as List<dynamic>?) +
+          _sumPaymentAmounts(json['appPayments'] as List<dynamic>?),
     );
   }
 
@@ -347,6 +375,8 @@ class Order {
       longitude: nextLng,
       deliveryRoutePlanningWarnings: deliveryRoutePlanningWarnings,
       summaryLines: summaryLines,
+      paidInStoreCash: paidInStoreCash,
+      nonCashPaymentsTotal: nonCashPaymentsTotal,
     );
   }
 }
