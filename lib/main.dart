@@ -1,4 +1,5 @@
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -13,6 +14,10 @@ import 'features/tracking/location_tracking_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Registro único aquí (no en FcmService). Tras hot restart (R) FlutterFire puede avisar
+  // "duplicate background isolate": para probar FCM usar arranque frío (detener app o `flutter run` de nuevo).
+  FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
 
   // Initialize communication port for foreground task ↔ main isolate
   FlutterForegroundTask.initCommunicationPort();

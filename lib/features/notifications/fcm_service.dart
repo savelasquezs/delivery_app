@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:firebase_core/firebase_core.dart';
@@ -8,12 +9,82 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import '../../core/api/api_constants.dart';
 import '../../core/api/dio_client.dart';
 
+(String? title, String? body) _titleBodyFromRemoteMessage(RemoteMessage message) {
+  final n = message.notification;
+  var title = n?.title ?? message.data['title'];
+  var body = n?.body ?? message.data['body'];
+  if (title != null && title.isEmpty) title = null;
+  if (body != null && body.isEmpty) body = null;
+  return (title, body);
+}
+
+int _notificationId(RemoteMessage message) {
+  final mid = message.messageId;
+  if (mid != null && mid.isNotEmpty) return mid.hashCode;
+  final t = message.sentTime?.millisecondsSinceEpoch;
+  if (t != null) return t % 2147483647;
+  return DateTime.now().millisecondsSinceEpoch % 2147483647;
+}
+
+NotificationDetails _notificationDetails() {
+  return NotificationDetails(
+    android: AndroidNotificationDetails(
+      _orderChannel.id,
+      _orderChannel.name,
+      channelDescription: _orderChannel.description,
+      importance: Importance.max,
+      priority: Priority.high,
+      playSound: true,
+      icon: '@mipmap/ic_launcher',
+    ),
+    iOS: const DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: true,
+    ),
+  );
+}
+
 /// Handler para mensajes en background (debe estar en nivel top-level o static).
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
-  // El sistema operativo ya muestra la notificación cuando la app está en background/killed.
-  // Aquí podemos hacer procesamiento extra si fuera necesario.
+  debugPrint(
+    'FCM background: messageId=${message.messageId} hasNotification=${message.notification != null} dataKeys=${message.data.keys.join(",")}',
+  );
+
+  if (message.notification != null) {
+    debugPrint(
+      'FCM background: omitiendo show local (el SO ya muestra notification + data).',
+    );
+    return;
+  }
+
+  final plugin = FlutterLocalNotificationsPlugin();
+  const androidSettings =
+      AndroidInitializationSettings('@mipmap/ic_launcher');
+  const iosSettings = DarwinInitializationSettings(
+    requestAlertPermission: false,
+    requestBadgePermission: false,
+    requestSoundPermission: false,
+  );
+  await plugin.initialize(
+    const InitializationSettings(android: androidSettings, iOS: iosSettings),
+  );
+  await plugin
+      .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>()
+      ?.createNotificationChannel(_orderChannel);
+
+  final (title, body) = _titleBodyFromRemoteMessage(message);
+  if (title == null && body == null) {
+    debugPrint('FCM background: sin título ni cuerpo, no se muestra');
+    return;
+  }
+
+  final id = _notificationId(message);
+  await plugin.show(id, title, body, _notificationDetails());
+  debugPrint('FCM background: notificación local mostrada id=$id');
 }
 
 /// Canal de notificaciones para Android (alta prioridad).
@@ -35,9 +106,6 @@ class FcmService {
     if (_initialized) return;
     _initialized = true;
 
-    // Registrar handler de background antes de todo
-    FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
-
     // Canal Android de alta prioridad
     await _localNotifications
         .resolvePlatformSpecificImplementation<
@@ -55,6 +123,17 @@ class FcmService {
     await _localNotifications.initialize(
       const InitializationSettings(android: androidSettings, iOS: iosSettings),
     );
+
+    // Android 13+: permiso para mostrar notificaciones locales (FCM en foreground usa este plugin).
+    if (Platform.isAndroid) {
+      final androidImpl = _localNotifications
+          .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin>();
+      final granted = await androidImpl?.requestNotificationsPermission();
+      debugPrint(
+        'FCM: flutter_local_notifications requestNotificationsPermission => $granted',
+      );
+    }
 
     // Escuchar mensajes FOREGROUND (cuando la app está abierta)
     FirebaseMessaging.onMessage.listen(_showForegroundNotification);
@@ -115,32 +194,25 @@ class FcmService {
     }
   }
 
-  // Muestra la notificación en foreground usando flutter_local_notifications
   static void _showForegroundNotification(RemoteMessage message) {
-    final notification = message.notification;
-    if (notification == null) return;
+    debugPrint(
+      'FCM onMessage: messageId=${message.messageId} dataKeys=${message.data.keys.join(",")}',
+    );
+    final (title, body) = _titleBodyFromRemoteMessage(message);
+    if (title == null && body == null) {
+      debugPrint('FCM onMessage: sin título ni cuerpo');
+      return;
+    }
 
-    _localNotifications.show(
-      notification.hashCode,
-      notification.title,
-      notification.body,
-      NotificationDetails(
-        android: AndroidNotificationDetails(
-          _orderChannel.id,
-          _orderChannel.name,
-          channelDescription: _orderChannel.description,
-          importance: Importance.max,
-          priority: Priority.high,
-          playSound: true,
-          icon: '@mipmap/ic_launcher',
-        ),
-        iOS: const DarwinNotificationDetails(
-          presentAlert: true,
-          presentBadge: true,
-          presentSound: true,
-        ),
-      ),
+    final id = _notificationId(message);
+    unawaited(
+      _localNotifications
+          .show(id, title, body, _notificationDetails())
+          .then(
+            (_) => debugPrint('FCM onMessage: local notification show ok id=$id'),
+            onError: (Object e, StackTrace st) =>
+                debugPrint('FCM onMessage: error mostrando notificación: $e'),
+          ),
     );
   }
 }
-
