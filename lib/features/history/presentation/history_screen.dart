@@ -158,6 +158,7 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
                         child: OrderCard(
                           order: order,
                           onTap: () => _openOrderDetail(order),
+                          showFeeAndCashSummary: true,
                         ),
                       );
                     },

@@ -137,6 +137,9 @@ class OrderLineSummary {
 }
 
 class Order {
+  /// Tolerancia COP al comparar total vs pagos (decimales / redondeo).
+  static const double kPaymentCoverTolerance = 0.5;
+
   final int id;
   final OrderStatus status;
   final String type;
@@ -166,6 +169,8 @@ class Order {
 
   /// Efectivo ya cobrado en sucursal (API).
   final bool paidInStoreCash;
+  /// Monto registrado como cobrado en tienda (API); null = asumir pago completo.
+  final double? paidInStoreCashAmount;
   /// Suma pagos banco+app cuando el JSON los trae; si no, 0.
   final double nonCashPaymentsTotal;
 
@@ -195,6 +200,7 @@ class Order {
     this.deliveryRoutePlanningWarnings,
     this.summaryLines = const [],
     this.paidInStoreCash = false,
+    this.paidInStoreCashAmount,
     this.nonCashPaymentsTotal = 0,
   });
 
@@ -205,12 +211,31 @@ class Order {
     return raw > 0 ? raw : 0;
   }
 
+  /// Banco + app cubren el total del pedido.
+  bool get paymentsCoverTotal =>
+      total > kPaymentCoverTolerance &&
+      nonCashPaymentsTotal >= total - kPaymentCoverTolerance;
+
+  /// Cobro en sucursal cubre el total (`paidInStoreCashAmount` null = completo).
+  bool get paidInStoreCoversTotal {
+    if (!paidInStoreCash || total <= kPaymentCoverTolerance) return false;
+    final amount = paidInStoreCashAmount;
+    if (amount == null) return true;
+    return amount >= total - kPaymentCoverTolerance;
+  }
+
+  /// Mostrar «Ya pagó» (transferencia/app o tienda cubren el total).
+  bool get showYaPagoMessage =>
+      total > kPaymentCoverTolerance &&
+      (paymentsCoverTotal || paidInStoreCoversTotal);
+
   static double _sumPaymentAmounts(List<dynamic>? list) {
     if (list == null) return 0;
     var s = 0.0;
     for (final e in list) {
-      if (e is Map<String, dynamic> && e['amount'] != null) {
-        s += (e['amount'] as num).toDouble();
+      if (e is Map<String, dynamic>) {
+        final raw = e['amount'] ?? e['Amount'];
+        if (raw is num) s += raw.toDouble();
       }
     }
     return s;
@@ -317,6 +342,7 @@ class Order {
           .map((e) => OrderLineSummary.fromJson(e as Map<String, dynamic>))
           .toList(),
       paidInStoreCash: json['paidInStoreCash'] as bool? ?? false,
+      paidInStoreCashAmount: _toDouble(json['paidInStoreCashAmount']),
       nonCashPaymentsTotal: _sumPaymentAmounts(json['bankPayments'] as List<dynamic>?) +
           _sumPaymentAmounts(json['appPayments'] as List<dynamic>?),
     );
@@ -376,6 +402,7 @@ class Order {
       deliveryRoutePlanningWarnings: deliveryRoutePlanningWarnings,
       summaryLines: summaryLines,
       paidInStoreCash: paidInStoreCash,
+      paidInStoreCashAmount: paidInStoreCashAmount,
       nonCashPaymentsTotal: nonCashPaymentsTotal,
     );
   }

@@ -253,12 +253,12 @@ class _DeliveryMapPickerState extends State<DeliveryMapPicker> {
                   ],
                 ),
 
-                // ── Instrucción flotante ─────────────────────────────
+                // ── Instrucción flotante (debajo del botón GPS con texto) ──
                 if (_pin == null)
                   Positioned(
-                    top: 12,
+                    top: 58,
                     left: 16,
-                    right: 60,
+                    right: 16,
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                       decoration: BoxDecoration(
@@ -279,7 +279,7 @@ class _DeliveryMapPickerState extends State<DeliveryMapPicker> {
                     ),
                   ),
 
-                // ── Botón GPS ────────────────────────────────────────
+                // ── Usar ubicación actual (visible sobre el mapa) ────
                 Positioned(
                   top: 12,
                   right: 12,
@@ -292,9 +292,12 @@ class _DeliveryMapPickerState extends State<DeliveryMapPicker> {
                       borderRadius: BorderRadius.circular(AppTheme.radiusMd),
                       onTap: _gpsLoading ? null : _getGps,
                       child: Padding(
-                        padding: const EdgeInsets.all(10),
-                        child: _gpsLoading
-                            ? const SizedBox(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (_gpsLoading)
+                              const SizedBox(
                                 width: 20,
                                 height: 20,
                                 child: CircularProgressIndicator(
@@ -302,7 +305,19 @@ class _DeliveryMapPickerState extends State<DeliveryMapPicker> {
                                   color: AppColors.primary,
                                 ),
                               )
-                            : const Icon(Icons.gps_fixed, color: AppColors.primaryLight, size: 22),
+                            else
+                              const Icon(Icons.gps_fixed, color: AppColors.primaryLight, size: 22),
+                            const SizedBox(width: 8),
+                            Text(
+                              'Usar ubicación actual',
+                              style: TextStyle(
+                                color: _gpsLoading ? AppColors.hint : AppColors.primaryLight,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),

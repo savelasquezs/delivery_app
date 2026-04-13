@@ -44,7 +44,26 @@ class OrderHubService {
   }
 
   Future<void> connect(int branchId) async {
-    if (_status == HubConnectionStatus.connected) return;
+    // No confiar solo en _status: tras background/kill puede quedar desincronizado.
+    if (_connection?.state == HubConnectionState.Connected) {
+      if (_status != HubConnectionStatus.connected) {
+        _notifyStatus(HubConnectionStatus.connected);
+      }
+      return;
+    }
+
+    if (_connection?.state == HubConnectionState.Connecting ||
+        _connection?.state == HubConnectionState.Reconnecting) {
+      return;
+    }
+
+    if (_connection != null) {
+      try {
+        await _connection!.stop();
+      } catch (_) {}
+      _connection = null;
+    }
+
     _notifyStatus(HubConnectionStatus.connecting);
 
     // Intentar primero con WebSockets, si falla hacer fallback a LongPolling
@@ -94,10 +113,13 @@ class OrderHubService {
     }
   }
 
+  /// Nombres alineados con `OrderNotificationService` (API): `OrderAssigned`.
   void _registerEvents() {
     for (final event in [
       'OrderReady',
+      'OrderAssigned',
       'OrderAssignedToDelivery',
+      'OrderModified',
       'OrderStatusChanged',
       'OrderCancelled',
     ]) {

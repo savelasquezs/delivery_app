@@ -16,6 +16,7 @@ import '../route/presentation/route_notifier.dart';
 import '../route/presentation/route_screen.dart';
 import '../history/presentation/history_notifier.dart';
 import '../history/presentation/history_screen.dart';
+import '../analytics/presentation/analytics_notifier.dart';
 import '../analytics/presentation/analytics_screen.dart';
 import '../profile/data/profile_image_url.dart';
 import '../realtime/order_hub_service.dart';
@@ -33,6 +34,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   int _currentIndex = 0;
   HubConnectionStatus _hubStatus = HubConnectionStatus.disconnected;
   OrderHubService? _hubService;
+  bool _signalRListenersAttached = false;
 
   static const _screens = [
     AvailableScreen(),
@@ -52,13 +54,19 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _connectSignalR();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _connectSignalR();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _connectSignalR();
+      });
+    });
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _restartTrackingIfNeeded();
+      _connectSignalR();
     }
   }
 
@@ -80,13 +88,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 
   Future<void> _connectSignalR() async {
     final user = ref.read(authNotifierProvider).user;
-    if (user?.branchId == null) return;
+    if (user == null) return;
 
     // Guardamos la referencia para poder usarla en dispose() sin tocar ref
     _hubService = ref.read(orderHubServiceProvider);
-    _hubService!.addStatusListener(_onHubStatusChange);
-    _hubService!.addEventListener(_onHubEvent);
-    await _hubService!.connect(user!.branchId!);
+    if (!_signalRListenersAttached) {
+      _hubService!.addStatusListener(_onHubStatusChange);
+      _hubService!.addEventListener(_onHubEvent);
+      _signalRListenersAttached = true;
+    }
+    // El grupo SignalR lo define el JWT (`branch_id`); el parámetro es solo por compatibilidad.
+    await _hubService!.connect(user.branchId ?? 0);
   }
 
   void _onHubStatusChange(HubConnectionStatus status) {
@@ -95,23 +107,48 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 
   void _onHubEvent(String event, List<Object?>? args) {
     if (!mounted) return;
-    if (event == 'OrderReady' || event == 'OrderAssignedToDelivery') {
+    if (event == 'OrderReady' ||
+        event == 'OrderAssigned' ||
+        event == 'OrderAssignedToDelivery' ||
+        event == 'OrderModified' ||
+        event == 'OrderStatusChanged' ||
+        event == 'OrderCancelled') {
       ref.invalidate(availableNotifierProvider);
-    }
-    if (event == 'OrderAssignedToDelivery') {
-      ref.invalidate(historyNotifierProvider);
-    }
-    if (event == 'OrderStatusChanged') {
       ref.invalidate(routeNotifierProvider);
       ref.invalidate(historyNotifierProvider);
     }
   }
 
+  /// IndexedStack no vuelve a ejecutar `initState` de cada pestaña al cambiar.
+  void _onTabChanged(int index) {
+    setState(() => _currentIndex = index);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      switch (index) {
+        case 0:
+          ref.read(availableNotifierProvider.notifier).loadAll();
+          break;
+        case 1:
+          ref.read(routeNotifierProvider.notifier).load();
+          break;
+        case 2:
+          ref.read(historyNotifierProvider.notifier).load();
+          break;
+        case 3:
+          ref.read(analyticsNotifierProvider.notifier).load();
+          break;
+      }
+    });
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _hubService?.removeStatusListener(_onHubStatusChange);
-    _hubService?.removeEventListener(_onHubEvent);
+    if (_signalRListenersAttached && _hubService != null) {
+      _hubService!.removeStatusListener(_onHubStatusChange);
+      _hubService!.removeEventListener(_onHubEvent);
+      _signalRListenersAttached = false;
+    }
     super.dispose();
   }
 
@@ -194,6 +231,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<AuthState>(
+      authNotifierProvider,
+      (prev, next) {
+        if (!mounted || next.user == null) return;
+        final prevUserMissing = prev == null || prev.user == null;
+        final becameAuthenticated = next.status == AuthStatus.authenticated &&
+            (prev == null || prev.status != AuthStatus.authenticated);
+        if (!prevUserMissing && !becameAuthenticated) return;
+        _connectSignalR();
+      },
+    );
+
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
@@ -225,7 +274,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         ),
         child: BottomNavigationBar(
           currentIndex: _currentIndex,
-          onTap: (index) => setState(() => _currentIndex = index),
+          onTap: _onTabChanged,
           items: _tabs
               .map((tab) => BottomNavigationBarItem(
                     icon: Icon(tab.icon),

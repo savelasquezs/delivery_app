@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../../../core/api/api_exception.dart';
@@ -471,23 +472,59 @@ class _DeliveryOrderDetailBodyState
                           value: _money.format(_order.total),
                           highlight: true,
                         ),
-                        if (_order.paidInStoreCash) ...[
-                          const SizedBox(height: 6),
-                          Text(
-                            'Efectivo cobrado en tienda — nada que cobrar en entrega',
-                            style: TextStyle(
-                              color: AppColors.hint.withValues(alpha: 0.95),
-                              fontSize: 12,
+                        if (_order.total > Order.kPaymentCoverTolerance) ...[
+                          if (_order.showYaPagoMessage) ...[
+                            const SizedBox(height: 12),
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.symmetric(
+                                vertical: 18,
+                                horizontal: 16,
+                              ),
+                              decoration: BoxDecoration(
+                                color: AppColors.accentContainer,
+                                borderRadius:
+                                    BorderRadius.circular(AppTheme.radiusMd),
+                                border: Border.all(
+                                  color: AppColors.accent.withValues(alpha: 0.45),
+                                  width: 1.5,
+                                ),
+                              ),
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    Icons.verified_rounded,
+                                    size: 36,
+                                    color: AppColors.accentLight
+                                        .withValues(alpha: 0.95),
+                                  ),
+                                  const SizedBox(width: 14),
+                                  Expanded(
+                                    child: Text(
+                                      'Ya pagó',
+                                      style: TextStyle(
+                                        color: AppColors.accentLight
+                                            .withValues(alpha: 0.98),
+                                        fontSize: 26,
+                                        fontWeight: FontWeight.w800,
+                                        height: 1.1,
+                                        letterSpacing: -0.5,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
-                          ),
-                        ] else if (_order.nonCashPaymentsTotal > 0 ||
-                            _order.cashToCollectOnDelivery > 0) ...[
-                          const SizedBox(height: 8),
-                          _TotalRow(
-                            label: 'A cobrar (efectivo)',
-                            value: _money.format(_order.cashToCollectOnDelivery),
-                            subtle: true,
-                          ),
+                          ] else if (_order.cashToCollectOnDelivery >
+                              Order.kPaymentCoverTolerance) ...[
+                            const SizedBox(height: 12),
+                            _TotalRow(
+                              label: 'A cobrar (efectivo)',
+                              value:
+                                  _money.format(_order.cashToCollectOnDelivery),
+                              highlight: true,
+                            ),
+                          ],
                         ],
                       ],
                     ),
@@ -614,6 +651,7 @@ class _EditAddressPageState extends ConsumerState<_EditAddressPage> {
 
   bool _loadingNeighborhoods = true;
   bool _saving = false;
+  bool _gpsLoading = false;
   String? _loadError;
 
   @override
@@ -682,6 +720,55 @@ class _EditAddressPageState extends ConsumerState<_EditAddressPage> {
       _latitude = loc.lat;
       _longitude = loc.lng;
     });
+  }
+
+  /// GPS del dispositivo → actualiza lat/lng de la dirección (sin abrir el mapa).
+  Future<void> _useCurrentLocation() async {
+    if (_gpsLoading) return;
+    setState(() => _gpsLoading = true);
+    try {
+      var perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.denied) {
+        perm = await Geolocator.requestPermission();
+      }
+      if (perm == LocationPermission.denied ||
+          perm == LocationPermission.deniedForever) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Activa el permiso de ubicación para usar la posición actual.',
+            ),
+          ),
+        );
+        return;
+      }
+
+      final pos = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 15),
+        ),
+      );
+      if (!mounted) return;
+      setState(() {
+        _latitude = pos.latitude;
+        _longitude = pos.longitude;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Ubicación actual aplicada. Comprueba en el mapa y guarda si es correcta.',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        ErrorBanner.show(context, 'No se pudo obtener la ubicación: $e');
+      }
+    } finally {
+      if (mounted) setState(() => _gpsLoading = false);
+    }
   }
 
   Future<void> _save() async {
@@ -845,6 +932,44 @@ class _EditAddressPageState extends ConsumerState<_EditAddressPage> {
                     latitude: _latitude,
                     longitude: _longitude,
                     onTapMap: _openMapPicker,
+                  ),
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: (_saving || _loadingNeighborhoods || _gpsLoading)
+                          ? null
+                          : _useCurrentLocation,
+                      icon: _gpsLoading
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: AppColors.primaryLight,
+                              ),
+                            )
+                          : const Icon(Icons.my_location, size: 20),
+                      label: Text(
+                        _gpsLoading ? 'Obteniendo ubicación…' : 'Usar ubicación actual',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 14,
+                        ),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.primaryLight,
+                        side: const BorderSide(color: AppColors.primary),
+                        padding: const EdgeInsets.symmetric(
+                          vertical: 12,
+                          horizontal: 14,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius:
+                              BorderRadius.circular(AppTheme.radiusMd),
+                        ),
+                      ),
+                    ),
                   ),
                   const SizedBox(height: 32),
 

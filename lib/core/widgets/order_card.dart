@@ -13,11 +13,15 @@ class OrderCard extends StatelessWidget {
   final VoidCallback? onTap;
   final Widget? trailing;
 
+  /// Muestra domicilio y efectivo a cobrar / «Ya pagó» (p. ej. historial).
+  final bool showFeeAndCashSummary;
+
   const OrderCard({
     super.key,
     required this.order,
     this.onTap,
     this.trailing,
+    this.showFeeAndCashSummary = false,
   });
 
   @override
@@ -32,21 +36,93 @@ class OrderCard extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   _OrderIdBadge(orderId: order.id),
                   const SizedBox(width: AppTheme.spacingSm),
                   StatusBadge(status: order.status),
                   const Spacer(),
-                  Text(
-                    _currencyFormat.format(order.total),
-                    style: const TextStyle(
-                      color: AppColors.primary,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
+                  if (showFeeAndCashSummary)
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          'A cobrar',
+                          style: TextStyle(
+                            color: AppColors.hint.withValues(alpha: 0.9),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: 0.2,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          _currencyFormat
+                              .format(order.cashToCollectOnDelivery),
+                          style: const TextStyle(
+                            color: AppColors.primary,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 24,
+                            height: 1.05,
+                          ),
+                        ),
+                        if (order.showYaPagoMessage) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            'Ya pagó',
+                            style: TextStyle(
+                              color: AppColors.accentLight.withValues(alpha: 0.98),
+                              fontSize: 14,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ],
+                      ],
+                    )
+                  else
+                    Text(
+                      _currencyFormat.format(order.total),
+                      style: const TextStyle(
+                        color: AppColors.primary,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
                     ),
-                  ),
                 ],
               ),
+              if (showFeeAndCashSummary &&
+                  ((order.deliveryFee != null &&
+                          order.deliveryFee! >
+                              Order.kPaymentCoverTolerance) ||
+                      (order.total > Order.kPaymentCoverTolerance))) ...[
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 6,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    if (order.deliveryFee != null &&
+                        order.deliveryFee! > Order.kPaymentCoverTolerance)
+                      Text(
+                        'Domicilio ${_currencyFormat.format(order.deliveryFee)}',
+                        style: TextStyle(
+                          color: AppColors.onSurface.withValues(alpha: 0.95),
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    if (order.total > Order.kPaymentCoverTolerance)
+                      Text(
+                        'Total pedido ${_currencyFormat.format(order.total)}',
+                        style: TextStyle(
+                          color: AppColors.hint.withValues(alpha: 0.95),
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                  ],
+                ),
+              ],
               if (order.customer != null) ...[
                 const SizedBox(height: AppTheme.spacingSm),
                 Row(

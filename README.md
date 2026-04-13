@@ -1,17 +1,38 @@
-# delivery_app
+# delivery_app — domiciliarios (Señor Arroz)
 
-A new Flutter project.
+**Versión actual:** ver `pubspec.yaml` (`version: x.y.z+build`). Historial y notas de cada release: [`CHANGELOG.md`](CHANGELOG.md).
 
-## Getting Started
+## Generar el APK para `senorArrozFront/public`
 
-This project is a starting point for a Flutter application.
+El front ya sirve el manifiesto `public/delivery-app-release.json` y el archivo `public/senor-arroz-domiciliarios.apk`. Solo hace falta compilar y copiar el APK.
 
-A few resources to get you started if this is your first Flutter project:
+**Opción A — script (desde la raíz del repo):**
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+```bash
+bash Scripts/build_delivery_app_apk.sh
+```
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+**Opción B — manual:**
+
+```bash
+cd delivery_app
+flutter pub get
+flutter build apk --release
+```
+
+Luego copia `delivery_app/build/app/outputs/flutter-apk/app-release.apk` a  
+`senorArrozFront/public/senor-arroz-domiciliarios.apk` (sobrescribe el anterior).
+
+Antes de desplegar el front, alinea **versión** en `delivery_app/pubspec.yaml` (`x.y.z+build`) con `versionName` / `buildNumber` en `senorArrozFront/public/delivery-app-release.json`.
+
+**Firma:** con `android/key.properties` y keystore para release; sin eso, el APK release usa firma debug (solo pruebas).
+
+## Desarrollo
+
+```bash
+cd delivery_app
+flutter pub get
+flutter run
+```
+
+Configura `.env` según `.env.example` (`API_BASE_URL`, `SIGNALR_HUB_URL`, etc.).

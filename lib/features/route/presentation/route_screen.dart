@@ -1,12 +1,15 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../../../core/api/api_exception.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/empty_state_widget.dart';
 import '../../../core/widgets/error_banner.dart';
 import '../../../core/widgets/order_card.dart';
+import '../../orders/data/order_repository.dart';
 import '../../orders/models/order_models.dart';
 import 'route_notifier.dart';
 import 'widgets/delivery_order_detail_sheet.dart';
@@ -22,6 +25,8 @@ class RouteScreen extends ConsumerStatefulWidget {
 }
 
 class _RouteScreenState extends ConsumerState<RouteScreen> {
+  int? _reprintingOrderId;
+
   @override
   void initState() {
     super.initState();
@@ -67,6 +72,34 @@ class _RouteScreenState extends ConsumerState<RouteScreen> {
       } catch (e) {
         if (mounted) ErrorBanner.show(context, e.toString());
       }
+    }
+  }
+
+  Future<void> _reprintOrder(Order order) async {
+    if (_reprintingOrderId != null) return;
+    setState(() => _reprintingOrderId = order.id);
+    try {
+      await ref.read(orderRepositoryProvider).enqueueDeliveryPrintJob(
+            branchId: order.branchId,
+            orderIds: [order.id],
+          );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Pedido #${order.id}: impresión enviada a la sucursal'),
+          backgroundColor: AppColors.accentContainer,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      final msg = e is ApiException
+          ? e.message
+          : e is DioException && e.error is ApiException
+              ? (e.error! as ApiException).message
+              : e.toString();
+      ErrorBanner.show(context, msg);
+    } finally {
+      if (mounted) setState(() => _reprintingOrderId = null);
     }
   }
 
@@ -197,6 +230,11 @@ class _RouteScreenState extends ConsumerState<RouteScreen> {
                             order: order,
                             onDetail: () => _openOrderDetail(order),
                             onStatus: () => _changeStatus(order),
+                            onReprint: order.status == OrderStatus.onTheWay
+                                ? () => _reprintOrder(order)
+                                : null,
+                            reprintLoading:
+                                _reprintingOrderId == order.id,
                           ),
                         ),
                       );
@@ -301,11 +339,15 @@ class _OrderActions extends StatelessWidget {
   final Order order;
   final VoidCallback onDetail;
   final VoidCallback onStatus;
+  final VoidCallback? onReprint;
+  final bool reprintLoading;
 
   const _OrderActions({
     required this.order,
     required this.onDetail,
     required this.onStatus,
+    this.onReprint,
+    this.reprintLoading = false,
   });
 
   @override
@@ -319,7 +361,6 @@ class _OrderActions extends StatelessWidget {
 
     return Row(
       children: [
-        // Ver detalle
         _CompactButton(
           icon: Icons.receipt_long_outlined,
           label: 'Detalle',
@@ -327,7 +368,17 @@ class _OrderActions extends StatelessWidget {
           onTap: onDetail,
         ),
         const SizedBox(width: 8),
-        // Cambiar estado
+        if (onReprint != null) ...[
+          _CompactButton(
+            icon: reprintLoading
+                ? Icons.hourglass_empty
+                : Icons.print_outlined,
+            label: reprintLoading ? '…' : 'Reimprimir',
+            color: AppColors.onSurface,
+            onTap: reprintLoading ? null : onReprint,
+          ),
+          const SizedBox(width: 8),
+        ],
         _CompactButton(
           icon: statusIcon,
           label: statusLabel,
@@ -344,7 +395,7 @@ class _CompactButton extends StatelessWidget {
   final IconData icon;
   final String label;
   final Color color;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
   final bool filled;
 
   const _CompactButton({
@@ -357,35 +408,43 @@ class _CompactButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final enabled = onTap != null;
+    final fg = filled
+        ? Colors.white
+        : enabled
+            ? color
+            : AppColors.hint;
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(AppTheme.radiusSm),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: filled
-              ? color
-              : color.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(AppTheme.radiusSm),
-          border: Border.all(
-            color: filled ? color : color.withValues(alpha: 0.3),
-          ),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon,
-                size: 14, color: filled ? Colors.white : color),
-            const SizedBox(width: 4),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: filled ? Colors.white : color,
-              ),
+      child: Opacity(
+        opacity: enabled ? 1 : 0.55,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: filled
+                ? color
+                : color.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+            border: Border.all(
+              color: filled ? color : color.withValues(alpha: 0.3),
             ),
-          ],
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 14, color: fg),
+              const SizedBox(width: 4),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: fg,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
