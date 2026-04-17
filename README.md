@@ -36,3 +36,5 @@ flutter run
 ```
 
 Configura `.env` según `.env.example` (`API_BASE_URL`, `SIGNALR_HUB_URL`, etc.).
+
+**Aviso de actualización APK:** opcionalmente define `DELIVERY_APP_UPDATE_MANIFEST_URL` con la URL **pública** del mismo `delivery-app-release.json` que sirve el front (no uses la URL del API si el JSON está en otro dominio). Si está vacío, la app no consulta el manifiesto.

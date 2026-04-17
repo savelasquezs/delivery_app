@@ -1,31 +1,36 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/maps/open_delivery_destination_maps.dart';
+import '../../../core/orders/available_orders_layout.dart';
 import '../../../core/storage/secure_storage.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/empty_state_widget.dart';
 import '../../../core/widgets/error_banner.dart';
-import '../../../core/widgets/order_card.dart';
 import '../../../core/widgets/confirm_password_dialog.dart';
 import '../../orders/models/order_models.dart';
 import 'available_notifier.dart';
 
-/// Agrupa pedidos por la categoría del primer producto de summaryLines.
-Map<String, List<Order>> _groupByCategory(List<Order> orders) {
-  final groups = <String, List<Order>>{};
-  for (final o in orders) {
-    final first = o.summaryLines.isNotEmpty ? o.summaryLines.first : null;
-    final category = first?.categoryName?.trim().isNotEmpty == true
-        ? first!.categoryName!
-        : (first?.productName.trim().isNotEmpty == true
-            ? first!.productName
-            : 'Sin categoría');
-    groups.putIfAbsent(category, () => []).add(o);
+Future<void> _openOrderDestinationMap(BuildContext context, Order order) async {
+  if (!orderHasOpenableMapDestination(order)) {
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Este pedido no tiene dirección ni coordenadas para el mapa.',
+        ),
+      ),
+    );
+    return;
   }
-  // Ordenar: más pedidos primero
-  final sorted = groups.entries.toList()
-    ..sort((a, b) => b.value.length.compareTo(a.value.length));
-  return Map.fromEntries(sorted);
+  final ok = await openDeliveryDestinationInMaps(order);
+  if (!ok && context.mounted) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('No se pudo abrir Google Maps.')),
+    );
+  }
 }
 
 class AvailableScreen extends ConsumerStatefulWidget {
@@ -62,6 +67,23 @@ class _AvailableScreenState extends ConsumerState<AvailableScreen>
         _selectedIds.remove(orderId);
       } else {
         _selectedIds.add(orderId);
+      }
+    });
+  }
+
+  void _toggleNeighborhoodSelection(List<int> orderIds) {
+    if (orderIds.isEmpty) return;
+    setState(() {
+      final allSelected =
+          orderIds.every((id) => _selectedIds.contains(id));
+      if (allSelected) {
+        for (final id in orderIds) {
+          _selectedIds.remove(id);
+        }
+      } else {
+        for (final id in orderIds) {
+          _selectedIds.add(id);
+        }
       }
     });
   }
@@ -118,19 +140,15 @@ class _AvailableScreenState extends ConsumerState<AvailableScreen>
       backgroundColor: AppColors.background,
       body: Column(
         children: [
-          // ── Tab bar ───────────────────────────────────────────────
           _OrderTabBar(
             controller: _tabController,
             availableCount: state.orders.length,
             prepCount: state.preparationOrders.length,
           ),
-
-          // ── Contenido ─────────────────────────────────────────────
           Expanded(
             child: TabBarView(
               controller: _tabController,
               children: [
-                // Tab 0: Disponibles
                 _OrderTabContent(
                   orders: state.orders,
                   isLoading: state.isLoading,
@@ -142,16 +160,17 @@ class _AvailableScreenState extends ConsumerState<AvailableScreen>
                   selectedIds: _selectedIds,
                   allowSelection: true,
                   onToggle: _toggleSelection,
+                  onToggleNeighborhood: _toggleNeighborhoodSelection,
                   onRefresh: _refreshAll,
                 ),
-                // Tab 1: En preparación
                 _OrderTabContent(
                   orders: state.preparationOrders,
                   isLoading: state.isLoadingPrep,
                   error: state.errorPrep,
                   emptyIcon: Icons.restaurant_outlined,
                   emptyTitle: 'Sin pedidos en preparación',
-                  emptySubtitle: 'Los pedidos que se están preparando\naparecerán aquí',
+                  emptySubtitle:
+                      'Los pedidos que se están preparando\naparecerán aquí',
                   selectedIds: const {},
                   allowSelection: false,
                   onToggle: (_) {},
@@ -162,8 +181,6 @@ class _AvailableScreenState extends ConsumerState<AvailableScreen>
           ),
         ],
       ),
-
-      // FAB: asignar (solo en tab disponibles)
       floatingActionButton: (isAvailableTab && _selectedIds.isNotEmpty)
           ? FloatingActionButton.extended(
               onPressed: _confirmAssignment,
@@ -176,7 +193,7 @@ class _AvailableScreenState extends ConsumerState<AvailableScreen>
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tab bar personalizado
+// Tab bar
 // ─────────────────────────────────────────────────────────────────────────────
 class _OrderTabBar extends StatelessWidget {
   final TabController controller;
@@ -199,8 +216,7 @@ class _OrderTabBar extends StatelessWidget {
         unselectedLabelColor: AppColors.hint,
         indicatorColor: AppColors.primary,
         indicatorWeight: 2,
-        labelStyle: const TextStyle(
-            fontSize: 13, fontWeight: FontWeight.w700),
+        labelStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
         unselectedLabelStyle: const TextStyle(fontSize: 13),
         tabs: [
           Tab(
@@ -255,9 +271,9 @@ class _CountBadge extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Contenido de cada tab (agrupado por categoría)
+// Contenido por tab (grupos por barrio + refresco periódico del semáforo)
 // ─────────────────────────────────────────────────────────────────────────────
-class _OrderTabContent extends StatelessWidget {
+class _OrderTabContent extends StatefulWidget {
   final List<Order> orders;
   final bool isLoading;
   final String? error;
@@ -267,6 +283,7 @@ class _OrderTabContent extends StatelessWidget {
   final Set<int> selectedIds;
   final bool allowSelection;
   final ValueChanged<int> onToggle;
+  final void Function(List<int> orderIds)? onToggleNeighborhood;
   final Future<void> Function() onRefresh;
 
   const _OrderTabContent({
@@ -279,52 +296,81 @@ class _OrderTabContent extends StatelessWidget {
     required this.selectedIds,
     required this.allowSelection,
     required this.onToggle,
+    this.onToggleNeighborhood,
     required this.onRefresh,
   });
 
   @override
+  State<_OrderTabContent> createState() => _OrderTabContentState();
+}
+
+class _OrderTabContentState extends State<_OrderTabContent> {
+  Timer? _urgencyTick;
+
+  @override
+  void initState() {
+    super.initState();
+    _urgencyTick = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _urgencyTick?.cancel();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    if (isLoading && orders.isEmpty) {
+    if (widget.isLoading && widget.orders.isEmpty) {
       return const Center(
         child: CircularProgressIndicator(color: AppColors.primary),
       );
     }
 
-    final groups = _groupByCategory(orders);
+    final groups = groupOrdersByNeighborhood(widget.orders);
 
     return RefreshIndicator(
-      onRefresh: onRefresh,
+      onRefresh: widget.onRefresh,
       color: AppColors.primary,
       backgroundColor: AppColors.card,
       child: CustomScrollView(
         slivers: [
-          if (error != null)
+          if (widget.error != null)
             SliverToBoxAdapter(
-              child: ErrorBanner(message: error!, onRetry: onRefresh),
+              child: ErrorBanner(
+                message: widget.error!,
+                onRetry: widget.onRefresh,
+              ),
             ),
-          if (orders.isEmpty && !isLoading)
+          if (widget.orders.isEmpty && !widget.isLoading)
             SliverFillRemaining(
               child: EmptyStateWidget(
-                icon: emptyIcon,
-                title: emptyTitle,
-                subtitle: emptySubtitle,
-                onRefresh: onRefresh,
+                icon: widget.emptyIcon,
+                title: widget.emptyTitle,
+                subtitle: widget.emptySubtitle,
+                onRefresh: widget.onRefresh,
               ),
             )
           else
             SliverPadding(
               padding: const EdgeInsets.fromLTRB(
-                  AppTheme.spacingMd, AppTheme.spacingMd,
-                  AppTheme.spacingMd, 100),
+                AppTheme.spacingMd,
+                AppTheme.spacingMd,
+                AppTheme.spacingMd,
+                100,
+              ),
               sliver: SliverList(
                 delegate: SliverChildListDelegate([
                   for (final entry in groups.entries)
-                    _CategoryGroup(
-                      categoryName: entry.key,
+                    _NeighborhoodGroup(
+                      neighborhoodName: entry.key,
                       orders: entry.value,
-                      selectedIds: selectedIds,
-                      allowSelection: allowSelection,
-                      onToggle: onToggle,
+                      selectedIds: widget.selectedIds,
+                      allowSelection: widget.allowSelection,
+                      onToggle: widget.onToggle,
+                      onToggleNeighborhood: widget.onToggleNeighborhood,
                     ),
                 ]),
               ),
@@ -336,34 +382,36 @@ class _OrderTabContent extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Grupo expandible por categoría
+// Grupo expandible por barrio
 // ─────────────────────────────────────────────────────────────────────────────
-class _CategoryGroup extends StatefulWidget {
-  final String categoryName;
+class _NeighborhoodGroup extends StatefulWidget {
+  final String neighborhoodName;
   final List<Order> orders;
   final Set<int> selectedIds;
   final bool allowSelection;
   final ValueChanged<int> onToggle;
+  final void Function(List<int> orderIds)? onToggleNeighborhood;
 
-  const _CategoryGroup({
-    required this.categoryName,
+  const _NeighborhoodGroup({
+    required this.neighborhoodName,
     required this.orders,
     required this.selectedIds,
     required this.allowSelection,
     required this.onToggle,
+    this.onToggleNeighborhood,
   });
 
   @override
-  State<_CategoryGroup> createState() => _CategoryGroupState();
+  State<_NeighborhoodGroup> createState() => _NeighborhoodGroupState();
 }
 
-class _CategoryGroupState extends State<_CategoryGroup> {
+class _NeighborhoodGroupState extends State<_NeighborhoodGroup> {
   bool _expanded = true;
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.only(bottom: 10),
       child: Container(
         decoration: BoxDecoration(
           color: AppColors.card,
@@ -372,72 +420,118 @@ class _CategoryGroupState extends State<_CategoryGroup> {
         ),
         child: Column(
           children: [
-            // ── Header del grupo ──────────────────────────────────
-            InkWell(
-              onTap: () => setState(() => _expanded = !_expanded),
-              borderRadius: BorderRadius.vertical(
-                top: const Radius.circular(AppTheme.radiusMd),
-                bottom: _expanded
-                    ? Radius.zero
-                    : const Radius.circular(AppTheme.radiusMd),
-              ),
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 14, vertical: 10),
-                decoration: BoxDecoration(
-                  color: AppColors.primaryContainer,
-                  borderRadius: BorderRadius.vertical(
-                    top: const Radius.circular(AppTheme.radiusMd),
-                    bottom: _expanded
-                        ? Radius.zero
-                        : const Radius.circular(AppTheme.radiusMd),
-                  ),
+            Container(
+              padding: const EdgeInsets.only(left: 4, right: 0, top: 4, bottom: 4),
+              decoration: BoxDecoration(
+                color: AppColors.primaryContainer,
+                borderRadius: BorderRadius.vertical(
+                  top: const Radius.circular(AppTheme.radiusMd),
+                  bottom: _expanded
+                      ? Radius.zero
+                      : const Radius.circular(AppTheme.radiusMd),
                 ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.category_outlined,
-                        size: 16, color: AppColors.primaryLight),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        widget.categoryName,
-                        style: const TextStyle(
-                          color: AppColors.primaryLight,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 13,
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: InkWell(
+                      onTap: () => setState(() => _expanded = !_expanded),
+                      borderRadius: const BorderRadius.horizontal(
+                        left: Radius.circular(AppTheme.radiusMd),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 4),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.place_outlined,
+                                size: 16, color: AppColors.primaryLight),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                widget.neighborhoodName,
+                                style: const TextStyle(
+                                  color: AppColors.primaryLight,
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 2),
+                              decoration: BoxDecoration(
+                                color:
+                                    AppColors.primary.withValues(alpha: 0.2),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Text(
+                                '${widget.orders.length} '
+                                '${widget.orders.length == 1 ? 'pedido' : 'pedidos'}',
+                                style: const TextStyle(
+                                  color: AppColors.primaryLight,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: AppColors.primary.withValues(alpha: 0.2),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Text(
-                        '${widget.orders.length} '
-                        '${widget.orders.length == 1 ? 'pedido' : 'pedidos'}',
-                        style: const TextStyle(
-                          color: AppColors.primaryLight,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
+                  ),
+                  if (widget.allowSelection &&
+                      widget.onToggleNeighborhood != null) ...[
+                    Builder(
+                      builder: (context) {
+                        final ids =
+                            widget.orders.map((o) => o.id).toList();
+                        final allSelected = ids.isNotEmpty &&
+                            ids.every(
+                                (id) => widget.selectedIds.contains(id));
+                        return IconButton(
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                            minWidth: 40,
+                            minHeight: 40,
+                          ),
+                          splashRadius: 20,
+                          tooltip: allSelected
+                              ? 'Quitar todos de este barrio'
+                              : 'Seleccionar todos de este barrio',
+                          onPressed: () =>
+                              widget.onToggleNeighborhood!(ids),
+                          icon: Icon(
+                            Icons.done_all,
+                            size: 22,
+                            color: allSelected
+                                ? AppColors.accentLight
+                                : AppColors.primaryLight,
+                          ),
+                        );
+                      },
                     ),
-                    const SizedBox(width: 8),
-                    AnimatedRotation(
+                  ],
+                  IconButton(
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(
+                      minWidth: 40,
+                      minHeight: 40,
+                    ),
+                    splashRadius: 20,
+                    tooltip: _expanded ? 'Contraer' : 'Expandir',
+                    onPressed: () =>
+                        setState(() => _expanded = !_expanded),
+                    icon: AnimatedRotation(
                       turns: _expanded ? 0 : -0.5,
                       duration: const Duration(milliseconds: 200),
                       child: const Icon(Icons.expand_less,
                           size: 18, color: AppColors.primaryLight),
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
-
-            // ── Pedidos del grupo ─────────────────────────────────
             AnimatedCrossFade(
               duration: const Duration(milliseconds: 200),
               crossFadeState: _expanded
@@ -450,19 +544,17 @@ class _CategoryGroupState extends State<_CategoryGroup> {
                     (order) => Column(
                       children: [
                         if (order != widget.orders.first)
-                          const Divider(height: 1, indent: 14, endIndent: 14),
-                        widget.allowSelection
-                            ? _SelectableOrderCard(
-                                order: order,
-                                isSelected:
-                                    widget.selectedIds.contains(order.id),
-                                onToggle: () => widget.onToggle(order.id),
-                              )
-                            : Padding(
-                                padding: const EdgeInsets.symmetric(
-                                    vertical: 4, horizontal: 4),
-                                child: OrderCard(order: order),
-                              ),
+                          const Divider(height: 1, indent: 8, endIndent: 8),
+                        _CompactAvailableOrderTile(
+                          order: order,
+                          now: DateTime.now(),
+                          isSelected:
+                              widget.selectedIds.contains(order.id),
+                          allowSelection: widget.allowSelection,
+                          onToggle: () => widget.onToggle(order.id),
+                          onOpenMap: () =>
+                              _openOrderDestinationMap(context, order),
+                        ),
                       ],
                     ),
                   ),
@@ -478,58 +570,150 @@ class _CategoryGroupState extends State<_CategoryGroup> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tarjeta seleccionable
+// Fila compacta: semáforo + # + dirección + mapa
 // ─────────────────────────────────────────────────────────────────────────────
-class _SelectableOrderCard extends StatelessWidget {
+class _CompactAvailableOrderTile extends StatelessWidget {
   final Order order;
+  final DateTime now;
   final bool isSelected;
+  final bool allowSelection;
   final VoidCallback onToggle;
+  final VoidCallback onOpenMap;
 
-  const _SelectableOrderCard({
+  const _CompactAvailableOrderTile({
     required this.order,
+    required this.now,
     required this.isSelected,
+    required this.allowSelection,
     required this.onToggle,
+    required this.onOpenMap,
   });
+
+  static const double _stripWidth = 4;
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 150),
-      margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-        border: Border.all(
-          color: isSelected
-              ? AppColors.primary
-              : Colors.transparent,
-          width: 2,
-        ),
-      ),
-      child: OrderCard(
-        order: order,
-        onTap: onToggle,
-        trailing: Row(
-          children: [
-            Checkbox(
-              value: isSelected,
-              onChanged: (_) => onToggle(),
-              activeColor: AppColors.primary,
-              checkColor: AppColors.onPrimary,
-              side: const BorderSide(color: AppColors.hint),
+    final tier = urgencyTierForOrder(order, now);
+    final strip = _stripColor(tier);
+    final fill = _fillColor(tier);
+    final borderColor =
+        isSelected ? AppColors.primary : _borderColor(tier);
+    final borderW = isSelected ? 2.5 : 1.0;
+
+    final addr = order.displayAddressLine ?? 'Sin dirección';
+    final extra = order.addressAdditionalInfo?.trim();
+
+    Widget textBlock = Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            '#${order.id}',
+            style: const TextStyle(
+              color: AppColors.onBackground,
+              fontSize: 14,
+              fontWeight: FontWeight.w800,
             ),
-            const SizedBox(width: 4),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            addr,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: AppColors.onSurface,
+              fontSize: 12,
+              height: 1.2,
+            ),
+          ),
+          if (extra != null && extra.isNotEmpty) ...[
+            const SizedBox(height: 2),
             Text(
-              isSelected ? 'Seleccionado' : 'Asignarme',
+              extra,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                color: isSelected ? AppColors.primaryLight : AppColors.hint,
-                fontSize: 12,
-                fontWeight:
-                    isSelected ? FontWeight.w600 : FontWeight.normal,
+                color: AppColors.hint.withValues(alpha: 0.95),
+                fontSize: 11,
+                height: 1.2,
               ),
+            ),
+          ],
+        ],
+      ),
+    );
+
+    if (allowSelection) {
+      textBlock = Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onToggle,
+          child: textBlock,
+        ),
+      );
+    }
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+      decoration: BoxDecoration(
+        color: fill,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: borderColor, width: borderW),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Container(width: _stripWidth, color: strip),
+            Expanded(child: textBlock),
+            IconButton(
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(
+                minWidth: 36,
+                minHeight: 36,
+              ),
+              splashRadius: 20,
+              onPressed: onOpenMap,
+              icon: const Icon(
+                Icons.map_outlined,
+                size: 22,
+                color: AppColors.primaryLight,
+              ),
+              tooltip: 'Ir al mapa',
             ),
           ],
         ),
       ),
     );
   }
+
+  Color _stripColor(DeliveryUrgencyTier t) => switch (t) {
+        DeliveryUrgencyTier.green => AppColors.success,
+        DeliveryUrgencyTier.orange => AppColors.warning,
+        DeliveryUrgencyTier.orangeRed => const Color(0xFFFF6B35),
+        DeliveryUrgencyTier.red => AppColors.error,
+      };
+
+  Color _borderColor(DeliveryUrgencyTier t) => switch (t) {
+        DeliveryUrgencyTier.green =>
+          AppColors.success.withValues(alpha: 0.65),
+        DeliveryUrgencyTier.orange =>
+          AppColors.warning.withValues(alpha: 0.75),
+        DeliveryUrgencyTier.orangeRed =>
+          const Color(0xFFFF6B35).withValues(alpha: 0.85),
+        DeliveryUrgencyTier.red => AppColors.error.withValues(alpha: 0.85),
+      };
+
+  Color _fillColor(DeliveryUrgencyTier t) => switch (t) {
+        DeliveryUrgencyTier.green =>
+          AppColors.accentContainer.withValues(alpha: 0.35),
+        DeliveryUrgencyTier.orange =>
+          AppColors.warning.withValues(alpha: 0.08),
+        DeliveryUrgencyTier.orangeRed =>
+          const Color(0xFFFF6B35).withValues(alpha: 0.12),
+        DeliveryUrgencyTier.red => AppColors.error.withValues(alpha: 0.12),
+      };
 }
