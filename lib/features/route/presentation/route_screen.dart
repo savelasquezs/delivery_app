@@ -4,8 +4,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../../core/api/api_exception.dart';
+import '../../../core/maps/open_delivery_destination_maps.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/compact_action_button.dart';
 import '../../../core/widgets/empty_state_widget.dart';
 import '../../../core/widgets/error_banner.dart';
 import '../../../core/widgets/order_card.dart';
@@ -123,6 +125,27 @@ class _RouteScreenState extends ConsumerState<RouteScreen> {
     );
   }
 
+  Future<void> _openSingleOrderMap(Order order) async {
+    if (!orderHasOpenableMapDestination(order)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Este pedido no tiene dirección ni coordenadas para el mapa.',
+            ),
+          ),
+        );
+      }
+      return;
+    }
+    final ok = await openDeliveryDestinationInMaps(order);
+    if (!ok && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No se pudo abrir Google Maps.')),
+      );
+    }
+  }
+
   /// Abre Google Maps con todos los pedidos como waypoints (ruta multi-parada).
   Future<void> _openRouteInMaps(List<Order> orders) async {
     final withCoords = orders
@@ -229,6 +252,7 @@ class _RouteScreenState extends ConsumerState<RouteScreen> {
                           trailing: _OrderActions(
                             order: order,
                             onDetail: () => _openOrderDetail(order),
+                            onOpenMap: () => _openSingleOrderMap(order),
                             onStatus: () => _changeStatus(order),
                             onReprint: order.status == OrderStatus.onTheWay
                                 ? () => _reprintOrder(order)
@@ -338,6 +362,7 @@ class _RouteSummaryBar extends StatelessWidget {
 class _OrderActions extends StatelessWidget {
   final Order order;
   final VoidCallback onDetail;
+  final VoidCallback onOpenMap;
   final VoidCallback onStatus;
   final VoidCallback? onReprint;
   final bool reprintLoading;
@@ -345,6 +370,7 @@ class _OrderActions extends StatelessWidget {
   const _OrderActions({
     required this.order,
     required this.onDetail,
+    required this.onOpenMap,
     required this.onStatus,
     this.onReprint,
     this.reprintLoading = false,
@@ -355,97 +381,47 @@ class _OrderActions extends StatelessWidget {
     final isOnTheWay = order.status == OrderStatus.onTheWay;
     final statusColor =
         isOnTheWay ? AppColors.accentDark : AppColors.statusOnTheWay;
-    final statusLabel = isOnTheWay ? 'Entregado' : 'En camino';
+    final statusLabel = isOnTheWay ? 'Listo' : 'Camino';
     final statusIcon =
         isOnTheWay ? Icons.check_circle_outline : Icons.delivery_dining;
 
-    return Row(
-      children: [
-        _CompactButton(
-          icon: Icons.receipt_long_outlined,
-          label: 'Detalle',
-          color: AppColors.primary,
-          onTap: onDetail,
-        ),
-        const SizedBox(width: 8),
-        if (onReprint != null) ...[
-          _CompactButton(
-            icon: reprintLoading
-                ? Icons.hourglass_empty
-                : Icons.print_outlined,
-            label: reprintLoading ? '…' : 'Reimprimir',
-            color: AppColors.onSurface,
-            onTap: reprintLoading ? null : onReprint,
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          CompactActionButton(
+            icon: Icons.receipt_long_outlined,
+            label: 'Ver',
+            color: AppColors.primary,
+            onTap: onDetail,
           ),
           const SizedBox(width: 8),
-        ],
-        _CompactButton(
-          icon: statusIcon,
-          label: statusLabel,
-          color: statusColor,
-          onTap: onStatus,
-          filled: true,
-        ),
-      ],
-    );
-  }
-}
-
-class _CompactButton extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final Color color;
-  final VoidCallback? onTap;
-  final bool filled;
-
-  const _CompactButton({
-    required this.icon,
-    required this.label,
-    required this.color,
-    required this.onTap,
-    this.filled = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final enabled = onTap != null;
-    final fg = filled
-        ? Colors.white
-        : enabled
-            ? color
-            : AppColors.hint;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(AppTheme.radiusSm),
-      child: Opacity(
-        opacity: enabled ? 1 : 0.55,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          decoration: BoxDecoration(
-            color: filled
-                ? color
-                : color.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(AppTheme.radiusSm),
-            border: Border.all(
-              color: filled ? color : color.withValues(alpha: 0.3),
+          CompactActionButton(
+            icon: Icons.navigation_outlined,
+            label: 'Ir',
+            color: AppColors.primary,
+            onTap: onOpenMap,
+          ),
+          const SizedBox(width: 8),
+          if (onReprint != null) ...[
+            CompactActionButton(
+              icon: reprintLoading
+                  ? Icons.hourglass_empty
+                  : Icons.print_outlined,
+              label: reprintLoading ? '…' : 'Imprimir',
+              color: AppColors.onSurface,
+              onTap: reprintLoading ? null : onReprint,
             ),
+            const SizedBox(width: 8),
+          ],
+          CompactActionButton(
+            icon: statusIcon,
+            label: statusLabel,
+            color: statusColor,
+            onTap: onStatus,
+            filled: true,
           ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: 14, color: fg),
-              const SizedBox(width: 4),
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: fg,
-                ),
-              ),
-            ],
-          ),
-        ),
+        ],
       ),
     );
   }

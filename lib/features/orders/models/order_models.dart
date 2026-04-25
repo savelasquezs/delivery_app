@@ -174,6 +174,13 @@ class Order {
   /// Suma pagos banco+app cuando el JSON los trae; si no, 0.
   final double nonCashPaymentsTotal;
 
+  /// Inicio preparación / reserva (OrderDto).
+  final DateTime? prepareAt;
+  final DateTime? reservedFor;
+
+  /// Tiempos por estado; claves en minúsculas (`taken`, `inpreparation`, …).
+  final Map<String, DateTime> statusTimes;
+
   const Order({
     required this.id,
     required this.status,
@@ -202,6 +209,9 @@ class Order {
     this.paidInStoreCash = false,
     this.paidInStoreCashAmount,
     this.nonCashPaymentsTotal = 0,
+    this.prepareAt,
+    this.reservedFor,
+    this.statusTimes = const {},
   });
 
   /// Efectivo a cobrar en entrega (alineado con backend / web).
@@ -263,6 +273,27 @@ class Order {
     if (v == null) return null;
     if (v is num) return v.toDouble();
     return null;
+  }
+
+  static DateTime? _parseDate(dynamic v) {
+    if (v == null) return null;
+    if (v is String) return DateTime.tryParse(v);
+    return null;
+  }
+
+  static Map<String, DateTime> _statusTimesFromJson(dynamic raw) {
+    if (raw == null || raw is! Map) return {};
+    final map = Map<dynamic, dynamic>.from(raw);
+    final out = <String, DateTime>{};
+    map.forEach((k, v) {
+      final key = k?.toString();
+      if (key == null || key.isEmpty) return;
+      if (v is String) {
+        final d = DateTime.tryParse(v);
+        if (d != null) out[key] = d;
+      }
+    });
+    return out;
   }
 
   factory Order.fromJson(Map<String, dynamic> json) {
@@ -345,6 +376,9 @@ class Order {
       paidInStoreCashAmount: _toDouble(json['paidInStoreCashAmount']),
       nonCashPaymentsTotal: _sumPaymentAmounts(json['bankPayments'] as List<dynamic>?) +
           _sumPaymentAmounts(json['appPayments'] as List<dynamic>?),
+      prepareAt: _parseDate(json['prepareAt'] ?? json['PrepareAt']),
+      reservedFor: _parseDate(json['reservedFor'] ?? json['ReservedFor']),
+      statusTimes: _statusTimesFromJson(json['statusTimes'] ?? json['StatusTimes']),
     );
   }
 
@@ -404,6 +438,9 @@ class Order {
       paidInStoreCash: paidInStoreCash,
       paidInStoreCashAmount: paidInStoreCashAmount,
       nonCashPaymentsTotal: nonCashPaymentsTotal,
+      prepareAt: prepareAt,
+      reservedFor: reservedFor,
+      statusTimes: statusTimes,
     );
   }
 }

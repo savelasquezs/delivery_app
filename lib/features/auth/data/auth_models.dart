@@ -14,6 +14,8 @@ class AuthUser {
   final String role;
   final int? branchId;
   final String? branchName;
+  final String? branchPhone1;
+  final String? branchPhone2;
   final String? phone;
   final String? profileImageUrl;
 
@@ -24,11 +26,22 @@ class AuthUser {
     required this.role,
     this.branchId,
     this.branchName,
+    this.branchPhone1,
+    this.branchPhone2,
     this.phone,
     this.profileImageUrl,
   });
 
   bool get isDeliveryman => role.toLowerCase() == 'deliveryman';
+
+  /// Teléfono de sucursal para WhatsApp: `branchPhone1`, si no hay, `branchPhone2`.
+  String? get branchWhatsAppTarget {
+    final a = branchPhone1?.trim();
+    if (a != null && a.isNotEmpty) return a;
+    final b = branchPhone2?.trim();
+    if (b != null && b.isNotEmpty) return b;
+    return null;
+  }
 
   static int _idFromJson(dynamic v) =>
       v is int ? v : (v as num).toInt();
@@ -50,9 +63,22 @@ class AuthUser {
             ? _idFromJson(json['branchId'])
             : null,
         branchName: json['branchName'] as String?,
+        branchPhone1: _branchPhoneFromJson(json, 'branchPhone1', 'BranchPhone1'),
+        branchPhone2: _branchPhoneFromJson(json, 'branchPhone2', 'BranchPhone2'),
         phone: _emptyToNull(json['phone'] as String?),
         profileImageUrl: _emptyToNull(json['profileImageUrl'] as String?),
       );
+
+  static String? _branchPhoneFromJson(
+    Map<String, dynamic> json,
+    String camelKey,
+    String pascalKey,
+  ) {
+    final camel = json[camelKey];
+    final pascal = json[pascalKey];
+    final s = camel is String ? camel : (pascal is String ? pascal : null);
+    return _emptyToNull(s);
+  }
 
   static String? _emptyToNull(String? s) {
     if (s == null || s.isEmpty) return null;
@@ -70,6 +96,8 @@ class AuthUser {
             ? _idFromJson(json['branchId'])
             : current.branchId,
         branchName: json['branchName'] as String? ?? current.branchName,
+        branchPhone1: current.branchPhone1,
+        branchPhone2: current.branchPhone2,
         phone: _emptyToNull(json['phone'] as String?) ?? current.phone,
         profileImageUrl:
             _emptyToNull(json['profileImageUrl'] as String?) ??
@@ -83,6 +111,8 @@ class AuthUser {
         'role': role,
         'branchId': branchId,
         'branchName': branchName,
+        'branchPhone1': branchPhone1 ?? '',
+        'branchPhone2': branchPhone2 ?? '',
         'phone': phone ?? '',
         'profileImageUrl': profileImageUrl,
       };
@@ -94,6 +124,8 @@ class AuthUser {
     String? role,
     int? branchId,
     String? branchName,
+    String? branchPhone1,
+    String? branchPhone2,
     String? phone,
     String? profileImageUrl,
   }) =>
@@ -104,6 +136,8 @@ class AuthUser {
         role: role ?? this.role,
         branchId: branchId ?? this.branchId,
         branchName: branchName ?? this.branchName,
+        branchPhone1: branchPhone1 ?? this.branchPhone1,
+        branchPhone2: branchPhone2 ?? this.branchPhone2,
         phone: phone ?? this.phone,
         profileImageUrl: profileImageUrl ?? this.profileImageUrl,
       );

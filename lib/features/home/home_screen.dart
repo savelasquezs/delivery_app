@@ -3,12 +3,18 @@ import 'dart:async';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:go_router/go_router.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../core/api/api_constants.dart';
 import '../../core/router/app_router.dart';
+import '../../core/updates/app_update_prefs.dart';
+import '../../core/updates/app_update_provider.dart';
+import '../../core/updates/delivery_app_release_manifest.dart';
 import '../../core/storage/secure_storage.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/whatsapp/open_whatsapp.dart';
 import '../../core/widgets/app_logo.dart';
 import '../auth/data/auth_models.dart';
 import '../auth/presentation/auth_notifier.dart';
@@ -34,6 +40,7 @@ class HomeScreen extends ConsumerStatefulWidget {
 class _HomeScreenState extends ConsumerState<HomeScreen>
     with WidgetsBindingObserver {
   int _currentIndex = 0;
+  int? _dismissedRemoteBuild;
   HubConnectionStatus _hubStatus = HubConnectionStatus.disconnected;
   OrderHubService? _hubService;
   bool _signalRListenersAttached = false;
@@ -56,8 +63,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _connectSignalR();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final d = await getDismissedUpdateRemoteBuild();
+      if (mounted) setState(() => _dismissedRemoteBuild = d);
+      if (!mounted) return;
+      // Un frame más para que el árbol y `ref` queden listos antes de SignalR.
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _connectSignalR();
       });
@@ -67,6 +77,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
+      ref.invalidate(appUpdateCheckProvider);
       unawaited(_onResumed());
     }
   }
@@ -242,6 +253,164 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 
   String get _currentTitle => _tabs[_currentIndex].label;
 
+  Future<void> _openApkDownload(Uri uri) async {
+    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!mounted || ok) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('No se pudo abrir el enlace')),
+    );
+  }
+
+  Future<void> _onDismissUpdate(AppUpdateCheckResult result) async {
+    await setDismissedUpdateRemoteBuild(result.manifest.buildNumber);
+    if (mounted) {
+      setState(() => _dismissedRemoteBuild = result.manifest.buildNumber);
+    }
+  }
+
+  Widget _buildUpdateBanner() {
+    final async = ref.watch(appUpdateCheckProvider);
+    return async.when(
+      data: (result) {
+        if (result == null) return const SizedBox.shrink();
+        final dismissed = _dismissedRemoteBuild;
+        if (dismissed != null && dismissed == result.manifest.buildNumber) {
+          return const SizedBox.shrink();
+        }
+        final forced = result.kind == AppUpdateKind.forced;
+        final msg = result.manifest.message?.trim();
+        return Material(
+          color: forced
+              ? AppColors.error.withValues(alpha: 0.12)
+              : AppColors.primaryContainer,
+          child: Container(
+            width: double.infinity,
+            decoration: BoxDecoration(
+              border: Border(
+                bottom: BorderSide(
+                  color: forced ? AppColors.warning : AppColors.divider,
+                  width: 1,
+                ),
+              ),
+            ),
+            padding: const EdgeInsets.fromLTRB(
+              AppTheme.spacingMd,
+              AppTheme.spacingSm,
+              AppTheme.spacingMd,
+              AppTheme.spacingSm,
+            ),
+            child: SafeArea(
+              top: false,
+              bottom: false,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(
+                        forced ? Icons.warning_amber_rounded : Icons.system_update,
+                        size: 22,
+                        color: forced ? AppColors.warning : AppColors.primaryLight,
+                      ),
+                      const SizedBox(width: AppTheme.spacingSm),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              forced
+                                  ? 'Actualización necesaria'
+                                  : 'Hay una nueva versión',
+                              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                                    color: AppColors.onBackground,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                            ),
+                            if (msg != null && msg.isNotEmpty) ...[
+                              const SizedBox(height: 4),
+                              Text(
+                                msg,
+                                maxLines: 3,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                      color: AppColors.onSurface,
+                                    ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: AppTheme.spacingSm),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TextButton(
+                        onPressed: () => _onDismissUpdate(result),
+                        child: const Text('Más tarde'),
+                      ),
+                      const SizedBox(width: AppTheme.spacingXs),
+                      FilledButton(
+                        onPressed: () => _openApkDownload(result.apkUri),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: AppColors.primary,
+                          foregroundColor: AppColors.onPrimary,
+                        ),
+                        child: const Text('Descargar'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+      loading: () => const SizedBox.shrink(),
+      error: (_, __) => const SizedBox.shrink(),
+    );
+  }
+
+  Future<void> _openBranchWhatsApp(AuthUser? user) async {
+    final raw = user?.branchWhatsAppTarget;
+    if (raw == null) return;
+    final ok = await openWhatsAppChat(raw);
+    if (!mounted) return;
+    if (!ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No se pudo abrir WhatsApp')),
+      );
+    }
+  }
+
+  List<Widget> _branchWhatsAppActions(AuthUser? user) {
+    if (user == null || user.branchWhatsAppTarget == null) {
+      return const [];
+    }
+    final name = user.branchName;
+    return [
+      Tooltip(
+        message: name != null && name.isNotEmpty
+            ? 'WhatsApp: $name'
+            : 'WhatsApp sucursal',
+        child: IconButton(
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(minWidth: 36, minHeight: 40),
+          splashRadius: 20,
+          onPressed: () => _openBranchWhatsApp(user),
+          icon: const FaIcon(
+            FontAwesomeIcons.whatsapp,
+            size: 22,
+            color: Color(0xFF25D366),
+          ),
+        ),
+      ),
+      const SizedBox(width: 4),
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
     ref.listen<AuthState>(
@@ -267,6 +436,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           ],
         ),
         actions: [
+          ..._branchWhatsAppActions(ref.watch(authNotifierProvider).user),
           _HubStatusIndicator(status: _hubStatus),
           const SizedBox(width: AppTheme.spacingSm),
           IconButton(
@@ -277,9 +447,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           ),
         ],
       ),
-      body: IndexedStack(
-        index: _currentIndex,
-        children: _screens,
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _buildUpdateBanner(),
+          Expanded(
+            child: IndexedStack(
+              index: _currentIndex,
+              children: _screens,
+            ),
+          ),
+        ],
       ),
       bottomNavigationBar: Container(
         decoration: const BoxDecoration(
