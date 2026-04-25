@@ -43,7 +43,16 @@ class OrderHubService {
     }
   }
 
-  Future<void> connect(int branchId) async {
+  /// [forceReconnect]: tras renovar el JWT en storage, hay que cerrar el hub y
+  /// volver a negociar; si no, SignalR sigue usando el access token capturado al conectar.
+  Future<void> connect(int branchId, {bool forceReconnect = false}) async {
+    if (forceReconnect && _connection != null) {
+      try {
+        await _connection!.stop();
+      } catch (_) {}
+      _connection = null;
+    }
+
     // No confiar solo en _status: tras background/kill puede quedar desincronizado.
     if (_connection?.state == HubConnectionState.Connected) {
       if (_status != HubConnectionStatus.connected) {
@@ -77,14 +86,14 @@ class OrderHubService {
 
   Future<bool> _tryConnect({required HttpTransportType transport}) async {
     try {
-      final token = await _storage.getAuthToken();
       _connection = HubConnectionBuilder()
           .withUrl(
             ApiConstants.signalrHubUrl,
             options: HttpConnectionOptions(
               transport: transport,
               skipNegotiation: transport == HttpTransportType.WebSockets,
-              accessTokenFactory: () async => token ?? '',
+              accessTokenFactory: () async =>
+                  (await _storage.getAuthToken()) ?? '',
             ),
           )
           .withAutomaticReconnect()

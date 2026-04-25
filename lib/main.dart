@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
@@ -9,6 +11,7 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'core/router/app_router.dart';
 import 'core/theme/app_theme.dart';
+import 'features/auth/presentation/auth_notifier.dart';
 import 'features/notifications/fcm_service.dart';
 import 'features/tracking/location_tracking_service.dart';
 
@@ -46,11 +49,38 @@ Future<void> main() async {
   runApp(const ProviderScope(child: WithForegroundTask(child: DeliveryApp())));
 }
 
-class DeliveryApp extends ConsumerWidget {
+class DeliveryApp extends ConsumerStatefulWidget {
   const DeliveryApp({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<DeliveryApp> createState() => _DeliveryAppState();
+}
+
+class _DeliveryAppState extends ConsumerState<DeliveryApp>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(
+        ref.read(authNotifierProvider.notifier).refreshSessionIfNeededAfterResume(),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final router = ref.watch(appRouterProvider);
 
     return MaterialApp.router(

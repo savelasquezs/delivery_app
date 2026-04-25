@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -65,9 +67,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      _restartTrackingIfNeeded();
-      _connectSignalR();
+      unawaited(_onResumed());
     }
+  }
+
+  /// Renueva el access si hace falta y reconecta SignalR con token fresco (storage).
+  Future<void> _onResumed() async {
+    await ref.read(authNotifierProvider.notifier).refreshSessionIfNeededAfterResume();
+    if (!mounted) return;
+    await _restartTrackingIfNeeded();
+    if (!mounted) return;
+    await _connectSignalR(forceReconnect: true);
   }
 
   /// Re-starts location tracking when the app resumes from background,
@@ -86,7 +96,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     );
   }
 
-  Future<void> _connectSignalR() async {
+  Future<void> _connectSignalR({bool forceReconnect = false}) async {
     final user = ref.read(authNotifierProvider).user;
     if (user == null) return;
 
@@ -98,7 +108,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       _signalRListenersAttached = true;
     }
     // El grupo SignalR lo define el JWT (`branch_id`); el parámetro es solo por compatibilidad.
-    await _hubService!.connect(user.branchId ?? 0);
+    await _hubService!.connect(
+      user.branchId ?? 0,
+      forceReconnect: forceReconnect,
+    );
   }
 
   void _onHubStatusChange(HubConnectionStatus status) {
