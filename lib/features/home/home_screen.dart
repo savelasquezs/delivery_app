@@ -83,7 +83,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   /// Re-starts location tracking when the app resumes from background,
   /// in case the service was killed by the OS.
   Future<void> _restartTrackingIfNeeded() async {
-    final routeState = ref.read(routeNotifierProvider);
+    if (ref.read(authNotifierProvider).user == null) return;
+
+    var routeState = ref.read(routeNotifierProvider);
+    if (routeState.orders.isEmpty) {
+      await ref.read(routeNotifierProvider.notifier).load();
+      routeState = ref.read(routeNotifierProvider);
+    }
     if (routeState.orders.isEmpty) return;
 
     final storage = ref.read(secureStorageProvider);
@@ -126,6 +132,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       ref.invalidate(availableNotifierProvider);
       ref.invalidate(routeNotifierProvider);
       ref.invalidate(historyNotifierProvider);
+
+      // Tras invalidar el ruteo, volver a cargar para que `_syncTracking` arranque
+      // o detenga el foreground GPS sin exigir abrir la pestaña "En ruta".
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted) return;
+        await ref.read(routeNotifierProvider.notifier).load();
+      });
     }
   }
 
