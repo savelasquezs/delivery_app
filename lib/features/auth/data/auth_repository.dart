@@ -65,6 +65,8 @@ class AuthRepository {
     return token != null && user != null && user.isDeliveryman;
   }
 
+  Future<String?> getStoredAccessToken() => _storage.getAuthToken();
+
   Future<void> forgotPassword(String email) async {
     try {
       await _client.post<void>(

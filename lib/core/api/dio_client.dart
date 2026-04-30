@@ -4,25 +4,31 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../auth/auth_session_bridge.dart';
 import '../../features/tracking/location_tracking_service.dart';
 import '../storage/secure_storage.dart';
 import 'api_constants.dart';
 import 'api_exception.dart';
+import 'refresh_access_result.dart';
 
 class DioClient {
   final Dio _dio;
   final SecureStorage _storage;
+  final void Function()? onSessionInvalidated;
 
   /// Una sola renovación a la vez (el backend rota el refresh token al usarlo).
-  Completer<String?>? _refreshCompleter;
+  Completer<RefreshAccessResult>? _refreshCompleter;
 
-  DioClient(this._storage) : _dio = Dio() {
+  DioClient(
+    this._storage, {
+    this.onSessionInvalidated,
+  }) : _dio = Dio() {
     _dio.options = BaseOptions(
       baseUrl: ApiConstants.baseUrl,
       connectTimeout: ApiConstants.connectTimeout,
       receiveTimeout: ApiConstants.receiveTimeout,
       headers: {'Content-Type': 'application/json'},
-       );
+    );
     _setupInterceptors();
   }
 
@@ -75,20 +81,31 @@ class DioClient {
       );
     }
     if (err.response?.statusCode == 401 && !_isRetry(err.requestOptions)) {
-      final newToken = await _refreshAccessToken();
-      if (newToken != null) {
+      final result = await _refreshAccessToken();
+      if (result is RefreshAccessSuccess) {
+        final newToken = result.token;
         final retryOptions = err.requestOptions
           ..headers['Authorization'] = 'Bearer $newToken'
           ..extra['_retry'] = true;
         final retryResponse = await _dio.fetch(retryOptions);
         return handler.resolve(retryResponse);
       }
+      if (result is RefreshAccessSessionEnded) {
+        return handler.next(
+          DioException(
+            requestOptions: err.requestOptions,
+            response: err.response,
+            type: DioExceptionType.badResponse,
+            error: const ApiException('Sesión expirada', statusCode: 401),
+          ),
+        );
+      }
       return handler.next(
         DioException(
           requestOptions: err.requestOptions,
           response: err.response,
-          type: DioExceptionType.badResponse,
-          error: const ApiException('Sesión expirada', statusCode: 401),
+          type: err.type,
+          error: _transientRefreshApiError(err),
         ),
       );
     }
@@ -101,6 +118,20 @@ class DioClient {
         type: err.type,
         error: apiError,
       ),
+    );
+  }
+
+  ApiException _transientRefreshApiError(DioException original) {
+    final mapped = _mapDioError(original);
+    if (mapped.message ==
+            'No se pudo conectar con el servidor. Verifica tu conexión y la URL del API en .env' ||
+        mapped.message ==
+            'Tiempo de espera agotado. Verifica tu conexión' ||
+        mapped.message == 'Sin conexión a internet') {
+      return mapped;
+    }
+    return const ApiException(
+      'No se pudo renovar la sesión. Verifica tu conexión e inténtalo de nuevo.',
     );
   }
 
@@ -152,13 +183,17 @@ class DioClient {
     return false;
   }
 
+  /// Para arranque / resume: mismo flujo que el interceptor, sin depender de un 401.
+  Future<RefreshAccessResult> silentRefreshAccessToken() =>
+      _refreshAccessToken();
+
   /// El API exige `Authorization: Bearer` con el access token (aunque esté
   /// expirado) además del `refreshToken` en el body. El refresh rota el refresh.
-  Future<String?> _refreshAccessToken() {
+  Future<RefreshAccessResult> _refreshAccessToken() {
     if (_refreshCompleter != null) {
       return _refreshCompleter!.future;
     }
-    final completer = Completer<String?>();
+    final completer = Completer<RefreshAccessResult>();
     _refreshCompleter = completer;
 
     Future<void> run() async {
@@ -169,7 +204,9 @@ class DioClient {
             refreshToken.isEmpty ||
             accessToken == null ||
             accessToken.isEmpty) {
-          completer.complete(null);
+          await _storage.clearAll();
+          onSessionInvalidated?.call();
+          completer.complete(const RefreshAccessSessionEnded());
           return;
         }
         final refreshDio = Dio(
@@ -191,14 +228,14 @@ class DioClient {
         );
         final map = _tryParseJsonObject(response.data);
         if (map == null) {
-          completer.complete(null);
+          completer.complete(const RefreshAccessTransientFailure());
           return;
         }
         final newToken = _readStringKey(map, 'token');
         final newRefresh =
             _readStringKey(map, 'refreshToken') ?? refreshToken;
         if (newToken == null || newToken.isEmpty) {
-          completer.complete(null);
+          completer.complete(const RefreshAccessTransientFailure());
           return;
         }
         await _storage.saveTokens(
@@ -206,7 +243,7 @@ class DioClient {
           refreshToken: newRefresh,
         );
         await LocationTrackingService.updateToken(newToken);
-        completer.complete(newToken);
+        completer.complete(RefreshAccessSuccess(newToken));
       } on DioException catch (e) {
         if (kDebugMode) {
           debugPrint(
@@ -216,10 +253,13 @@ class DioClient {
         }
         if (_refreshFailureShouldLogout(e)) {
           await _storage.clearAll();
+          onSessionInvalidated?.call();
+          completer.complete(const RefreshAccessSessionEnded());
+        } else {
+          completer.complete(const RefreshAccessTransientFailure());
         }
-        completer.complete(null);
       } catch (_) {
-        completer.complete(null);
+        completer.complete(const RefreshAccessTransientFailure());
       } finally {
         _refreshCompleter = null;
       }
@@ -307,5 +347,8 @@ class DioClient {
 
 final dioClientProvider = Provider<DioClient>((ref) {
   final storage = ref.watch(secureStorageProvider);
-  return DioClient(storage);
+  return DioClient(
+    storage,
+    onSessionInvalidated: notifyAuthSessionInvalidatedByApi,
+  );
 });
