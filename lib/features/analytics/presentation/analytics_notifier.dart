@@ -12,6 +12,7 @@ import '../models/analytics_dashboard_models.dart';
 
 class DashboardStats {
   final int totalDeliveries;
+
   /// Suma de fees de envío recaudados (100 %) en el período.
   final double totalFeesRecaudo;
   final double? avgDeliveryMinutes;
@@ -59,9 +60,8 @@ class DashboardStats {
       totalDeliveries: (me['deliveredCount'] as num?)?.toInt() ?? totalDel,
       totalFeesRecaudo:
           (me['deliveryFeeTotal'] as num?)?.toDouble() ?? totalFee,
-      avgDeliveryMinutes:
-          (json['avgDeliveryMinutes'] as num?)?.toDouble() ??
-              (me['avgDeliveryMinutes'] as num?)?.toDouble(),
+      avgDeliveryMinutes: (json['avgDeliveryMinutes'] as num?)?.toDouble() ??
+          (me['avgDeliveryMinutes'] as num?)?.toDouble(),
       evolutionLabels: labels,
       evolutionDeliveries: deliveries,
       evolutionFees: fees,
@@ -123,6 +123,7 @@ class AnalyticsState {
   final String? advancesError;
   final DateTime fromDate;
   final DateTime toDate;
+
   /// Rango para abonos (`/me/advances`). Por defecto: solo hoy; al cambiar el
   /// período en el filtro, coincide con [fromDate]/[toDate].
   final DateTime advancesFromDate;
@@ -155,6 +156,50 @@ class AnalyticsState {
     final s = stats;
     if (s == null) return 0;
     return s.totalFeesRecaudo * effectivePayRate;
+  }
+
+  int get displayTotalDeliveries {
+    final payroll = payrollInsights;
+    if (payroll != null) {
+      return payroll.period.deliveredOrdersCount;
+    }
+    return stats?.totalDeliveries ?? 0;
+  }
+
+  double get displayTotalFeesRecaudo {
+    final payroll = payrollInsights;
+    if (payroll != null) {
+      return payroll.period.sumDeliveryFee;
+    }
+    return stats?.totalFeesRecaudo ?? 0;
+  }
+
+  List<String> get evolutionLabelsForUi {
+    final payroll = payrollInsights;
+    if (payroll != null && payroll.series.isNotEmpty) {
+      return payroll.series.map((p) => p.label).toList();
+    }
+    return stats?.evolutionLabels ?? const [];
+  }
+
+  List<int> get evolutionDeliveriesForUi {
+    final payroll = payrollInsights;
+    if (payroll != null && payroll.series.isNotEmpty) {
+      return payroll.series.map((p) => p.deliveredOrdersCount).toList();
+    }
+    return stats?.evolutionDeliveries ?? const [];
+  }
+
+  List<double> get evolutionPayableFeesForUi {
+    final payroll = payrollInsights;
+    if (payroll != null && payroll.series.isNotEmpty) {
+      return payroll.series.map((p) => p.payableDeliveryFee).toList();
+    }
+    final s = stats;
+    if (s == null) return const [];
+    return [
+      for (final fee in s.evolutionFees) fee * effectivePayRate,
+    ];
   }
 
   List<DailyDelivery> get dailyRowsForUi {
@@ -206,9 +251,8 @@ class AnalyticsState {
         isLoading: isLoading ?? this.isLoading,
         isLoadingAdvances: isLoadingAdvances ?? this.isLoadingAdvances,
         error: clearError ? null : (error ?? this.error),
-        advancesError: clearAdvancesError
-            ? null
-            : (advancesError ?? this.advancesError),
+        advancesError:
+            clearAdvancesError ? null : (advancesError ?? this.advancesError),
         fromDate: fromDate ?? this.fromDate,
         toDate: toDate ?? this.toDate,
         advancesFromDate: advancesFromDate ?? this.advancesFromDate,
@@ -217,12 +261,12 @@ class AnalyticsState {
 
   static AnalyticsState initial() {
     final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
+    final monthStart = DateTime(now.year, now.month, 1);
     return AnalyticsState(
-      fromDate: DateTime(now.year, now.month, 1),
+      fromDate: monthStart,
       toDate: now,
-      advancesFromDate: today,
-      advancesToDate: today,
+      advancesFromDate: monthStart,
+      advancesToDate: now,
     );
   }
 }
@@ -239,6 +283,13 @@ class AnalyticsNotifier extends StateNotifier<AnalyticsState> {
 
   static String _fmt(DateTime d) =>
       '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+  static DateTime _colombiaDayStartUtc(DateTime d) =>
+      DateTime.utc(d.year, d.month, d.day, 5);
+
+  static DateTime _colombiaDayEndUtc(DateTime d) =>
+      DateTime.utc(d.year, d.month, d.day + 1, 5)
+          .subtract(const Duration(milliseconds: 1));
 
   static String _seriesGranularity(DateTime from, DateTime to) {
     final days = to.difference(from).inDays.abs() + 1;
@@ -260,8 +311,8 @@ class AnalyticsNotifier extends StateNotifier<AnalyticsState> {
     );
 
     try {
-      final fromStr = '${_fmt(fromD)}T00:00:00Z';
-      final toStr = '${_fmt(toD)}T23:59:59Z';
+      final fromStr = _colombiaDayStartUtc(fromD).toIso8601String();
+      final toStr = _colombiaDayEndUtc(toD).toIso8601String();
 
       final dashFuture = _client.get<Map<String, dynamic>>(
         ApiConstants.dashboardDeliveryMe,
@@ -329,16 +380,16 @@ class AnalyticsNotifier extends StateNotifier<AnalyticsState> {
       final list = await _client.get<List<DeliverymanAdvance>>(
         ApiConstants.myAdvances,
         queryParameters: {
-          'fromDate': '${_fmt(fromD)}T00:00:00Z',
-          'toDate': '${_fmt(toD)}T23:59:59Z',
+          'fromDate': _colombiaDayStartUtc(fromD).toIso8601String(),
+          'toDate': _colombiaDayEndUtc(toD).toIso8601String(),
         },
         fromJson: (data) {
           final raw = data is List
               ? data
               : (data as Map<String, dynamic>)['advances'] as List? ?? [];
           return raw
-              .map((e) =>
-                  DeliverymanAdvance.fromJson(e as Map<String, dynamic>))
+              .map(
+                  (e) => DeliverymanAdvance.fromJson(e as Map<String, dynamic>))
               .toList();
         },
       );

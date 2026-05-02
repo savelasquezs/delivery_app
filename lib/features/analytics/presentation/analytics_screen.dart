@@ -9,14 +9,14 @@ import '../models/analytics_dashboard_models.dart';
 import 'analytics_charts.dart';
 import 'analytics_notifier.dart';
 
-final _money = NumberFormat.currency(locale: 'es_CO', symbol: '\$', decimalDigits: 0);
+final _money =
+    NumberFormat.currency(locale: 'es_CO', symbol: '\$', decimalDigits: 0);
 final _dateLabel = DateFormat('dd/MM/yyyy');
 
 String _advancesPeriodSubtitle(AnalyticsState state) {
   final a = state.advancesFromDate;
   final b = state.advancesToDate;
-  final sameDay =
-      a.year == b.year && a.month == b.month && a.day == b.day;
+  final sameDay = a.year == b.year && a.month == b.month && a.day == b.day;
   if (sameDay) {
     return 'Por defecto solo hoy (${_dateLabel.format(a)}). Al elegir otro rango arriba, los abonos usan ese mismo período.';
   }
@@ -124,10 +124,11 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen> {
               _SectionLabel('RENDIMIENTO DEL PERÍODO'),
               const SizedBox(height: 8),
               _KpiGrid(
-                stats: state.stats!,
+                totalDeliveries: state.displayTotalDeliveries,
                 payableFees: state.displayPayableFees,
                 payRate: state.effectivePayRate,
-                totalFeesRecaudo: state.stats!.totalFeesRecaudo,
+                totalFeesRecaudo: state.displayTotalFeesRecaudo,
+                avgDeliveryMinutes: state.stats!.avgDeliveryMinutes,
               ),
               const SizedBox(height: 16),
 
@@ -135,12 +136,9 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen> {
               _SectionLabel('EVOLUCIÓN'),
               const SizedBox(height: 8),
               DeliveryEvolutionCharts(
-                labels: state.stats!.evolutionLabels,
-                deliveries: state.stats!.evolutionDeliveries,
-                feesPayable: [
-                  for (var i = 0; i < state.stats!.evolutionFees.length; i++)
-                    state.stats!.evolutionFees[i] * state.effectivePayRate,
-                ],
+                labels: state.evolutionLabelsForUi,
+                deliveries: state.evolutionDeliveriesForUi,
+                feesPayable: state.evolutionPayableFeesForUi,
               ),
               const SizedBox(height: 16),
 
@@ -241,9 +239,8 @@ class _PeriodCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final sameDay = from.year == to.year &&
-        from.month == to.month &&
-        from.day == to.day;
+    final sameDay =
+        from.year == to.year && from.month == to.month && from.day == to.day;
     final label = sameDay
         ? _dateLabel.format(from)
         : '${_dateLabel.format(from)} – ${_dateLabel.format(to)}';
@@ -256,8 +253,7 @@ class _PeriodCard extends StatelessWidget {
         decoration: BoxDecoration(
           color: AppColors.primaryContainer,
           borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-          border:
-              Border.all(color: AppColors.primary.withValues(alpha: 0.4)),
+          border: Border.all(color: AppColors.primary.withValues(alpha: 0.4)),
         ),
         child: Row(
           children: [
@@ -304,15 +300,17 @@ class _PeriodCard extends StatelessWidget {
 }
 
 class _KpiGrid extends StatelessWidget {
-  final DashboardStats stats;
+  final int totalDeliveries;
   final double payableFees;
   final double payRate;
   final double totalFeesRecaudo;
+  final double? avgDeliveryMinutes;
   const _KpiGrid({
-    required this.stats,
+    required this.totalDeliveries,
     required this.payableFees,
     required this.payRate,
     required this.totalFeesRecaudo,
+    required this.avgDeliveryMinutes,
   });
 
   @override
@@ -322,7 +320,7 @@ class _KpiGrid extends StatelessWidget {
       _KpiData(
         icon: Icons.local_shipping_outlined,
         label: 'Entregas en el período',
-        value: '${stats.totalDeliveries}',
+        value: '$totalDeliveries',
         color: AppColors.accent,
       ),
       _KpiData(
@@ -337,11 +335,11 @@ class _KpiGrid extends StatelessWidget {
         value: _money.format(totalFeesRecaudo),
         color: AppColors.hint,
       ),
-      if (stats.avgDeliveryMinutes != null)
+      if (avgDeliveryMinutes != null)
         _KpiData(
           icon: Icons.timer_outlined,
           label: 'Tiempo prom. entrega',
-          value: '${stats.avgDeliveryMinutes!.toStringAsFixed(0)} min',
+          value: '${avgDeliveryMinutes!.toStringAsFixed(0)} min',
           color: AppColors.statusReady,
         ),
     ];
@@ -397,8 +395,7 @@ class _KpiCard extends StatelessWidget {
             ),
             const Spacer(),
             Text(data.label,
-                style:
-                    const TextStyle(color: AppColors.hint, fontSize: 11)),
+                style: const TextStyle(color: AppColors.hint, fontSize: 11)),
             const SizedBox(height: 2),
             Text(
               data.value,
@@ -433,8 +430,8 @@ class _DailyBreakdownCard extends StatelessWidget {
             return Column(
               children: [
                 Padding(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 14, vertical: 10),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                   child: Row(
                     children: [
                       Expanded(
@@ -481,20 +478,16 @@ class _BlockedDayBanner extends StatelessWidget {
         decoration: BoxDecoration(
           color: AppColors.warning.withValues(alpha: 0.1),
           borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-          border:
-              Border.all(color: AppColors.warning.withValues(alpha: 0.4)),
+          border: Border.all(color: AppColors.warning.withValues(alpha: 0.4)),
         ),
         child: Row(
           children: [
-            const Icon(Icons.lock_outline,
-                color: AppColors.warning, size: 18),
+            const Icon(Icons.lock_outline, color: AppColors.warning, size: 18),
             const SizedBox(width: 8),
             Expanded(
               child: Text(
-                reason ??
-                    'Tu día está bloqueado. Contacta a administración.',
-                style: const TextStyle(
-                    color: AppColors.warning, fontSize: 13),
+                reason ?? 'Tu día está bloqueado. Contacta a administración.',
+                style: const TextStyle(color: AppColors.warning, fontSize: 13),
               ),
             ),
           ],
@@ -603,8 +596,8 @@ class _PayrollExpenseLinesCard extends StatelessWidget {
               borderRadius: const BorderRadius.vertical(
                   top: Radius.circular(AppTheme.radiusMd)),
               border: Border(
-                bottom: BorderSide(
-                    color: AppColors.error.withValues(alpha: 0.2)),
+                bottom:
+                    BorderSide(color: AppColors.error.withValues(alpha: 0.2)),
               ),
             ),
             child: Row(
@@ -669,8 +662,7 @@ class _PayrollExpenseLinesCard extends StatelessWidget {
                             Text(
                               'Detalle ${line.detailId}',
                               style: TextStyle(
-                                color:
-                                    AppColors.hint.withValues(alpha: 0.7),
+                                color: AppColors.hint.withValues(alpha: 0.7),
                                 fontSize: 10,
                               ),
                             ),
@@ -699,8 +691,7 @@ class _PayrollExpenseLinesCard extends StatelessWidget {
               borderRadius: const BorderRadius.vertical(
                   bottom: Radius.circular(AppTheme.radiusMd)),
               border: Border(
-                top: BorderSide(
-                    color: AppColors.error.withValues(alpha: 0.2)),
+                top: BorderSide(color: AppColors.error.withValues(alpha: 0.2)),
               ),
             ),
             child: Row(
@@ -824,8 +815,7 @@ class _AdvancesCard extends StatelessWidget {
         children: [
           // ── Header tabla ──────────────────────────────────────
           Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
             decoration: BoxDecoration(
               color: AppColors.error.withValues(alpha: 0.08),
               borderRadius: const BorderRadius.vertical(
@@ -866,11 +856,10 @@ class _AdvancesCard extends StatelessWidget {
                 : '—';
             return Column(
               children: [
-                if (i > 0)
-                  const Divider(height: 1, indent: 14, endIndent: 14),
+                if (i > 0) const Divider(height: 1, indent: 14, endIndent: 14),
                 Padding(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 14, vertical: 10),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                   child: Row(
                     children: [
                       Text(dateStr,

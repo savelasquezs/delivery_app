@@ -11,6 +11,7 @@ import '../../core/router/app_router.dart';
 import '../../core/updates/app_update_prefs.dart';
 import '../../core/updates/app_update_provider.dart';
 import '../../core/updates/delivery_app_release_manifest.dart';
+import '../../core/updates/app_update_widgets.dart';
 import '../../core/storage/secure_storage.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_theme.dart';
@@ -41,6 +42,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     with WidgetsBindingObserver {
   int _currentIndex = 0;
   int? _dismissedRemoteBuild;
+  int? _shownUpdatePromptBuild;
   HubConnectionStatus _hubStatus = HubConnectionStatus.disconnected;
   OrderHubService? _hubService;
   bool _signalRListenersAttached = false;
@@ -53,10 +55,22 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   ];
 
   static const _tabs = [
-    _TabItem(icon: Icons.inbox_outlined, activeIcon: Icons.inbox, label: 'Disponibles'),
-    _TabItem(icon: Icons.delivery_dining_outlined, activeIcon: Icons.delivery_dining, label: 'En ruta'),
-    _TabItem(icon: Icons.history_outlined, activeIcon: Icons.history, label: 'Historial'),
-    _TabItem(icon: Icons.bar_chart_outlined, activeIcon: Icons.bar_chart, label: 'Métricas'),
+    _TabItem(
+        icon: Icons.inbox_outlined,
+        activeIcon: Icons.inbox,
+        label: 'Disponibles'),
+    _TabItem(
+        icon: Icons.delivery_dining_outlined,
+        activeIcon: Icons.delivery_dining,
+        label: 'En ruta'),
+    _TabItem(
+        icon: Icons.history_outlined,
+        activeIcon: Icons.history,
+        label: 'Historial'),
+    _TabItem(
+        icon: Icons.bar_chart_outlined,
+        activeIcon: Icons.bar_chart,
+        label: 'Métricas'),
   ];
 
   @override
@@ -84,7 +98,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 
   /// Renueva el access si hace falta y reconecta SignalR con token fresco (storage).
   Future<void> _onResumed() async {
-    await ref.read(authNotifierProvider.notifier).refreshSessionIfNeededAfterResume();
+    await ref
+        .read(authNotifierProvider.notifier)
+        .refreshSessionIfNeededAfterResume();
     if (!mounted) return;
     await _restartTrackingIfNeeded();
     if (!mounted) return;
@@ -196,7 +212,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       context: context,
       backgroundColor: AppColors.surface,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(AppTheme.radiusLg)),
+        borderRadius:
+            BorderRadius.vertical(top: Radius.circular(AppTheme.radiusLg)),
       ),
       builder: (ctx) => SafeArea(
         child: Padding(
@@ -226,7 +243,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
               if (user?.branchName != null) ...[
                 const SizedBox(height: AppTheme.spacingXs),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
                   decoration: BoxDecoration(
                     color: AppColors.primaryContainer,
                     borderRadius: BorderRadius.circular(6),
@@ -241,7 +259,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
               const SizedBox(height: AppTheme.spacingLg),
               const Divider(),
               ListTile(
-                leading: const Icon(Icons.person_outline, color: AppColors.primaryLight),
+                leading: const Icon(Icons.person_outline,
+                    color: AppColors.primaryLight),
                 title: const Text('Mi perfil'),
                 onTap: () {
                   Navigator.pop(ctx);
@@ -279,6 +298,23 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     if (mounted) {
       setState(() => _dismissedRemoteBuild = result.manifest.buildNumber);
     }
+  }
+
+  bool _shouldShowUpdatePrompt(AppUpdateCheckResult? result) {
+    if (result == null) return false;
+    final remoteBuild = result.manifest.buildNumber;
+    if (_shownUpdatePromptBuild == remoteBuild) return false;
+    return _dismissedRemoteBuild != remoteBuild;
+  }
+
+  Future<void> _showUpdatePrompt(AppUpdateCheckResult result) async {
+    setState(() => _shownUpdatePromptBuild = result.manifest.buildNumber);
+    await showAppUpdateDialog(
+      context: context,
+      result: result,
+      onDownload: () => _openApkDownload(result.apkUri),
+      onDismiss: () => _onDismissUpdate(result),
+    );
   }
 
   Widget _buildUpdateBanner() {
@@ -322,9 +358,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Icon(
-                        forced ? Icons.warning_amber_rounded : Icons.system_update,
+                        forced
+                            ? Icons.warning_amber_rounded
+                            : Icons.system_update,
                         size: 22,
-                        color: forced ? AppColors.warning : AppColors.primaryLight,
+                        color:
+                            forced ? AppColors.warning : AppColors.primaryLight,
                       ),
                       const SizedBox(width: AppTheme.spacingSm),
                       Expanded(
@@ -335,7 +374,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                               forced
                                   ? 'Actualización necesaria'
                                   : 'Hay una nueva versión',
-                              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .titleSmall
+                                  ?.copyWith(
                                     color: AppColors.onBackground,
                                     fontWeight: FontWeight.w600,
                                   ),
@@ -346,7 +388,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                                 msg,
                                 maxLines: 3,
                                 overflow: TextOverflow.ellipsis,
-                                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodySmall
+                                    ?.copyWith(
                                       color: AppColors.onSurface,
                                     ),
                               ),
@@ -426,6 +471,19 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<AsyncValue<AppUpdateCheckResult?>>(
+      appUpdateCheckProvider,
+      (_, next) {
+        next.whenData((result) {
+          if (!mounted || !_shouldShowUpdatePrompt(result)) return;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted || !_shouldShowUpdatePrompt(result)) return;
+            unawaited(_showUpdatePrompt(result!));
+          });
+        });
+      },
+    );
+
     ref.listen<AuthState>(
       authNotifierProvider,
       (prev, next) {
@@ -456,7 +514,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
             padding: EdgeInsets.zero,
             splashRadius: 22,
             onPressed: _showProfileMenu,
-            icon: _ProfileAppBarAvatar(user: ref.watch(authNotifierProvider).user),
+            icon: _ProfileAppBarAvatar(
+                user: ref.watch(authNotifierProvider).user),
           ),
         ],
       ),
@@ -602,4 +661,3 @@ class _HubStatusIndicator extends StatelessWidget {
     );
   }
 }
-
