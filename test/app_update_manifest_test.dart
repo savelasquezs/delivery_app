@@ -1,7 +1,15 @@
+import 'package:delivery_app/core/api/api_constants.dart';
 import 'package:delivery_app/core/updates/delivery_app_release_manifest.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('kDefaultDeliveryAppUpdateManifestUrl apunta al manifiesto del front en prod', () {
+    expect(
+      kDefaultDeliveryAppUpdateManifestUrl,
+      'https://senorarroz.up.railway.app/delivery-app-release.json',
+    );
+  });
+
   group('resolveApkDownloadUri', () {
     test('URL absoluta se devuelve tal cual', () {
       final u = resolveApkDownloadUri(

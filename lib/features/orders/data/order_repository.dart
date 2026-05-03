@@ -20,10 +20,28 @@ class OrderRepository {
     );
   }
 
-  Future<List<Order>> getPreparationOrders({int? branchId}) async {
+  /// Domicilios en **Tomado** o **En preparación** (unión de dos búsquedas; sin duplicados).
+  /// Si un id apareciera en ambas, se conserva [OrderStatus.inPreparation].
+  Future<List<Order>> getPreparationAndTakenOrders({int? branchId}) async {
+    final results = await Future.wait([
+      _searchOrders(type: 'delivery', status: 'taken', branchId: branchId),
+      _searchOrders(
+        type: 'delivery',
+        status: 'in_preparation',
+        branchId: branchId,
+      ),
+    ]);
+    return _mergeOrdersByIdPreferInPreparation(results[0], results[1]);
+  }
+
+  Future<List<Order>> _searchOrders({
+    required String type,
+    required String status,
+    int? branchId,
+  }) async {
     final body = <String, dynamic>{
-      'type': 'delivery',
-      'status': 'in_preparation',
+      'type': type,
+      'status': status,
       'page': 1,
       'pageSize': 100,
     };
@@ -41,6 +59,25 @@ class OrderRepository {
             .toList();
       },
     );
+  }
+
+  static List<Order> _mergeOrdersByIdPreferInPreparation(
+    List<Order> a,
+    List<Order> b,
+  ) {
+    final map = <int, Order>{};
+    for (final o in a) {
+      map[o.id] = o;
+    }
+    for (final o in b) {
+      final existing = map[o.id];
+      if (existing == null) {
+        map[o.id] = o;
+      } else if (o.status == OrderStatus.inPreparation) {
+        map[o.id] = o;
+      }
+    }
+    return map.values.toList();
   }
 
   static List<Order> _parseOrderList(dynamic data) {

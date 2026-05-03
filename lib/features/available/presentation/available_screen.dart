@@ -170,7 +170,8 @@ class _AvailableScreenState extends ConsumerState<AvailableScreen>
                   emptyIcon: Icons.restaurant_outlined,
                   emptyTitle: 'Sin pedidos en preparación',
                   emptySubtitle:
-                      'Los pedidos que se están preparando\naparecerán aquí',
+                      'Los domicilios en Tomado o En preparación (como en cocina)\naparecerán aquí, del más al menos urgente',
+                  groupByUrgencyAnchor: true,
                   selectedIds: const {},
                   allowSelection: false,
                   onToggle: (_) {},
@@ -286,6 +287,9 @@ class _OrderTabContent extends StatefulWidget {
   final void Function(List<int> orderIds)? onToggleNeighborhood;
   final Future<void> Function() onRefresh;
 
+  /// Pestaña «En preparación»: misma ancla de urgencia que el semáforo (más urgente arriba).
+  final bool groupByUrgencyAnchor;
+
   const _OrderTabContent({
     required this.orders,
     required this.isLoading,
@@ -293,6 +297,7 @@ class _OrderTabContent extends StatefulWidget {
     required this.emptyIcon,
     required this.emptyTitle,
     required this.emptySubtitle,
+    this.groupByUrgencyAnchor = false,
     required this.selectedIds,
     required this.allowSelection,
     required this.onToggle,
@@ -329,7 +334,12 @@ class _OrderTabContentState extends State<_OrderTabContent> {
       );
     }
 
-    final groups = groupOrdersByNeighborhood(widget.orders);
+    final groups = groupOrdersByNeighborhood(
+      widget.orders,
+      compare: widget.groupByUrgencyAnchor
+          ? compareOrdersUrgencyAnchorOldestFirst
+          : null,
+    );
 
     return RefreshIndicator(
       onRefresh: widget.onRefresh,

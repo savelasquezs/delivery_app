@@ -8,11 +8,12 @@ Order _order({
   DateTime? createdAt,
   Map<String, DateTime>? statusTimes,
   String? neighborhoodName,
+  OrderStatus status = OrderStatus.ready,
 }) {
   final ca = createdAt ?? DateTime.utc(2026, 1, 1, 12, 0);
   return Order(
     id: id,
-    status: OrderStatus.ready,
+    status: status,
     type: 'delivery',
     createdAt: ca,
     total: 1000,
@@ -76,6 +77,45 @@ void main() {
       final o = _order(id: 1);
       final g = groupOrdersByNeighborhood([o]);
       expect(g.keys.single, 'Sin barrio');
+    });
+
+    test('con compare por ancla de urgencia: más urgente arriba en el grupo', () {
+      final anchorOld = DateTime.utc(2026, 1, 1, 7, 0);
+      final anchorNew = DateTime.utc(2026, 1, 1, 11, 0);
+      final oLessUrgent = _order(
+        id: 1,
+        neighborhoodName: 'Centro',
+        status: OrderStatus.taken,
+        createdAt: anchorNew,
+        statusTimes: {'taken': anchorNew},
+      );
+      final oMoreUrgent = _order(
+        id: 2,
+        neighborhoodName: 'Centro',
+        status: OrderStatus.taken,
+        createdAt: DateTime.utc(2026, 1, 1, 6, 0),
+        statusTimes: {'taken': anchorOld},
+      );
+      final g = groupOrdersByNeighborhood(
+        [oLessUrgent, oMoreUrgent],
+        compare: compareOrdersUrgencyAnchorOldestFirst,
+      );
+      expect(g['Centro']!.map((e) => e.id).toList(), [2, 1]);
+    });
+  });
+
+  group('compareOrdersUrgencyAnchorOldestFirst', () {
+    test('ancla más antigua (más minutos) va primero', () {
+      final a = _order(
+        id: 1,
+        statusTimes: {'taken': DateTime.utc(2026, 1, 1, 10, 0)},
+      );
+      final b = _order(
+        id: 2,
+        statusTimes: {'taken': DateTime.utc(2026, 1, 1, 8, 0)},
+      );
+      final list = [a, b]..sort(compareOrdersUrgencyAnchorOldestFirst);
+      expect(list.map((e) => e.id).toList(), [2, 1]);
     });
   });
 

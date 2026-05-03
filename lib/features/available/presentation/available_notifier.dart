@@ -62,7 +62,7 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
     state = state.copyWith(isLoadingPrep: true, clearErrorPrep: true);
     try {
       final orders =
-          await _repository.getPreparationOrders(branchId: branchId);
+          await _repository.getPreparationAndTakenOrders(branchId: branchId);
       if (!mounted) return;
       state = state.copyWith(preparationOrders: orders, isLoadingPrep: false);
     } catch (e) {

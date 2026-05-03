@@ -1,7 +1,7 @@
 import 'package:dio/dio.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
+import '../api/api_constants.dart';
 import 'delivery_app_release_manifest.dart';
 
 /// GET del manifiesto sin autenticación; errores de red → null (no molestar).
@@ -10,15 +10,8 @@ class AppUpdateChecker {
 
   final Dio _dio;
 
-  static String? get manifestUrlFromEnv {
-    final u = dotenv.env['DELIVERY_APP_UPDATE_MANIFEST_URL']?.trim();
-    if (u == null || u.isEmpty) return null;
-    return u;
-  }
-
   Future<AppUpdateCheckResult?> check() async {
-    final url = manifestUrlFromEnv;
-    if (url == null) return null;
+    final url = ApiConstants.deliveryAppUpdateManifestUrl;
 
     final info = await PackageInfo.fromPlatform();
     final localBuild = int.tryParse(info.buildNumber) ?? 0;

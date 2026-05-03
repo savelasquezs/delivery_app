@@ -2,6 +2,16 @@
 
 El número de build (`+N` en `pubspec.yaml`) debe coincidir con `buildNumber` en `senorArrozFront/public/delivery-app-release.json` al publicar un APK.
 
+## [1.2.1] — build 5 — 2026-04-27
+
+### Añadido
+
+- **Actualizaciones APK:** URL del manifiesto por defecto `https://senorarroz.up.railway.app/delivery-app-release.json` (override opcional con `DELIVERY_APP_UPDATE_MANIFEST_URL` en `.env`).
+
+### Cambiado
+
+- **Disponibles / En preparación:** la pestaña En preparación incluye domicilios en **Tomado** y **En preparación**; agrupación por barrio; orden por **ancla de urgencia** (alineada al semáforo), más urgentes arriba.
+
 ## [1.1.0] — 2026-04-13
 
 ### Añadido

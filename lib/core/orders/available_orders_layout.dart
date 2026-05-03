@@ -8,6 +8,10 @@ DateTime sortKeyForAvailableList(Order o) => o.prepareAt ?? o.createdAt;
 int compareOrdersOldestFirst(Order a, Order b) =>
     sortKeyForAvailableList(a).compareTo(sortKeyForAvailableList(b));
 
+/// Misma ancla que el semáforo (ver [urgencyAnchorAt]): lo más urgente arriba.
+int compareOrdersUrgencyAnchorOldestFirst(Order a, Order b) =>
+    urgencyAnchorAt(a).compareTo(urgencyAnchorAt(b));
+
 /// Etiqueta de grupo por barrio (cabecera). Sin nombre → «Sin barrio».
 String neighborhoodGroupKey(Order o) {
   final n = o.displayNeighborhoodLabel?.trim();
@@ -15,12 +19,15 @@ String neighborhoodGroupKey(Order o) {
   return 'Sin barrio';
 }
 
-/// Orden global antiguo primero, luego agrupa conservando el orden de aparición
-/// de cada barrio (según el pedido más antiguo de ese barrio).
+/// Orden global (comparador opcional; por defecto antiguo primero en disponibles),
+/// luego agrupa conservando el orden de aparición de cada barrio
+/// (según el pedido más prioritario de ese barrio).
 LinkedHashMap<String, List<Order>> groupOrdersByNeighborhood(
-  List<Order> orders,
-) {
-  final sorted = List<Order>.from(orders)..sort(compareOrdersOldestFirst);
+  List<Order> orders, {
+  int Function(Order, Order)? compare,
+}) {
+  final cmp = compare ?? compareOrdersOldestFirst;
+  final sorted = List<Order>.from(orders)..sort(cmp);
   final keys = <String>[];
   final map = <String, List<Order>>{};
   for (final o in sorted) {
