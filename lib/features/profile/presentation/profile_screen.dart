@@ -5,10 +5,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/api/api_exception.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/updates/app_update_prefs.dart';
+import '../../../core/updates/app_update_provider.dart';
+import '../../../core/updates/app_update_widgets.dart';
+import '../../../core/updates/delivery_app_release_manifest.dart';
 import '../../auth/data/auth_models.dart';
 import '../../auth/presentation/auth_notifier.dart';
 import '../data/profile_image_url.dart';
@@ -33,6 +38,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   bool _saving = false;
   bool _savingPass = false;
   bool _uploading = false;
+  int? _dismissedRemoteBuild;
 
   @override
   void initState() {
@@ -42,6 +48,9 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       _emailCtrl.text = u.email;
       _phoneCtrl.text = u.phone ?? '';
     }
+    getDismissedUpdateRemoteBuild().then((value) {
+      if (mounted) setState(() => _dismissedRemoteBuild = value);
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) => _refreshFromApi());
   }
 
@@ -75,7 +84,8 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   }
 
   String _initials(AuthUser u) {
-    final parts = u.name.trim().split(RegExp(r'\s+')).where((e) => e.isNotEmpty);
+    final parts =
+        u.name.trim().split(RegExp(r'\s+')).where((e) => e.isNotEmpty);
     if (parts.isEmpty) return '?';
     final s = parts.take(2).map((e) => e[0]).join();
     return s.toUpperCase();
@@ -156,7 +166,9 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     }
     if (n.length < 6) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('La nueva contraseña debe tener al menos 6 caracteres')),
+        const SnackBar(
+            content:
+                Text('La nueva contraseña debe tener al menos 6 caracteres')),
       );
       return;
     }
@@ -196,6 +208,48 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     }
   }
 
+  Future<void> _openApkDownload(Uri uri) async {
+    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!mounted || ok) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('No se pudo abrir el enlace')),
+    );
+  }
+
+  Future<void> _dismissUpdate(AppUpdateCheckResult result) async {
+    await setDismissedUpdateRemoteBuild(result.manifest.buildNumber);
+    if (mounted) {
+      setState(() => _dismissedRemoteBuild = result.manifest.buildNumber);
+    }
+  }
+
+  Widget _buildUpdateSection() {
+    final async = ref.watch(appUpdateCheckProvider);
+    return async.when(
+      data: (result) {
+        if (result == null) return const SizedBox.shrink();
+        final canDismiss = _dismissedRemoteBuild != result.manifest.buildNumber;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Aplicacion',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: AppTheme.spacingMd),
+            AppUpdateCard(
+              result: result,
+              onDownload: () => _openApkDownload(result.apkUri),
+              onDismiss: canDismiss ? () => _dismissUpdate(result) : null,
+            ),
+          ],
+        );
+      },
+      loading: () => const SizedBox.shrink(),
+      error: (_, __) => const SizedBox.shrink(),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final user = ref.watch(authNotifierProvider).user;
@@ -215,7 +269,8 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
         ),
       ),
       body: _loadingProfile
-          ? const Center(child: CircularProgressIndicator(color: AppColors.primary))
+          ? const Center(
+              child: CircularProgressIndicator(color: AppColors.primary))
           : ListView(
               padding: const EdgeInsets.all(AppTheme.spacingMd),
               children: [
@@ -238,7 +293,8 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                                     placeholder: (_, __) => const SizedBox(
                                       width: 32,
                                       height: 32,
-                                      child: CircularProgressIndicator(strokeWidth: 2),
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2),
                                     ),
                                     errorWidget: (_, __, ___) => Text(
                                       _initials(user),
@@ -278,10 +334,12 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                           shape: const CircleBorder(),
                           child: InkWell(
                             customBorder: const CircleBorder(),
-                            onTap: _uploading ? null : () => _pickAndUpload(user),
+                            onTap:
+                                _uploading ? null : () => _pickAndUpload(user),
                             child: const Padding(
                               padding: EdgeInsets.all(6),
-                              child: Icon(Icons.camera_alt, size: 18, color: AppColors.onPrimary),
+                              child: Icon(Icons.camera_alt,
+                                  size: 18, color: AppColors.onPrimary),
                             ),
                           ),
                         ),
@@ -293,7 +351,10 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                 Center(
                   child: Text(
                     'Toca la foto para cambiarla',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(color: AppColors.hint),
+                    style: Theme.of(context)
+                        .textTheme
+                        .bodySmall
+                        ?.copyWith(color: AppColors.hint),
                   ),
                 ),
                 const SizedBox(height: AppTheme.spacingLg),
@@ -304,7 +365,10 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                 const SizedBox(height: AppTheme.spacingXs),
                 Text(
                   'El nombre solo lo puede actualizar un administrador.',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(color: AppColors.onSurface),
+                  style: Theme.of(context)
+                      .textTheme
+                      .bodySmall
+                      ?.copyWith(color: AppColors.onSurface),
                 ),
                 const SizedBox(height: AppTheme.spacingLg),
                 Form(
@@ -350,7 +414,8 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                             ? const SizedBox(
                                 height: 20,
                                 width: 20,
-                                child: CircularProgressIndicator(strokeWidth: 2),
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 2),
                               )
                             : const Text('Guardar datos'),
                       ),
@@ -401,6 +466,8 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                         )
                       : const Text('Cambiar contraseña'),
                 ),
+                const SizedBox(height: AppTheme.spacingXl),
+                _buildUpdateSection(),
                 const SizedBox(height: AppTheme.spacingXl),
               ],
             ),

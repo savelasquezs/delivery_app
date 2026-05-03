@@ -5,6 +5,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../auth/auth_session_bridge.dart';
+import '../../features/tracking/location_tracking_service.dart';
 import '../storage/secure_storage.dart';
 import 'api_constants.dart';
 import 'api_exception.dart';
@@ -241,6 +242,7 @@ class DioClient {
           authToken: newToken,
           refreshToken: newRefresh,
         );
+        await LocationTrackingService.updateToken(newToken);
         completer.complete(RefreshAccessSuccess(newToken));
       } on DioException catch (e) {
         if (kDebugMode) {
