@@ -25,4 +25,30 @@ void main() {
       expect(waMeDigitsFromPhone('---'), isNull);
     });
   });
+
+  group('buildWhatsAppUri', () {
+    test('construye chat sin mensaje', () {
+      expect(
+        buildWhatsAppUri('3001234567').toString(),
+        'https://wa.me/573001234567',
+      );
+    });
+
+    test('codifica mensaje prellenado', () {
+      final uri = buildWhatsAppUri(
+        '3001234567',
+        message:
+            'Hola, hablas con Juan de Señor Arroz. Te hablo porque ya voy en camino.',
+      );
+
+      expect(uri, isNotNull);
+      expect(uri!.scheme, 'https');
+      expect(uri.host, 'wa.me');
+      expect(uri.path, '/573001234567');
+      expect(
+        uri.queryParameters['text'],
+        'Hola, hablas con Juan de Señor Arroz. Te hablo porque ya voy en camino.',
+      );
+    });
+  });
 }

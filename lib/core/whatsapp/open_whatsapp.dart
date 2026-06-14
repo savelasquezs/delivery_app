@@ -14,12 +14,23 @@ String? waMeDigitsFromPhone(String raw) {
   return noPlus;
 }
 
-Future<bool> openWhatsAppChat(String phone) async {
+Uri? buildWhatsAppUri(String phone, {String? message}) {
   final digits = waMeDigitsFromPhone(phone);
-  if (digits == null || digits.isEmpty) return false;
+  if (digits == null || digits.isEmpty) return null;
+  final text = message?.trim();
+  return Uri.https(
+    'wa.me',
+    '/$digits',
+    text != null && text.isNotEmpty ? {'text': text} : null,
+  );
+}
+
+Future<bool> openWhatsAppChat(String phone, {String? message}) async {
+  final uri = buildWhatsAppUri(phone, message: message);
+  if (uri == null) return false;
   try {
     return await launchUrl(
-      Uri.parse('https://wa.me/$digits'),
+      uri,
       mode: LaunchMode.externalApplication,
     );
   } catch (_) {
