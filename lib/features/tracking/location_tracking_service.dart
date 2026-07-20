@@ -110,7 +110,7 @@ Future<void> _flushDeviceEvents(String token, String baseUrl) async {
   }
 }
 
-Future<void> _recordBooleanTransition({
+Future<bool> _recordBooleanTransition({
   required String storageKey,
   required bool current,
   required String negativeEvent,
@@ -118,16 +118,19 @@ Future<void> _recordBooleanTransition({
   bool internetState = false,
   bool gpsState = false,
   bool permissionState = false,
+  String? details,
 }) async {
   final previous = await FlutterForegroundTask.getData<bool>(key: storageKey);
   await FlutterForegroundTask.saveData(key: storageKey, value: current);
-  if (previous == current || (previous == null && current)) return;
+  if (previous == current || (previous == null && current)) return false;
   await _recordDeviceEvent(
     current ? positiveEvent : negativeEvent,
     internetAvailable: internetState ? current : null,
     gpsEnabled: gpsState ? current : null,
     locationPermissionGranted: permissionState ? current : null,
+    details: details,
   );
+  return true;
 }
 
 Future<void> _recordBatteryLowTransition(int? batteryLevel) async {
@@ -274,8 +277,8 @@ class LocationTaskHandler extends TaskHandler {
       };
 
       await _flushDeviceEvents(token, baseUrl);
-      await _flushOfflineQueue(token, baseUrl);
-      await _postLocation(token, baseUrl, payload);
+      final syncedOfflineCount = await _flushOfflineQueue(token, baseUrl);
+      await _postLocation(token, baseUrl, payload, syncedOfflineCount);
     } catch (e) {
       debugPrint('LocationTaskHandler: error sending location: $e');
     } finally {
@@ -287,17 +290,28 @@ class LocationTaskHandler extends TaskHandler {
     String token,
     String baseUrl,
     Map<String, dynamic> payload,
+    int syncedOfflineCount,
   ) async {
     try {
       await _buildDio(baseUrl, token)
           .post('/deliverymen/location', data: payload);
-      await _recordBooleanTransition(
+      final recoveryReported = await _recordBooleanTransition(
         storageKey: _kInternetAvailable,
         current: true,
         negativeEvent: 'internet_lost',
         positiveEvent: 'internet_recovered',
         internetState: true,
+        details: syncedOfflineCount > 0
+            ? 'queued_location_count=$syncedOfflineCount'
+            : null,
       );
+      if (syncedOfflineCount > 0 && !recoveryReported) {
+        await _recordDeviceEvent(
+          'internet_recovered',
+          internetAvailable: true,
+          details: 'queued_location_count=$syncedOfflineCount',
+        );
+      }
     } on DioException catch (error) {
       final status = error.response?.statusCode;
       if (_isPermanentClientError(status)) {
@@ -332,20 +346,22 @@ class LocationTaskHandler extends TaskHandler {
     }
   }
 
-  Future<void> _flushOfflineQueue(String token, String baseUrl) async {
+  Future<int> _flushOfflineQueue(String token, String baseUrl) async {
     final prefs = await SharedPreferences.getInstance();
     final queueJson = prefs.getString(_kOfflineQueue);
-    if (queueJson == null) return;
+    if (queueJson == null) return 0;
 
     final queue = jsonDecode(queueJson) as List<dynamic>;
-    if (queue.isEmpty) return;
+    if (queue.isEmpty) return 0;
 
     final dio = _buildDio(baseUrl, token);
     final remaining = <Map<String, dynamic>>[];
+    var syncedCount = 0;
     for (final item in queue) {
       final payload = Map<String, dynamic>.from(item as Map);
       try {
         await dio.post('/deliverymen/location', data: payload);
+        syncedCount++;
       } on DioException catch (error) {
         final status = error.response?.statusCode;
         if (!_isPermanentClientError(status)) {
@@ -361,6 +377,7 @@ class LocationTaskHandler extends TaskHandler {
     } else {
       await prefs.setString(_kOfflineQueue, jsonEncode(remaining));
     }
+    return syncedCount;
   }
 
   bool _isPermanentClientError(int? status) {
