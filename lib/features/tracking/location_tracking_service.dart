@@ -22,12 +22,14 @@ const _kDeliveryRouteId = 'sa_loc_delivery_route_id';
 const _kGpsEnabled = 'sa_loc_gps_enabled';
 const _kLocationPermissionGranted = 'sa_loc_permission_granted';
 const _kInternetAvailable = 'sa_loc_internet_available';
+const _kBatteryLowReported = 'sa_loc_battery_low_reported';
 const _kTrackingExpectedActive = 'sa_loc_expected_active';
 const _kUnexpectedStopReportedSession = 'sa_loc_stop_reported_session';
 const _modeLight = 'LIGHT';
 const _modeActiveDelivery = 'ACTIVE_DELIVERY';
 const _modeOffline = 'OFFLINE';
 const _maxOfflinePoints = 100;
+const _batteryLowThresholdPercent = 15;
 const _uuid = Uuid();
 
 Future<void> _recordDeviceEvent(
@@ -126,6 +128,25 @@ Future<void> _recordBooleanTransition({
     gpsEnabled: gpsState ? current : null,
     locationPermissionGranted: permissionState ? current : null,
   );
+}
+
+Future<void> _recordBatteryLowTransition(int? batteryLevel) async {
+  if (batteryLevel == null) return;
+  final isLow = batteryLevel <= _batteryLowThresholdPercent;
+  final wasLow = await FlutterForegroundTask.getData<bool>(
+    key: _kBatteryLowReported,
+  );
+  await FlutterForegroundTask.saveData(
+    key: _kBatteryLowReported,
+    value: isLow,
+  );
+  if (isLow && wasLow != true) {
+    await _recordDeviceEvent(
+      'battery_low',
+      batteryLevel: batteryLevel,
+      details: 'threshold=$_batteryLowThresholdPercent',
+    );
+  }
 }
 
 bool _isPermanentClientErrorStatus(int? status) {
@@ -234,6 +255,7 @@ class LocationTaskHandler extends TaskHandler {
           await FlutterForegroundTask.getData<String>(key: _kTrackingMode) ??
               _modeLight;
       final batteryLevel = await _readBatteryLevel();
+      await _recordBatteryLowTransition(batteryLevel);
       final payload = <String, dynamic>{
         'clientPointId': _uuid.v4(),
         'workSessionId':
@@ -471,6 +493,7 @@ class LocationTrackingService {
         key: _kLocationPermissionGranted,
       );
       await FlutterForegroundTask.removeData(key: _kInternetAvailable);
+      await FlutterForegroundTask.removeData(key: _kBatteryLowReported);
     }
 
     await FlutterForegroundTask.saveData(key: _kAuthToken, value: authToken);
@@ -613,6 +636,7 @@ class LocationTrackingService {
       key: _kLocationPermissionGranted,
     );
     await FlutterForegroundTask.removeData(key: _kInternetAvailable);
+    await FlutterForegroundTask.removeData(key: _kBatteryLowReported);
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_kOfflineQueue);
     await prefs.remove(_kUnexpectedStopReportedSession);
