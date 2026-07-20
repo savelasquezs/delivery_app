@@ -33,6 +33,7 @@ Future<void> main() async {
 
   await FcmService.initialize();
   LocationTrackingService.initialize();
+  await LocationTrackingService.detectUnexpectedStop();
 
   SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
@@ -74,7 +75,9 @@ class _DeliveryAppState extends ConsumerState<DeliveryApp>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       unawaited(
-        ref.read(authNotifierProvider.notifier).refreshSessionIfNeededAfterResume(),
+        ref
+            .read(authNotifierProvider.notifier)
+            .refreshSessionIfNeededAfterResume(),
       );
     }
   }

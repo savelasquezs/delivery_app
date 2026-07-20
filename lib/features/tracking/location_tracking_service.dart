@@ -12,17 +12,138 @@ import 'package:uuid/uuid.dart';
 const _kAuthToken = 'sa_loc_auth_token';
 const _kBaseUrl = 'sa_loc_base_url';
 const _kOfflineQueue = 'sa_loc_offline_queue';
+const _kDeviceEventQueue = 'sa_device_event_queue';
 const _kWorkSessionId = 'sa_loc_work_session_id';
 const _kAutoCloseAt = 'sa_loc_auto_close_at';
 const _kLightIntervalSeconds = 'sa_loc_light_interval_seconds';
 const _kActiveIntervalSeconds = 'sa_loc_active_interval_seconds';
 const _kTrackingMode = 'sa_loc_tracking_mode';
 const _kDeliveryRouteId = 'sa_loc_delivery_route_id';
+const _kGpsEnabled = 'sa_loc_gps_enabled';
+const _kLocationPermissionGranted = 'sa_loc_permission_granted';
+const _kInternetAvailable = 'sa_loc_internet_available';
+const _kTrackingExpectedActive = 'sa_loc_expected_active';
+const _kUnexpectedStopReportedSession = 'sa_loc_stop_reported_session';
 const _modeLight = 'LIGHT';
 const _modeActiveDelivery = 'ACTIVE_DELIVERY';
 const _modeOffline = 'OFFLINE';
 const _maxOfflinePoints = 100;
 const _uuid = Uuid();
+
+Future<void> _recordDeviceEvent(
+  String eventType, {
+  int? batteryLevel,
+  bool? internetAvailable,
+  bool? gpsEnabled,
+  bool? locationPermissionGranted,
+  String? details,
+}) async {
+  final token = await FlutterForegroundTask.getData<String>(key: _kAuthToken);
+  final baseUrl = await FlutterForegroundTask.getData<String>(key: _kBaseUrl);
+  final workSessionId =
+      await FlutterForegroundTask.getData<int>(key: _kWorkSessionId);
+  if (workSessionId == null) return;
+
+  final payload = <String, dynamic>{
+    'clientEventId': _uuid.v4(),
+    'workSessionId': workSessionId,
+    'eventType': eventType,
+    'batteryLevelPercent': batteryLevel,
+    'internetAvailable': internetAvailable,
+    'gpsEnabled': gpsEnabled,
+    'locationPermissionGranted': locationPermissionGranted,
+    'details': details,
+    'recordedAt': DateTime.now().toUtc().toIso8601String(),
+  };
+  if (token == null || baseUrl == null) {
+    await _enqueueDeviceEvent(payload);
+    return;
+  }
+
+  try {
+    await _trackingDio(baseUrl, token)
+        .post('/deliverymen/device-event', data: payload);
+  } on DioException catch (error) {
+    if (!_isPermanentClientErrorStatus(error.response?.statusCode)) {
+      await _enqueueDeviceEvent(payload);
+    }
+  } catch (_) {
+    await _enqueueDeviceEvent(payload);
+  }
+}
+
+Future<void> _enqueueDeviceEvent(Map<String, dynamic> payload) async {
+  final prefs = await SharedPreferences.getInstance();
+  final encoded = prefs.getString(_kDeviceEventQueue);
+  final queue =
+      encoded == null ? <dynamic>[] : jsonDecode(encoded) as List<dynamic>;
+  if (queue.length >= 100) return;
+  queue.add(payload);
+  await prefs.setString(_kDeviceEventQueue, jsonEncode(queue));
+}
+
+Future<void> _flushDeviceEvents(String token, String baseUrl) async {
+  final prefs = await SharedPreferences.getInstance();
+  final encoded = prefs.getString(_kDeviceEventQueue);
+  if (encoded == null) return;
+  final queue = jsonDecode(encoded) as List<dynamic>;
+  final remaining = <Map<String, dynamic>>[];
+  final dio = _trackingDio(baseUrl, token);
+  for (final item in queue) {
+    final payload = Map<String, dynamic>.from(item as Map);
+    try {
+      await dio.post('/deliverymen/device-event', data: payload);
+    } on DioException catch (error) {
+      if (!_isPermanentClientErrorStatus(error.response?.statusCode)) {
+        remaining.add(payload);
+      }
+    } catch (_) {
+      remaining.add(payload);
+    }
+  }
+  if (remaining.isEmpty) {
+    await prefs.remove(_kDeviceEventQueue);
+  } else {
+    await prefs.setString(_kDeviceEventQueue, jsonEncode(remaining));
+  }
+}
+
+Future<void> _recordBooleanTransition({
+  required String storageKey,
+  required bool current,
+  required String negativeEvent,
+  required String positiveEvent,
+  bool internetState = false,
+  bool gpsState = false,
+  bool permissionState = false,
+}) async {
+  final previous = await FlutterForegroundTask.getData<bool>(key: storageKey);
+  await FlutterForegroundTask.saveData(key: storageKey, value: current);
+  if (previous == current || (previous == null && current)) return;
+  await _recordDeviceEvent(
+    current ? positiveEvent : negativeEvent,
+    internetAvailable: internetState ? current : null,
+    gpsEnabled: gpsState ? current : null,
+    locationPermissionGranted: permissionState ? current : null,
+  );
+}
+
+bool _isPermanentClientErrorStatus(int? status) {
+  if (status == null || status < 400 || status >= 500) return false;
+  return status != 401 && status != 408 && status != 429;
+}
+
+Dio _trackingDio(String baseUrl, String token) => Dio(
+      BaseOptions(
+        baseUrl: baseUrl,
+        connectTimeout: const Duration(seconds: 10),
+        receiveTimeout: const Duration(seconds: 10),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      ),
+    );
 
 @pragma('vm:entry-point')
 void locationTaskCallback() {
@@ -63,9 +184,45 @@ class LocationTaskHandler extends TaskHandler {
       final autoCloseAt = DateTime.tryParse(autoCloseAtValue)?.toUtc();
       if (autoCloseAt == null ||
           !DateTime.now().toUtc().isBefore(autoCloseAt)) {
+        final expectedActive = await FlutterForegroundTask.getData<bool>(
+              key: _kTrackingExpectedActive,
+            ) ??
+            false;
+        if (expectedActive) {
+          await _recordDeviceEvent(
+            'tracking_stopped',
+            details: 'automatic_cutoff',
+          );
+        }
+        await FlutterForegroundTask.saveData(
+          key: _kTrackingExpectedActive,
+          value: false,
+        );
         await FlutterForegroundTask.stopService();
         return;
       }
+
+      final gpsEnabled = await Geolocator.isLocationServiceEnabled();
+      await _recordBooleanTransition(
+        storageKey: _kGpsEnabled,
+        current: gpsEnabled,
+        negativeEvent: 'gps_disabled',
+        positiveEvent: 'gps_enabled',
+        gpsState: true,
+      );
+      if (!gpsEnabled) return;
+
+      final permission = await Geolocator.checkPermission();
+      final permissionGranted = permission == LocationPermission.always ||
+          permission == LocationPermission.whileInUse;
+      await _recordBooleanTransition(
+        storageKey: _kLocationPermissionGranted,
+        current: permissionGranted,
+        negativeEvent: 'location_permission_revoked',
+        positiveEvent: 'location_permission_recovered',
+        permissionState: true,
+      );
+      if (!permissionGranted) return;
 
       final position = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
@@ -94,6 +251,7 @@ class LocationTaskHandler extends TaskHandler {
         'recordedAt': position.timestamp.toUtc().toIso8601String(),
       };
 
+      await _flushDeviceEvents(token, baseUrl);
       await _flushOfflineQueue(token, baseUrl);
       await _postLocation(token, baseUrl, payload);
     } catch (e) {
@@ -111,16 +269,43 @@ class LocationTaskHandler extends TaskHandler {
     try {
       await _buildDio(baseUrl, token)
           .post('/deliverymen/location', data: payload);
+      await _recordBooleanTransition(
+        storageKey: _kInternetAvailable,
+        current: true,
+        negativeEvent: 'internet_lost',
+        positiveEvent: 'internet_recovered',
+        internetState: true,
+      );
     } on DioException catch (error) {
       final status = error.response?.statusCode;
       if (_isPermanentClientError(status)) {
+        await FlutterForegroundTask.saveData(
+          key: _kTrackingExpectedActive,
+          value: false,
+        );
         await FlutterForegroundTask.stopService();
         return;
+      }
+      if (error.response == null) {
+        await _recordBooleanTransition(
+          storageKey: _kInternetAvailable,
+          current: false,
+          negativeEvent: 'internet_lost',
+          positiveEvent: 'internet_recovered',
+          internetState: true,
+        );
       }
       await _enqueueOffline(
         error.response == null ? _asOfflinePayload(payload) : payload,
       );
     } catch (_) {
+      await _recordBooleanTransition(
+        storageKey: _kInternetAvailable,
+        current: false,
+        negativeEvent: 'internet_lost',
+        positiveEvent: 'internet_recovered',
+        internetState: true,
+      );
       await _enqueueOffline(_asOfflinePayload(payload));
     }
   }
@@ -229,6 +414,37 @@ class LocationTrackingService {
     );
   }
 
+  /// A force-stop cannot execute Dart code at the moment it happens. The next
+  /// launch records it while the previous work session is still expected to be
+  /// tracking and has not reached its automatic closing time.
+  static Future<void> detectUnexpectedStop() async {
+    if (!_initialized) initialize();
+    final expectedActive = await FlutterForegroundTask.getData<bool>(
+          key: _kTrackingExpectedActive,
+        ) ??
+        false;
+    if (!expectedActive || await FlutterForegroundTask.isRunningService) return;
+
+    final workSessionId =
+        await FlutterForegroundTask.getData<int>(key: _kWorkSessionId);
+    final autoCloseAtValue =
+        await FlutterForegroundTask.getData<String>(key: _kAutoCloseAt);
+    final autoCloseAt = DateTime.tryParse(autoCloseAtValue ?? '')?.toUtc();
+    if (workSessionId == null ||
+        autoCloseAt == null ||
+        !DateTime.now().toUtc().isBefore(autoCloseAt)) {
+      return;
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getInt(_kUnexpectedStopReportedSession) == workSessionId) return;
+    await prefs.setInt(_kUnexpectedStopReportedSession, workSessionId);
+    await _recordDeviceEvent(
+      'app_stopped',
+      details: 'detected_on_next_launch',
+    );
+  }
+
   static Future<void> startTracking({
     required String authToken,
     required String baseUrl,
@@ -239,11 +455,22 @@ class LocationTrackingService {
   }) async {
     if (!_initialized) initialize();
 
+    final wasExpectedActive = await FlutterForegroundTask.getData<bool>(
+          key: _kTrackingExpectedActive,
+        ) ??
+        false;
+    final wasRunning = await FlutterForegroundTask.isRunningService;
     final previousSessionId =
         await FlutterForegroundTask.getData<int>(key: _kWorkSessionId);
     if (previousSessionId != null && previousSessionId != workSessionId) {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(_kOfflineQueue);
+      await prefs.remove(_kUnexpectedStopReportedSession);
+      await FlutterForegroundTask.removeData(key: _kGpsEnabled);
+      await FlutterForegroundTask.removeData(
+        key: _kLocationPermissionGranted,
+      );
+      await FlutterForegroundTask.removeData(key: _kInternetAvailable);
     }
 
     await FlutterForegroundTask.saveData(key: _kAuthToken, value: authToken);
@@ -262,8 +489,16 @@ class LocationTrackingService {
       key: _kActiveIntervalSeconds,
       value: activeIntervalSeconds,
     );
+    await _flushDeviceEvents(authToken, baseUrl);
 
-    if (await FlutterForegroundTask.isRunningService) {
+    if (wasRunning) {
+      await FlutterForegroundTask.saveData(
+        key: _kTrackingExpectedActive,
+        value: true,
+      );
+      if (!wasExpectedActive || previousSessionId != workSessionId) {
+        await _recordDeviceEvent('tracking_started');
+      }
       await setLightMode();
       return;
     }
@@ -280,6 +515,16 @@ class LocationTrackingService {
       debugPrint('LocationTrackingService: failed to start — ${result.error}');
       return;
     }
+    await FlutterForegroundTask.saveData(
+      key: _kTrackingExpectedActive,
+      value: true,
+    );
+    final restarted = wasExpectedActive && previousSessionId == workSessionId;
+    await _recordDeviceEvent(
+      restarted ? 'location_service_restarted' : 'tracking_started',
+    );
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_kUnexpectedStopReportedSession);
     await setLightMode();
   }
 
@@ -336,6 +581,18 @@ class LocationTrackingService {
   }
 
   static Future<void> stopTracking() async {
+    final expectedActive = await FlutterForegroundTask.getData<bool>(
+          key: _kTrackingExpectedActive,
+        ) ??
+        false;
+    if (expectedActive) {
+      await _recordDeviceEvent('tracking_stopped');
+    }
+    await FlutterForegroundTask.saveData(
+      key: _kTrackingExpectedActive,
+      value: false,
+    );
+
     if (await FlutterForegroundTask.isRunningService) {
       final result = await FlutterForegroundTask.stopService();
       if (result is ServiceRequestFailure) {
@@ -351,8 +608,14 @@ class LocationTrackingService {
     await FlutterForegroundTask.removeData(key: _kActiveIntervalSeconds);
     await FlutterForegroundTask.removeData(key: _kTrackingMode);
     await FlutterForegroundTask.removeData(key: _kDeliveryRouteId);
+    await FlutterForegroundTask.removeData(key: _kGpsEnabled);
+    await FlutterForegroundTask.removeData(
+      key: _kLocationPermissionGranted,
+    );
+    await FlutterForegroundTask.removeData(key: _kInternetAvailable);
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_kOfflineQueue);
+    await prefs.remove(_kUnexpectedStopReportedSession);
   }
 
   static Future<void> updateToken(String newToken) async {
