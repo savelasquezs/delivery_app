@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
@@ -6,32 +7,35 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-// ─── SharedPreferences keys (outside the class to be accessible from the isolate) ───
-
 const _kAuthToken = 'sa_loc_auth_token';
 const _kBaseUrl = 'sa_loc_base_url';
 const _kOfflineQueue = 'sa_loc_offline_queue';
+const _kWorkSessionId = 'sa_loc_work_session_id';
+const _kAutoCloseAt = 'sa_loc_auto_close_at';
+const _kLightIntervalSeconds = 'sa_loc_light_interval_seconds';
+const _kActiveIntervalSeconds = 'sa_loc_active_interval_seconds';
+const _kTrackingMode = 'sa_loc_tracking_mode';
+const _modeLight = 'LIGHT';
+const _modeActiveDelivery = 'ACTIVE_DELIVERY';
 
-// ─── Top-level foreground task callback (must be top-level + @pragma) ────────
-
-/// Entry point called by the foreground service in the background isolate.
 @pragma('vm:entry-point')
 void locationTaskCallback() {
   FlutterForegroundTask.setTaskHandler(LocationTaskHandler());
 }
 
-// ─── Task handler ─────────────────────────────────────────────────────────────
-
 class LocationTaskHandler extends TaskHandler {
+  bool _sending = false;
+
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
     debugPrint('LocationTaskHandler: started');
+    await _sendCurrentLocation();
   }
 
-  /// Called every 60 seconds to send the current GPS location to the backend.
   @override
   void onRepeatEvent(DateTime timestamp) {
-    _sendCurrentLocation();
+    if (_sending) return;
+    unawaited(_sendCurrentLocation());
   }
 
   @override
@@ -39,11 +43,23 @@ class LocationTaskHandler extends TaskHandler {
     debugPrint('LocationTaskHandler: destroyed (timeout=$isTimeout)');
   }
 
-  void _sendCurrentLocation() async {
+  Future<void> _sendCurrentLocation() async {
+    _sending = true;
     try {
-      final token = await FlutterForegroundTask.getData<String>(key: _kAuthToken);
-      final baseUrl = await FlutterForegroundTask.getData<String>(key: _kBaseUrl);
-      if (token == null || baseUrl == null) return;
+      final token =
+          await FlutterForegroundTask.getData<String>(key: _kAuthToken);
+      final baseUrl =
+          await FlutterForegroundTask.getData<String>(key: _kBaseUrl);
+      final autoCloseAtValue =
+          await FlutterForegroundTask.getData<String>(key: _kAutoCloseAt);
+      if (token == null || baseUrl == null || autoCloseAtValue == null) return;
+
+      final autoCloseAt = DateTime.tryParse(autoCloseAtValue)?.toUtc();
+      if (autoCloseAt == null ||
+          !DateTime.now().toUtc().isBefore(autoCloseAt)) {
+        await FlutterForegroundTask.stopService();
+        return;
+      }
 
       final position = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
@@ -51,18 +67,20 @@ class LocationTaskHandler extends TaskHandler {
           timeLimit: Duration(seconds: 10),
         ),
       );
-
-      final payload = {
+      final payload = <String, dynamic>{
+        'workSessionId':
+            await FlutterForegroundTask.getData<int>(key: _kWorkSessionId),
         'latitude': position.latitude,
         'longitude': position.longitude,
         'recordedAt': DateTime.now().toUtc().toIso8601String(),
       };
 
-      // Attempt to flush queued offline locations before sending new one
       await _flushOfflineQueue(token, baseUrl);
       await _postLocation(token, baseUrl, payload);
     } catch (e) {
       debugPrint('LocationTaskHandler: error sending location: $e');
+    } finally {
+      _sending = false;
     }
   }
 
@@ -72,10 +90,16 @@ class LocationTaskHandler extends TaskHandler {
     Map<String, dynamic> payload,
   ) async {
     try {
-      final dio = _buildDio(baseUrl, token);
-      await dio.post('/deliverymen/location', data: payload);
+      await _buildDio(baseUrl, token)
+          .post('/deliverymen/location', data: payload);
+    } on DioException catch (error) {
+      final status = error.response?.statusCode;
+      if (_isPermanentClientError(status)) {
+        await FlutterForegroundTask.stopService();
+        return;
+      }
+      await _enqueueOffline(payload);
     } catch (_) {
-      // Network failure — persist for retry
       await _enqueueOffline(payload);
     }
   }
@@ -85,17 +109,22 @@ class LocationTaskHandler extends TaskHandler {
     final queueJson = prefs.getString(_kOfflineQueue);
     if (queueJson == null) return;
 
-    final List<dynamic> queue = jsonDecode(queueJson);
+    final queue = jsonDecode(queueJson) as List<dynamic>;
     if (queue.isEmpty) return;
 
     final dio = _buildDio(baseUrl, token);
     final remaining = <Map<String, dynamic>>[];
-
-    for (final item in queue.cast<Map<String, dynamic>>()) {
+    for (final item in queue) {
+      final payload = Map<String, dynamic>.from(item as Map);
       try {
-        await dio.post('/deliverymen/location', data: item);
+        await dio.post('/deliverymen/location', data: payload);
+      } on DioException catch (error) {
+        final status = error.response?.statusCode;
+        if (!_isPermanentClientError(status)) {
+          remaining.add(payload);
+        }
       } catch (_) {
-        remaining.add(item);
+        remaining.add(payload);
       }
     }
 
@@ -106,12 +135,17 @@ class LocationTaskHandler extends TaskHandler {
     }
   }
 
+  bool _isPermanentClientError(int? status) {
+    if (status == null || status < 400 || status >= 500) return false;
+    return status != 401 && status != 408 && status != 429;
+  }
+
   Future<void> _enqueueOffline(Map<String, dynamic> payload) async {
     final prefs = await SharedPreferences.getInstance();
     final queueJson = prefs.getString(_kOfflineQueue);
-    final List<dynamic> queue = queueJson != null ? jsonDecode(queueJson) : [];
-
-    // Cap at 100 items to avoid unbounded growth (~3 hours of offline)
+    final queue = queueJson != null
+        ? jsonDecode(queueJson) as List<dynamic>
+        : <dynamic>[];
     if (queue.length < 100) {
       queue.add(payload);
       await prefs.setString(_kOfflineQueue, jsonEncode(queue));
@@ -131,27 +165,18 @@ class LocationTaskHandler extends TaskHandler {
       );
 }
 
-// ─── Service facade ───────────────────────────────────────────────────────────
-
-/// Manages the GPS foreground tracking service lifecycle.
-///
-/// Call [initialize] once from `main()` before `runApp`.
-/// Call [startTracking] when there are active "on the way" orders.
-/// Call [stopTracking] when no active orders remain.
 class LocationTrackingService {
   static bool _initialized = false;
 
-  /// Must be called once before using [startTracking] or [stopTracking].
   static void initialize() {
     if (_initialized) return;
     _initialized = true;
-
     FlutterForegroundTask.init(
       androidNotificationOptions: AndroidNotificationOptions(
         channelId: 'location_tracking',
-        channelName: 'Seguimiento de ruta',
+        channelName: 'Seguimiento de jornada',
         channelDescription:
-            'Señor Arroz — compartiendo ubicación durante entregas activas',
+            'Señor Arroz — compartiendo ubicación durante la jornada laboral',
         channelImportance: NotificationChannelImportance.LOW,
         priority: NotificationPriority.LOW,
         onlyAlertOnce: true,
@@ -161,7 +186,7 @@ class LocationTrackingService {
         playSound: false,
       ),
       foregroundTaskOptions: ForegroundTaskOptions(
-        eventAction: ForegroundTaskEventAction.repeat(60000),
+        eventAction: ForegroundTaskEventAction.repeat(300000),
         autoRunOnBoot: false,
         allowWakeLock: true,
         allowAutoRestart: true,
@@ -169,58 +194,124 @@ class LocationTrackingService {
     );
   }
 
-  /// Starts the foreground tracking service.
-  ///
-  /// [authToken]: the current JWT to authorize backend calls from the isolate.
-  /// [baseUrl]: the API base URL (e.g. `https://senorarrozapi.up.railway.app/api`).
   static Future<void> startTracking({
     required String authToken,
     required String baseUrl,
+    required int workSessionId,
+    required DateTime autoCloseAtUtc,
+    required int lightIntervalSeconds,
+    required int activeIntervalSeconds,
   }) async {
     if (!_initialized) initialize();
 
-    final alreadyRunning = await FlutterForegroundTask.isRunningService;
-    if (alreadyRunning) {
-      // Update token in case it was refreshed
-      await FlutterForegroundTask.saveData(key: _kAuthToken, value: authToken);
+    final previousSessionId =
+        await FlutterForegroundTask.getData<int>(key: _kWorkSessionId);
+    if (previousSessionId != null && previousSessionId != workSessionId) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_kOfflineQueue);
+    }
+
+    await FlutterForegroundTask.saveData(key: _kAuthToken, value: authToken);
+    await FlutterForegroundTask.saveData(key: _kBaseUrl, value: baseUrl);
+    await FlutterForegroundTask.saveData(
+        key: _kWorkSessionId, value: workSessionId);
+    await FlutterForegroundTask.saveData(
+      key: _kAutoCloseAt,
+      value: autoCloseAtUtc.toUtc().toIso8601String(),
+    );
+    await FlutterForegroundTask.saveData(
+      key: _kLightIntervalSeconds,
+      value: lightIntervalSeconds,
+    );
+    await FlutterForegroundTask.saveData(
+      key: _kActiveIntervalSeconds,
+      value: activeIntervalSeconds,
+    );
+
+    if (await FlutterForegroundTask.isRunningService) {
+      await setLightMode();
       return;
     }
 
-    // Store credentials for the background isolate
-    await FlutterForegroundTask.saveData(key: _kAuthToken, value: authToken);
-    await FlutterForegroundTask.saveData(key: _kBaseUrl, value: baseUrl);
-
+    await FlutterForegroundTask.saveData(
+        key: _kTrackingMode, value: _modeLight);
     final result = await FlutterForegroundTask.startService(
       serviceTypes: [ForegroundServiceTypes.location],
       notificationTitle: 'Señor Arroz',
-      notificationText: 'Ruta activa — compartiendo ubicación',
+      notificationText: 'Jornada activa — seguimiento liviano',
       callback: locationTaskCallback,
     );
-
     if (result is ServiceRequestFailure) {
       debugPrint('LocationTrackingService: failed to start — ${result.error}');
+      return;
+    }
+    await setLightMode();
+  }
+
+  static Future<void> setLightMode() async {
+    final interval = await FlutterForegroundTask.getData<int>(
+          key: _kLightIntervalSeconds,
+        ) ??
+        300;
+    await _setMode(
+        _modeLight, interval, 'Jornada activa — seguimiento liviano');
+  }
+
+  static Future<void> setActiveDeliveryMode() async {
+    final interval = await FlutterForegroundTask.getData<int>(
+          key: _kActiveIntervalSeconds,
+        ) ??
+        30;
+    await _setMode(
+      _modeActiveDelivery,
+      interval,
+      'Pedido en camino — seguimiento activo',
+    );
+  }
+
+  static Future<void> _setMode(
+    String mode,
+    int intervalSeconds,
+    String notificationText,
+  ) async {
+    if (!await FlutterForegroundTask.isRunningService) return;
+    await FlutterForegroundTask.saveData(key: _kTrackingMode, value: mode);
+    final safeInterval = intervalSeconds.clamp(1, 86400).toInt();
+    final result = await FlutterForegroundTask.updateService(
+      foregroundTaskOptions: ForegroundTaskOptions(
+        eventAction: ForegroundTaskEventAction.repeat(safeInterval * 1000),
+        autoRunOnBoot: false,
+        allowWakeLock: true,
+        allowAutoRestart: true,
+      ),
+      notificationText: notificationText,
+    );
+    if (result is ServiceRequestFailure) {
+      debugPrint('LocationTrackingService: failed to update — ${result.error}');
     }
   }
 
-  /// Stops the foreground tracking service.
   static Future<void> stopTracking() async {
-    final isRunning = await FlutterForegroundTask.isRunningService;
-    if (!isRunning) return;
-
-    final result = await FlutterForegroundTask.stopService();
-    if (result is ServiceRequestFailure) {
-      debugPrint('LocationTrackingService: failed to stop — ${result.error}');
+    if (await FlutterForegroundTask.isRunningService) {
+      final result = await FlutterForegroundTask.stopService();
+      if (result is ServiceRequestFailure) {
+        debugPrint('LocationTrackingService: failed to stop — ${result.error}');
+      }
     }
 
-    // Clear stored credentials
     await FlutterForegroundTask.removeData(key: _kAuthToken);
     await FlutterForegroundTask.removeData(key: _kBaseUrl);
+    await FlutterForegroundTask.removeData(key: _kWorkSessionId);
+    await FlutterForegroundTask.removeData(key: _kAutoCloseAt);
+    await FlutterForegroundTask.removeData(key: _kLightIntervalSeconds);
+    await FlutterForegroundTask.removeData(key: _kActiveIntervalSeconds);
+    await FlutterForegroundTask.removeData(key: _kTrackingMode);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_kOfflineQueue);
   }
 
-  /// Updates the stored auth token (called after silent token refresh).
   static Future<void> updateToken(String newToken) async {
-    final isRunning = await FlutterForegroundTask.isRunningService;
-    if (!isRunning) return;
+    if (!await FlutterForegroundTask.isRunningService) return;
     await FlutterForegroundTask.saveData(key: _kAuthToken, value: newToken);
   }
 

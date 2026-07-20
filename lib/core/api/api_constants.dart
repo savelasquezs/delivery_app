@@ -70,8 +70,10 @@ abstract class ApiConstants {
   static String userPayrollInsights(int userId) =>
       '/Users/$userId/payroll-insights';
   static const String myDeviceToken = '/deliverymen/me/device-token';
+  static const String myWorkSession = '/deliverymen/me/work-session';
   static const String deliverymanLocation = '/deliverymen/location';
-  static String deliverymanLastLocation(int id) => '/deliverymen/$id/last-location';
+  static String deliverymanLastLocation(int id) =>
+      '/deliverymen/$id/last-location';
 
   // Dashboard
   static const String dashboardDeliveryMe = '/dashboard/delivery/me';

@@ -3,8 +3,6 @@ import '../../orders/data/order_repository.dart';
 import '../../orders/models/order_models.dart';
 import '../../auth/presentation/auth_notifier.dart';
 import '../../tracking/location_tracking_service.dart';
-import '../../../core/api/api_constants.dart';
-import '../../../core/storage/secure_storage.dart';
 
 class RouteState {
   final List<Order> orders;
@@ -21,7 +19,8 @@ class RouteState {
     List<Order>? orders,
     bool? isLoading,
     String? error,
-  }) => RouteState(
+  }) =>
+      RouteState(
         orders: orders ?? this.orders,
         isLoading: isLoading ?? this.isLoading,
         error: error,
@@ -31,9 +30,8 @@ class RouteState {
 class RouteNotifier extends StateNotifier<RouteState> {
   final OrderRepository _repository;
   final int _deliverymanId;
-  final SecureStorage _storage;
 
-  RouteNotifier(this._repository, this._deliverymanId, this._storage)
+  RouteNotifier(this._repository, this._deliverymanId)
       : super(const RouteState());
 
   Future<void> load() async {
@@ -62,15 +60,9 @@ class RouteNotifier extends StateNotifier<RouteState> {
   Future<void> _syncTracking(List<Order> orders) async {
     final hasActiveOrders = orders.isNotEmpty;
     if (hasActiveOrders) {
-      final token = await _storage.getAuthToken();
-      if (token != null) {
-        await LocationTrackingService.startTracking(
-          authToken: token,
-          baseUrl: ApiConstants.baseUrl,
-        );
-      }
+      await LocationTrackingService.setActiveDeliveryMode();
     } else {
-      await LocationTrackingService.stopTracking();
+      await LocationTrackingService.setLightMode();
     }
   }
 
@@ -121,6 +113,5 @@ final routeNotifierProvider =
   return RouteNotifier(
     ref.watch(orderRepositoryProvider),
     user?.id ?? 0,
-    ref.watch(secureStorageProvider),
   );
 });

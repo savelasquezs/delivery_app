@@ -6,13 +6,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
-import '../../core/api/api_constants.dart';
 import '../../core/router/app_router.dart';
 import '../../core/updates/app_update_prefs.dart';
 import '../../core/updates/app_update_provider.dart';
 import '../../core/updates/delivery_app_release_manifest.dart';
 import '../../core/updates/app_update_widgets.dart';
-import '../../core/storage/secure_storage.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/whatsapp/open_whatsapp.dart';
@@ -29,7 +27,6 @@ import '../analytics/presentation/analytics_notifier.dart';
 import '../analytics/presentation/analytics_screen.dart';
 import '../profile/data/profile_image_url.dart';
 import '../realtime/order_hub_service.dart';
-import '../tracking/location_tracking_service.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -111,22 +108,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   /// in case the service was killed by the OS.
   Future<void> _restartTrackingIfNeeded() async {
     if (ref.read(authNotifierProvider).user == null) return;
-
-    var routeState = ref.read(routeNotifierProvider);
-    if (routeState.orders.isEmpty) {
-      await ref.read(routeNotifierProvider.notifier).load();
-      routeState = ref.read(routeNotifierProvider);
-    }
-    if (routeState.orders.isEmpty) return;
-
-    final storage = ref.read(secureStorageProvider);
-    final token = await storage.getAuthToken();
-    if (token == null) return;
-
-    await LocationTrackingService.startTracking(
-      authToken: token,
-      baseUrl: ApiConstants.baseUrl,
-    );
+    await ref.read(routeNotifierProvider.notifier).load();
   }
 
   Future<void> _connectSignalR({bool forceReconnect = false}) async {
@@ -471,6 +453,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 
   @override
   Widget build(BuildContext context) {
+    final authState = ref.watch(authNotifierProvider);
     ref.listen<AsyncValue<AppUpdateCheckResult?>>(
       appUpdateCheckProvider,
       (_, next) {
@@ -507,15 +490,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           ],
         ),
         actions: [
-          ..._branchWhatsAppActions(ref.watch(authNotifierProvider).user),
+          ..._branchWhatsAppActions(authState.user),
           _HubStatusIndicator(status: _hubStatus),
           const SizedBox(width: AppTheme.spacingSm),
           IconButton(
             padding: EdgeInsets.zero,
             splashRadius: 22,
             onPressed: _showProfileMenu,
-            icon: _ProfileAppBarAvatar(
-                user: ref.watch(authNotifierProvider).user),
+            icon: _ProfileAppBarAvatar(user: authState.user),
           ),
         ],
       ),
@@ -523,6 +505,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           _buildUpdateBanner(),
+          _TrackingStatusBanner(authState: authState),
           Expanded(
             child: IndexedStack(
               index: _currentIndex,
@@ -546,6 +529,54 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                   ))
               .toList(),
         ),
+      ),
+    );
+  }
+}
+
+class _TrackingStatusBanner extends StatelessWidget {
+  const _TrackingStatusBanner({required this.authState});
+
+  final AuthState authState;
+
+  @override
+  Widget build(BuildContext context) {
+    final session = authState.workSession;
+    if (session == null) return const SizedBox.shrink();
+    final tracking = authState.trackingActive;
+    final closeTime = session.tracking.autoCloseTime.length >= 5
+        ? session.tracking.autoCloseTime.substring(0, 5)
+        : session.tracking.autoCloseTime;
+    final color = tracking ? AppColors.success : AppColors.warning;
+
+    return Container(
+      width: double.infinity,
+      color: color.withValues(alpha: 0.12),
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppTheme.spacingMd,
+        vertical: AppTheme.spacingXs,
+      ),
+      child: Row(
+        children: [
+          Icon(
+            tracking ? Icons.location_on : Icons.location_off,
+            size: 16,
+            color: color,
+          ),
+          const SizedBox(width: AppTheme.spacingXs),
+          Expanded(
+            child: Text(
+              tracking
+                  ? 'Ubicación monitoreada · cierre $closeTime (Colombia)'
+                  : 'Jornada activa · revisa el GPS y los permisos de ubicación',
+              style: TextStyle(
+                color: color,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

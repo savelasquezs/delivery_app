@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -5,13 +7,16 @@ const _kAuthToken = 'auth_token';
 const _kRefreshToken = 'refresh_token';
 const _kUserData = 'user_data';
 const _kSelfAssignPassword = 'self_assign_password';
+const _kInstallationId = 'installation_id';
+const _kWorkSessionData = 'work_session_data';
 
 class SecureStorage {
   final FlutterSecureStorage _storage;
 
-  SecureStorage() : _storage = const FlutterSecureStorage(
-    aOptions: AndroidOptions(encryptedSharedPreferences: true),
-  );
+  SecureStorage()
+      : _storage = const FlutterSecureStorage(
+          aOptions: AndroidOptions(encryptedSharedPreferences: true),
+        );
 
   Future<String?> getAuthToken() => _storage.read(key: _kAuthToken);
   Future<String?> getRefreshToken() => _storage.read(key: _kRefreshToken);
@@ -37,7 +42,32 @@ class SecureStorage {
   Future<void> deleteSelfAssignPassword() =>
       _storage.delete(key: _kSelfAssignPassword);
 
-  Future<void> clearAll() => _storage.deleteAll();
+  Future<String> getOrCreateInstallationId() async {
+    final existing = await _storage.read(key: _kInstallationId);
+    if (existing != null && existing.isNotEmpty) return existing;
+
+    final random = Random.secure();
+    final id =
+        List.generate(32, (_) => random.nextInt(16).toRadixString(16)).join();
+    await _storage.write(key: _kInstallationId, value: id);
+    return id;
+  }
+
+  Future<String?> getWorkSessionData() => _storage.read(key: _kWorkSessionData);
+
+  Future<void> saveWorkSessionData(String jsonData) =>
+      _storage.write(key: _kWorkSessionData, value: jsonData);
+
+  Future<void> deleteWorkSessionData() =>
+      _storage.delete(key: _kWorkSessionData);
+
+  Future<void> clearAll() async {
+    final installationId = await _storage.read(key: _kInstallationId);
+    await _storage.deleteAll();
+    if (installationId != null && installationId.isNotEmpty) {
+      await _storage.write(key: _kInstallationId, value: installationId);
+    }
+  }
 }
 
 final secureStorageProvider = Provider<SecureStorage>((_) => SecureStorage());
