@@ -315,5 +315,16 @@ class LocationTrackingService {
     await FlutterForegroundTask.saveData(key: _kAuthToken, value: newToken);
   }
 
+  static Future<void> updateAutoCloseAt(DateTime autoCloseAtUtc) async {
+    final cutoff = autoCloseAtUtc.toUtc();
+    await FlutterForegroundTask.saveData(
+      key: _kAutoCloseAt,
+      value: cutoff.toIso8601String(),
+    );
+    if (!DateTime.now().toUtc().isBefore(cutoff)) {
+      await stopTracking();
+    }
+  }
+
   static Future<bool> get isRunning => FlutterForegroundTask.isRunningService;
 }

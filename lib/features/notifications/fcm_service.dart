@@ -8,8 +8,11 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import '../../core/api/api_constants.dart';
 import '../../core/api/dio_client.dart';
+import '../../core/auth/auth_session_bridge.dart';
+import '../tracking/location_tracking_service.dart';
 
-(String? title, String? body) _titleBodyFromRemoteMessage(RemoteMessage message) {
+(String? title, String? body) _titleBodyFromRemoteMessage(
+    RemoteMessage message) {
   final n = message.notification;
   var title = n?.title ?? message.data['title'];
   var body = n?.body ?? message.data['body'];
@@ -49,6 +52,7 @@ NotificationDetails _notificationDetails() {
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
+  await _applyWorkSessionCommand(message.data, notifyUi: false);
   debugPrint(
     'FCM background: messageId=${message.messageId} hasNotification=${message.notification != null} dataKeys=${message.data.keys.join(",")}',
   );
@@ -61,8 +65,7 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   }
 
   final plugin = FlutterLocalNotificationsPlugin();
-  const androidSettings =
-      AndroidInitializationSettings('@mipmap/ic_launcher');
+  const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
   const iosSettings = DarwinInitializationSettings(
     requestAlertPermission: false,
     requestBadgePermission: false,
@@ -126,8 +129,8 @@ class FcmService {
 
     // Android 13+: permiso para mostrar notificaciones locales (FCM en foreground usa este plugin).
     if (Platform.isAndroid) {
-      final androidImpl = _localNotifications
-          .resolvePlatformSpecificImplementation<
+      final androidImpl =
+          _localNotifications.resolvePlatformSpecificImplementation<
               AndroidFlutterLocalNotificationsPlugin>();
       final granted = await androidImpl?.requestNotificationsPermission();
       debugPrint(
@@ -137,6 +140,13 @@ class FcmService {
 
     // Escuchar mensajes FOREGROUND (cuando la app está abierta)
     FirebaseMessaging.onMessage.listen(_showForegroundNotification);
+    FirebaseMessaging.onMessageOpenedApp.listen(
+      (message) => unawaited(_applyWorkSessionCommand(message.data)),
+    );
+    final initialMessage = await FirebaseMessaging.instance.getInitialMessage();
+    if (initialMessage != null) {
+      await _applyWorkSessionCommand(initialMessage.data);
+    }
   }
 
   /// Solicita permiso push (Android 13+ / iOS).
@@ -198,6 +208,7 @@ class FcmService {
     debugPrint(
       'FCM onMessage: messageId=${message.messageId} dataKeys=${message.data.keys.join(",")}',
     );
+    unawaited(_applyWorkSessionCommand(message.data));
     final (title, body) = _titleBodyFromRemoteMessage(message);
     if (title == null && body == null) {
       debugPrint('FCM onMessage: sin título ni cuerpo');
@@ -206,13 +217,30 @@ class FcmService {
 
     final id = _notificationId(message);
     unawaited(
-      _localNotifications
-          .show(id, title, body, _notificationDetails())
-          .then(
-            (_) => debugPrint('FCM onMessage: local notification show ok id=$id'),
+      _localNotifications.show(id, title, body, _notificationDetails()).then(
+            (_) =>
+                debugPrint('FCM onMessage: local notification show ok id=$id'),
             onError: (Object e, StackTrace st) =>
                 debugPrint('FCM onMessage: error mostrando notificación: $e'),
           ),
     );
   }
+}
+
+Future<void> _applyWorkSessionCommand(
+  Map<String, dynamic> data, {
+  bool notifyUi = true,
+}) async {
+  final type = data['type']?.toString();
+  if (type == 'work_session_closed') {
+    await LocationTrackingService.stopTracking();
+    if (notifyUi) notifyAuthSessionInvalidatedByApi();
+    return;
+  }
+
+  if (type != 'work_session_updated') return;
+  final autoCloseAt = DateTime.tryParse(data['autoCloseAt']?.toString() ?? '');
+  if (autoCloseAt == null) return;
+  await LocationTrackingService.updateAutoCloseAt(autoCloseAt);
+  if (notifyUi) notifyWorkSessionChangedByPush();
 }

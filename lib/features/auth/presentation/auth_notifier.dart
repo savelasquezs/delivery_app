@@ -56,19 +56,23 @@ class AuthNotifier extends StateNotifier<AuthState> {
   AuthNotifier(this._repository, this._workSessions, this._client)
       : super(const AuthState()) {
     setAuthSessionInvalidatedHandler(onSessionInvalidatedByApi);
+    setWorkSessionChangedByPushHandler(onWorkSessionChangedByPush);
     unawaited(_checkSession());
   }
 
   @override
   void dispose() {
     setAuthSessionInvalidatedHandler(null);
+    setWorkSessionChangedByPushHandler(null);
     super.dispose();
   }
 
   void onSessionInvalidatedByApi() {
-    unawaited(LocationTrackingService.stopTracking());
-    unawaited(_workSessions.clearLocal());
-    state = const AuthState(status: AuthStatus.unauthenticated);
+    unawaited(_endLocalSession());
+  }
+
+  void onWorkSessionChangedByPush() {
+    unawaited(refreshSessionIfNeededAfterResume());
   }
 
   Future<void> refreshSessionIfNeededAfterResume() async {
