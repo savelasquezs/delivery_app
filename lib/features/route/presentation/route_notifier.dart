@@ -60,7 +60,14 @@ class RouteNotifier extends StateNotifier<RouteState> {
   Future<void> _syncTracking(List<Order> orders) async {
     final hasActiveOrders = orders.isNotEmpty;
     if (hasActiveOrders) {
-      await LocationTrackingService.setActiveDeliveryMode();
+      int? routeId;
+      for (final order in orders) {
+        if (order.deliveryRouteId != null) {
+          routeId = order.deliveryRouteId;
+          break;
+        }
+      }
+      await LocationTrackingService.setActiveDeliveryMode(routeId: routeId);
     } else {
       await LocationTrackingService.setLightMode();
     }

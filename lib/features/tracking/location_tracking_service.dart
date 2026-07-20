@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:battery_plus/battery_plus.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
 
 const _kAuthToken = 'sa_loc_auth_token';
 const _kBaseUrl = 'sa_loc_base_url';
@@ -15,8 +17,12 @@ const _kAutoCloseAt = 'sa_loc_auto_close_at';
 const _kLightIntervalSeconds = 'sa_loc_light_interval_seconds';
 const _kActiveIntervalSeconds = 'sa_loc_active_interval_seconds';
 const _kTrackingMode = 'sa_loc_tracking_mode';
+const _kDeliveryRouteId = 'sa_loc_delivery_route_id';
 const _modeLight = 'LIGHT';
 const _modeActiveDelivery = 'ACTIVE_DELIVERY';
+const _modeOffline = 'OFFLINE';
+const _maxOfflinePoints = 100;
+const _uuid = Uuid();
 
 @pragma('vm:entry-point')
 void locationTaskCallback() {
@@ -67,12 +73,25 @@ class LocationTaskHandler extends TaskHandler {
           timeLimit: Duration(seconds: 10),
         ),
       );
+      final trackingMode =
+          await FlutterForegroundTask.getData<String>(key: _kTrackingMode) ??
+              _modeLight;
+      final batteryLevel = await _readBatteryLevel();
       final payload = <String, dynamic>{
+        'clientPointId': _uuid.v4(),
         'workSessionId':
             await FlutterForegroundTask.getData<int>(key: _kWorkSessionId),
+        'deliveryRouteId':
+            await FlutterForegroundTask.getData<int>(key: _kDeliveryRouteId),
         'latitude': position.latitude,
         'longitude': position.longitude,
-        'recordedAt': DateTime.now().toUtc().toIso8601String(),
+        'accuracyMeters': position.accuracy.isFinite ? position.accuracy : null,
+        'headingDegrees': position.heading.isFinite ? position.heading : null,
+        'batteryLevelPercent': batteryLevel,
+        'internetAvailable': true,
+        'gpsEnabled': true,
+        'trackingMode': trackingMode,
+        'recordedAt': position.timestamp.toUtc().toIso8601String(),
       };
 
       await _flushOfflineQueue(token, baseUrl);
@@ -98,9 +117,11 @@ class LocationTaskHandler extends TaskHandler {
         await FlutterForegroundTask.stopService();
         return;
       }
-      await _enqueueOffline(payload);
+      await _enqueueOffline(
+        error.response == null ? _asOfflinePayload(payload) : payload,
+      );
     } catch (_) {
-      await _enqueueOffline(payload);
+      await _enqueueOffline(_asOfflinePayload(payload));
     }
   }
 
@@ -146,9 +167,23 @@ class LocationTaskHandler extends TaskHandler {
     final queue = queueJson != null
         ? jsonDecode(queueJson) as List<dynamic>
         : <dynamic>[];
-    if (queue.length < 100) {
+    if (queue.length < _maxOfflinePoints) {
       queue.add(payload);
       await prefs.setString(_kOfflineQueue, jsonEncode(queue));
+    }
+  }
+
+  Map<String, dynamic> _asOfflinePayload(Map<String, dynamic> payload) => {
+        ...payload,
+        'internetAvailable': false,
+        'trackingMode': _modeOffline,
+      };
+
+  Future<int?> _readBatteryLevel() async {
+    try {
+      return await Battery().batteryLevel;
+    } catch (_) {
+      return null;
     }
   }
 
@@ -249,6 +284,7 @@ class LocationTrackingService {
   }
 
   static Future<void> setLightMode() async {
+    await FlutterForegroundTask.removeData(key: _kDeliveryRouteId);
     final interval = await FlutterForegroundTask.getData<int>(
           key: _kLightIntervalSeconds,
         ) ??
@@ -257,7 +293,15 @@ class LocationTrackingService {
         _modeLight, interval, 'Jornada activa — seguimiento liviano');
   }
 
-  static Future<void> setActiveDeliveryMode() async {
+  static Future<void> setActiveDeliveryMode({int? routeId}) async {
+    if (routeId == null) {
+      await FlutterForegroundTask.removeData(key: _kDeliveryRouteId);
+    } else {
+      await FlutterForegroundTask.saveData(
+        key: _kDeliveryRouteId,
+        value: routeId,
+      );
+    }
     final interval = await FlutterForegroundTask.getData<int>(
           key: _kActiveIntervalSeconds,
         ) ??
@@ -306,6 +350,7 @@ class LocationTrackingService {
     await FlutterForegroundTask.removeData(key: _kLightIntervalSeconds);
     await FlutterForegroundTask.removeData(key: _kActiveIntervalSeconds);
     await FlutterForegroundTask.removeData(key: _kTrackingMode);
+    await FlutterForegroundTask.removeData(key: _kDeliveryRouteId);
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_kOfflineQueue);
   }

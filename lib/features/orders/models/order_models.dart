@@ -154,6 +154,7 @@ class Order {
   final String? branchName;
   final int? deliveryManId;
   final String? deliveryManName;
+  final int? deliveryRouteId;
 
   /// Campos planos del API (OrderDto), alineados con el front web.
   final int? customerId;
@@ -165,12 +166,14 @@ class Order {
   final double? latitude;
   final double? longitude;
   final String? deliveryRoutePlanningWarnings;
-   final List<OrderLineSummary> summaryLines;
+  final List<OrderLineSummary> summaryLines;
 
   /// Efectivo ya cobrado en sucursal (API).
   final bool paidInStoreCash;
+
   /// Monto registrado como cobrado en tienda (API); null = asumir pago completo.
   final double? paidInStoreCashAmount;
+
   /// Suma pagos banco+app cuando el JSON los trae; si no, 0.
   final double nonCashPaymentsTotal;
 
@@ -196,6 +199,7 @@ class Order {
     this.branchName,
     this.deliveryManId,
     this.deliveryManName,
+    this.deliveryRouteId,
     this.customerId,
     this.addressId,
     this.addressDescription,
@@ -358,12 +362,13 @@ class Order {
           json['branchName'] as String? ?? json['BranchName'] as String?,
       deliveryManId: json['deliveryManId'] as int?,
       deliveryManName: json['deliveryManName'] as String?,
+      deliveryRouteId: json['deliveryRouteId'] as int?,
       customerId: flatCustomerId ?? nestedCustomer?.id,
       addressId: flatAddressId ?? nestedAddress?.id,
       addressDescription: flatAddrDesc,
       addressAdditionalInfo: flatAddrInfo,
-      neighborhoodId: json['neighborhoodId'] as int? ??
-          json['NeighborhoodId'] as int?,
+      neighborhoodId:
+          json['neighborhoodId'] as int? ?? json['NeighborhoodId'] as int?,
       neighborhoodName: flatNeighborhoodName,
       latitude: _toDouble(json['latitude']),
       longitude: _toDouble(json['longitude']),
@@ -374,11 +379,13 @@ class Order {
           .toList(),
       paidInStoreCash: json['paidInStoreCash'] as bool? ?? false,
       paidInStoreCashAmount: _toDouble(json['paidInStoreCashAmount']),
-      nonCashPaymentsTotal: _sumPaymentAmounts(json['bankPayments'] as List<dynamic>?) +
-          _sumPaymentAmounts(json['appPayments'] as List<dynamic>?),
+      nonCashPaymentsTotal:
+          _sumPaymentAmounts(json['bankPayments'] as List<dynamic>?) +
+              _sumPaymentAmounts(json['appPayments'] as List<dynamic>?),
       prepareAt: _parseDate(json['prepareAt'] ?? json['PrepareAt']),
       reservedFor: _parseDate(json['reservedFor'] ?? json['ReservedFor']),
-      statusTimes: _statusTimesFromJson(json['statusTimes'] ?? json['StatusTimes']),
+      statusTimes:
+          _statusTimesFromJson(json['statusTimes'] ?? json['StatusTimes']),
     );
   }
 
@@ -390,9 +397,8 @@ class Order {
     int? neighborhoodId,
     String? neighborhoodName,
   }) {
-    final nextDesc = addressDescription ??
-        this.addressDescription ??
-        address?.street;
+    final nextDesc =
+        addressDescription ?? this.addressDescription ?? address?.street;
     final nextInfo = addressAdditionalInfo ?? this.addressAdditionalInfo;
     final nextNeighborhoodName = neighborhoodName ?? this.neighborhoodName;
     final nextNeighborhoodId = neighborhoodId ?? this.neighborhoodId;
@@ -403,7 +409,9 @@ class Order {
     if ((nextDesc != null && nextDesc.isNotEmpty) || address != null) {
       nextAddress = OrderAddress(
         id: addressId ?? address?.id,
-        street: (nextDesc != null && nextDesc.isNotEmpty) ? nextDesc : address?.street,
+        street: (nextDesc != null && nextDesc.isNotEmpty)
+            ? nextDesc
+            : address?.street,
         neighborhood: nextNeighborhoodName ?? address?.neighborhood,
         city: address?.city,
         notes: nextInfo ?? address?.notes,
@@ -425,6 +433,7 @@ class Order {
       branchName: branchName,
       deliveryManId: deliveryManId,
       deliveryManName: deliveryManName,
+      deliveryRouteId: deliveryRouteId,
       customerId: customerId,
       addressId: addressId,
       addressDescription: nextDesc,
@@ -477,8 +486,10 @@ class BranchSummary {
   final int branchId;
   final String branchName;
   final int deliveredCount;
+
   /// Suma de fees de envío de los pedidos (100 %).
   final double totalDeliveryFee;
+
   /// Parte del domiciliario según política de nómina del servidor.
   final double payableDeliveryFee;
 
@@ -502,8 +513,8 @@ class BranchSummary {
     } else if (totalFee > 0) {
       payableDeliveryFee = totalFee * kDeliveryFeeDriverShare;
     } else {
-      payableDeliveryFee =
-          ((json['totalAmount'] as num?)?.toDouble() ?? 0) * kDeliveryFeeDriverShare;
+      payableDeliveryFee = ((json['totalAmount'] as num?)?.toDouble() ?? 0) *
+          kDeliveryFeeDriverShare;
     }
     return BranchSummary(
       branchId: json['branchId'] as int? ?? 0,
