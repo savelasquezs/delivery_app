@@ -9,6 +9,8 @@ import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
+import 'location_tracking_policy.dart';
+
 const _kAuthToken = 'sa_loc_auth_token';
 const _kBaseUrl = 'sa_loc_base_url';
 const _kOfflineQueue = 'sa_loc_offline_queue';
@@ -267,8 +269,8 @@ class LocationTaskHandler extends TaskHandler {
             await FlutterForegroundTask.getData<int>(key: _kDeliveryRouteId),
         'latitude': position.latitude,
         'longitude': position.longitude,
-        'accuracyMeters': position.accuracy.isFinite ? position.accuracy : null,
-        'headingDegrees': position.heading.isFinite ? position.heading : null,
+        'accuracyMeters': validAccuracyMeters(position.accuracy),
+        'headingDegrees': validHeadingDegrees(position.heading),
         'batteryLevelPercent': batteryLevel,
         'internetAvailable': true,
         'gpsEnabled': true,
@@ -315,12 +317,12 @@ class LocationTaskHandler extends TaskHandler {
       }
     } on DioException catch (error) {
       final status = error.response?.statusCode;
-      if (_isPermanentClientError(status)) {
-        await FlutterForegroundTask.saveData(
-          key: _kTrackingExpectedActive,
-          value: false,
+      final disposition = locationFailureDisposition(status);
+      if (disposition == LocationFailureDisposition.discardPoint) {
+        debugPrint(
+          'LocationTaskHandler: location rejected ($status): '
+          '${error.response?.data}',
         );
-        await FlutterForegroundTask.stopService();
         return;
       }
       if (error.response == null) {
@@ -366,7 +368,8 @@ class LocationTaskHandler extends TaskHandler {
         syncedCount++;
       } on DioException catch (error) {
         final status = error.response?.statusCode;
-        if (!_isPermanentClientError(status)) {
+        if (locationFailureDisposition(status) ==
+            LocationFailureDisposition.retryPoint) {
           remaining.add(payload);
         }
       } catch (_) {
@@ -394,11 +397,6 @@ class LocationTaskHandler extends TaskHandler {
     } else {
       await LocationTrackingService.setLightMode();
     }
-  }
-
-  bool _isPermanentClientError(int? status) {
-    if (status == null || status < 400 || status >= 500) return false;
-    return status != 401 && status != 408 && status != 429;
   }
 
   Future<void> _enqueueOffline(Map<String, dynamic> payload) async {
@@ -517,6 +515,16 @@ class LocationTrackingService {
     final wasRunning = await FlutterForegroundTask.isRunningService;
     final previousSessionId =
         await FlutterForegroundTask.getData<int>(key: _kWorkSessionId);
+    final previousMode =
+        await FlutterForegroundTask.getData<String>(key: _kTrackingMode);
+    final previousRouteId =
+        await FlutterForegroundTask.getData<int>(key: _kDeliveryRouteId);
+    final resumeActive = shouldResumeActiveTracking(
+      previousWorkSessionId: previousSessionId,
+      workSessionId: workSessionId,
+      previousMode: previousMode,
+      deliveryRouteId: previousRouteId,
+    );
     if (previousSessionId != null && previousSessionId != workSessionId) {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(_kOfflineQueue);
@@ -555,12 +563,21 @@ class LocationTrackingService {
       if (!wasExpectedActive || previousSessionId != workSessionId) {
         await _recordDeviceEvent('tracking_started');
       }
-      await setLightMode();
+      if (resumeActive) {
+        await setActiveDeliveryMode(routeId: previousRouteId);
+      } else {
+        await setLightMode();
+      }
       return;
     }
 
     await FlutterForegroundTask.saveData(
-        key: _kTrackingMode, value: _modeLight);
+      key: _kTrackingMode,
+      value: resumeActive ? _modeActiveDelivery : _modeLight,
+    );
+    if (!resumeActive) {
+      await FlutterForegroundTask.removeData(key: _kDeliveryRouteId);
+    }
     final result = await FlutterForegroundTask.startService(
       serviceTypes: [ForegroundServiceTypes.location],
       notificationTitle: 'Señor Arroz',
@@ -581,7 +598,11 @@ class LocationTrackingService {
     );
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_kUnexpectedStopReportedSession);
-    await setLightMode();
+    if (resumeActive) {
+      await setActiveDeliveryMode(routeId: previousRouteId);
+    } else {
+      await setLightMode();
+    }
   }
 
   static Future<void> setLightMode() async {
