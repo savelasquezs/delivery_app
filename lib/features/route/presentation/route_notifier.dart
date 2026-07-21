@@ -68,9 +68,9 @@ class RouteNotifier extends StateNotifier<RouteState> {
         }
       }
       await LocationTrackingService.setActiveDeliveryMode(routeId: routeId);
-    } else {
-      await LocationTrackingService.setLightMode();
     }
+    // Sin pedidos OnTheWay la ruta puede seguir activa durante el regreso a
+    // sucursal. El backend ordena volver a modo liviano al confirmar la llegada.
   }
 
   Future<void> markDelivered(int orderId) async {

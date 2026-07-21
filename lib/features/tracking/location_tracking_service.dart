@@ -293,8 +293,9 @@ class LocationTaskHandler extends TaskHandler {
     int syncedOfflineCount,
   ) async {
     try {
-      await _buildDio(baseUrl, token)
+      final response = await _buildDio(baseUrl, token)
           .post('/deliverymen/location', data: payload);
+      await _applyTrackingResult(response.data);
       final recoveryReported = await _recordBooleanTransition(
         storageKey: _kInternetAvailable,
         current: true,
@@ -360,7 +361,8 @@ class LocationTaskHandler extends TaskHandler {
     for (final item in queue) {
       final payload = Map<String, dynamic>.from(item as Map);
       try {
-        await dio.post('/deliverymen/location', data: payload);
+        final response = await dio.post('/deliverymen/location', data: payload);
+        await _applyTrackingResult(response.data);
         syncedCount++;
       } on DioException catch (error) {
         final status = error.response?.statusCode;
@@ -378,6 +380,20 @@ class LocationTaskHandler extends TaskHandler {
       await prefs.setString(_kOfflineQueue, jsonEncode(remaining));
     }
     return syncedCount;
+  }
+
+  Future<void> _applyTrackingResult(dynamic data) async {
+    if (data is! Map) return;
+    final continueActive = data['continueActiveTracking'] == true;
+    final routeIdValue = data['deliveryRouteId'];
+    final routeId = routeIdValue is int
+        ? routeIdValue
+        : int.tryParse(routeIdValue?.toString() ?? '');
+    if (continueActive && routeId != null) {
+      await LocationTrackingService.setActiveDeliveryMode(routeId: routeId);
+    } else {
+      await LocationTrackingService.setLightMode();
+    }
   }
 
   bool _isPermanentClientError(int? status) {
