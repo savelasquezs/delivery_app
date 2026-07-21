@@ -16,6 +16,8 @@ class AuthUser {
   final String? branchName;
   final String? branchPhone1;
   final String? branchPhone2;
+  final double? branchLatitude;
+  final double? branchLongitude;
   final String? phone;
   final String? profileImageUrl;
 
@@ -28,6 +30,8 @@ class AuthUser {
     this.branchName,
     this.branchPhone1,
     this.branchPhone2,
+    this.branchLatitude,
+    this.branchLongitude,
     this.phone,
     this.profileImageUrl,
   });
@@ -43,8 +47,7 @@ class AuthUser {
     return null;
   }
 
-  static int _idFromJson(dynamic v) =>
-      v is int ? v : (v as num).toInt();
+  static int _idFromJson(dynamic v) => v is int ? v : (v as num).toInt();
 
   static String _roleFromJson(Map<String, dynamic> json) {
     final r = json['role'];
@@ -59,12 +62,19 @@ class AuthUser {
         name: json['name'] as String? ?? '',
         email: json['email'] as String? ?? '',
         role: _roleFromJson(json),
-        branchId: json['branchId'] != null
-            ? _idFromJson(json['branchId'])
-            : null,
+        branchId:
+            json['branchId'] != null ? _idFromJson(json['branchId']) : null,
         branchName: json['branchName'] as String?,
-        branchPhone1: _branchPhoneFromJson(json, 'branchPhone1', 'BranchPhone1'),
-        branchPhone2: _branchPhoneFromJson(json, 'branchPhone2', 'BranchPhone2'),
+        branchPhone1:
+            _branchPhoneFromJson(json, 'branchPhone1', 'BranchPhone1'),
+        branchPhone2:
+            _branchPhoneFromJson(json, 'branchPhone2', 'BranchPhone2'),
+        branchLatitude: _doubleFromJson(
+          json['branchLatitude'] ?? json['BranchLatitude'],
+        ),
+        branchLongitude: _doubleFromJson(
+          json['branchLongitude'] ?? json['BranchLongitude'],
+        ),
         phone: _emptyToNull(json['phone'] as String?),
         profileImageUrl: _emptyToNull(json['profileImageUrl'] as String?),
       );
@@ -85,6 +95,11 @@ class AuthUser {
     return s;
   }
 
+  static double? _doubleFromJson(dynamic value) {
+    if (value is num) return value.toDouble();
+    return double.tryParse(value?.toString() ?? '');
+  }
+
   /// Respuesta de `GET/PUT /users/...` (`UserDto`).
   factory AuthUser.fromUserApi(Map<String, dynamic> json, AuthUser current) =>
       AuthUser(
@@ -98,10 +113,11 @@ class AuthUser {
         branchName: json['branchName'] as String? ?? current.branchName,
         branchPhone1: current.branchPhone1,
         branchPhone2: current.branchPhone2,
+        branchLatitude: current.branchLatitude,
+        branchLongitude: current.branchLongitude,
         phone: _emptyToNull(json['phone'] as String?) ?? current.phone,
-        profileImageUrl:
-            _emptyToNull(json['profileImageUrl'] as String?) ??
-                current.profileImageUrl,
+        profileImageUrl: _emptyToNull(json['profileImageUrl'] as String?) ??
+            current.profileImageUrl,
       );
 
   Map<String, dynamic> toJson() => {
@@ -113,6 +129,8 @@ class AuthUser {
         'branchName': branchName,
         'branchPhone1': branchPhone1 ?? '',
         'branchPhone2': branchPhone2 ?? '',
+        'branchLatitude': branchLatitude,
+        'branchLongitude': branchLongitude,
         'phone': phone ?? '',
         'profileImageUrl': profileImageUrl,
       };
@@ -126,6 +144,8 @@ class AuthUser {
     String? branchName,
     String? branchPhone1,
     String? branchPhone2,
+    double? branchLatitude,
+    double? branchLongitude,
     String? phone,
     String? profileImageUrl,
   }) =>
@@ -138,6 +158,8 @@ class AuthUser {
         branchName: branchName ?? this.branchName,
         branchPhone1: branchPhone1 ?? this.branchPhone1,
         branchPhone2: branchPhone2 ?? this.branchPhone2,
+        branchLatitude: branchLatitude ?? this.branchLatitude,
+        branchLongitude: branchLongitude ?? this.branchLongitude,
         phone: phone ?? this.phone,
         profileImageUrl: profileImageUrl ?? this.profileImageUrl,
       );

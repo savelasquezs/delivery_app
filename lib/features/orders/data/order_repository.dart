@@ -20,72 +20,29 @@ class OrderRepository {
     );
   }
 
-  /// Domicilios en **Tomado** o **En preparación** (unión de dos búsquedas; sin duplicados).
-  /// Si un id apareciera en ambas, se conserva [OrderStatus.inPreparation].
-  Future<List<Order>> getPreparationAndTakenOrders({int? branchId}) async {
-    final results = await Future.wait([
-      _searchOrders(type: 'delivery', status: 'taken', branchId: branchId),
-      _searchOrders(
-        type: 'delivery',
-        status: 'in_preparation',
-        branchId: branchId,
-      ),
-    ]);
-    return _mergeOrdersByIdPreferInPreparation(results[0], results[1]);
-  }
-
-  Future<List<Order>> _searchOrders({
-    required String type,
-    required String status,
-    int? branchId,
+  /// El backend solo devuelve estos pedidos si la ubicación está dentro del
+  /// radio configurado para la sucursal del domiciliario autenticado.
+  Future<List<Order>> getPreparationAndTakenOrders({
+    required double latitude,
+    required double longitude,
   }) async {
-    final body = <String, dynamic>{
-      'type': type,
-      'status': status,
-      'page': 1,
-      'pageSize': 100,
-    };
-    if (branchId != null) body['branchId'] = branchId;
-
     return _client.post<List<Order>>(
-      ApiConstants.ordersSearch,
-      data: body,
-      fromJson: (data) {
-        final list = data is List
-            ? data
-            : (data as Map<String, dynamic>)['items'] as List? ?? [];
-        return list
-            .map((e) => Order.fromJson(e as Map<String, dynamic>))
-            .toList();
-      },
+      ApiConstants.deliveryPreparationNearBranch,
+      data: {'latitude': latitude, 'longitude': longitude},
+      fromJson: _parseOrderList,
     );
-  }
-
-  static List<Order> _mergeOrdersByIdPreferInPreparation(
-    List<Order> a,
-    List<Order> b,
-  ) {
-    final map = <int, Order>{};
-    for (final o in a) {
-      map[o.id] = o;
-    }
-    for (final o in b) {
-      final existing = map[o.id];
-      if (existing == null) {
-        map[o.id] = o;
-      } else if (o.status == OrderStatus.inPreparation) {
-        map[o.id] = o;
-      }
-    }
-    return map.values.toList();
   }
 
   static List<Order> _parseOrderList(dynamic data) {
     if (data is List) {
-      return data.map((e) => Order.fromJson(e as Map<String, dynamic>)).toList();
+      return data
+          .map((e) => Order.fromJson(e as Map<String, dynamic>))
+          .toList();
     }
     final items = (data as Map<String, dynamic>)['items'] as List?;
-    return (items ?? []).map((e) => Order.fromJson(e as Map<String, dynamic>)).toList();
+    return (items ?? [])
+        .map((e) => Order.fromJson(e as Map<String, dynamic>))
+        .toList();
   }
 
   Future<PagedOrders> getAssignedOrders({
@@ -109,14 +66,15 @@ class OrderRepository {
     if (branchId != null) params['BranchId'] = branchId;
     if (status != null) params['Status'] = status;
     if (type != null) params['Type'] = type;
-    if (includeOnsiteActiveInHistory) params['IncludeOnsiteActiveInHistory'] = true;
+    if (includeOnsiteActiveInHistory) {
+      params['IncludeOnsiteActiveInHistory'] = true;
+    }
     if (neighborhoodId != null) params['NeighborhoodId'] = neighborhoodId;
 
     return _client.get<PagedOrders>(
       ApiConstants.deliveryAssigned(deliverymanId),
       queryParameters: params,
-      fromJson: (data) =>
-          PagedOrders.fromJson(data as Map<String, dynamic>),
+      fromJson: (data) => PagedOrders.fromJson(data as Map<String, dynamic>),
     );
   }
 
@@ -185,13 +143,16 @@ class OrderRepository {
       'toDate': toDate,
     };
     if (status != null) params['status'] = status;
-    if (includeOnsiteActiveInHistory) params['includeOnsiteActiveInHistory'] = true;
+    if (includeOnsiteActiveInHistory) {
+      params['includeOnsiteActiveInHistory'] = true;
+    }
 
     return _client.get<List<BranchSummary>>(
       ApiConstants.deliveryAssignedBranchSummary(deliverymanId),
       queryParameters: params,
       fromJson: (data) {
-        final list = data is List ? data : (data as Map)['items'] as List? ?? [];
+        final list =
+            data is List ? data : (data as Map)['items'] as List? ?? [];
         return list
             .map((e) => BranchSummary.fromJson(e as Map<String, dynamic>))
             .toList();

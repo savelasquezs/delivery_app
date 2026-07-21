@@ -11,6 +11,7 @@ import '../../../core/widgets/empty_state_widget.dart';
 import '../../../core/widgets/error_banner.dart';
 import '../../../core/widgets/confirm_password_dialog.dart';
 import '../../orders/models/order_models.dart';
+import '../data/branch_presence_verifier.dart';
 import 'available_notifier.dart';
 
 Future<void> _openOrderDestinationMap(BuildContext context, Order order) async {
@@ -74,8 +75,7 @@ class _AvailableScreenState extends ConsumerState<AvailableScreen>
   void _toggleNeighborhoodSelection(List<int> orderIds) {
     if (orderIds.isEmpty) return;
     setState(() {
-      final allSelected =
-          orderIds.every((id) => _selectedIds.contains(id));
+      final allSelected = orderIds.every((id) => _selectedIds.contains(id));
       if (allSelected) {
         for (final id in orderIds) {
           _selectedIds.remove(id);
@@ -135,6 +135,7 @@ class _AvailableScreenState extends ConsumerState<AvailableScreen>
   Widget build(BuildContext context) {
     final state = ref.watch(availableNotifierProvider);
     final isAvailableTab = _tabController.index == 0;
+    final preparationEmpty = _preparationEmptyContent(state.branchPresence);
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -167,10 +168,9 @@ class _AvailableScreenState extends ConsumerState<AvailableScreen>
                   orders: state.preparationOrders,
                   isLoading: state.isLoadingPrep,
                   error: state.errorPrep,
-                  emptyIcon: Icons.restaurant_outlined,
-                  emptyTitle: 'Sin pedidos en preparación',
-                  emptySubtitle:
-                      'Los domicilios en Tomado o En preparación (como en cocina)\naparecerán aquí, del más al menos urgente',
+                  emptyIcon: preparationEmpty.icon,
+                  emptyTitle: preparationEmpty.title,
+                  emptySubtitle: preparationEmpty.subtitle,
                   groupByUrgencyAnchor: true,
                   selectedIds: const {},
                   allowSelection: false,
@@ -190,6 +190,73 @@ class _AvailableScreenState extends ConsumerState<AvailableScreen>
             )
           : null,
     );
+  }
+}
+
+class _PreparationEmptyContent {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+
+  const _PreparationEmptyContent(this.icon, this.title, this.subtitle);
+}
+
+_PreparationEmptyContent _preparationEmptyContent(
+  BranchPresenceResult presence,
+) {
+  switch (presence.status) {
+    case BranchPresenceStatus.outside:
+      final distance = presence.distanceMeters?.round();
+      return _PreparationEmptyContent(
+        Icons.location_off_outlined,
+        'Debes estar en la sucursal',
+        distance == null
+            ? 'Estos pedidos solo se muestran cuando tu ubicación está dentro de la sucursal.'
+            : 'Estás aproximadamente a $distance m de la sucursal. Acércate y vuelve a actualizar.',
+      );
+    case BranchPresenceStatus.branchLocationMissing:
+      return const _PreparationEmptyContent(
+        Icons.wrong_location_outlined,
+        'Ubicación de sucursal pendiente',
+        'Un administrador debe configurar las coordenadas de la sucursal.',
+      );
+    case BranchPresenceStatus.locationServicesDisabled:
+      return const _PreparationEmptyContent(
+        Icons.gps_off_outlined,
+        'Activa la ubicación',
+        'El GPS debe estar encendido para verificar que estás en la sucursal.',
+      );
+    case BranchPresenceStatus.permissionDenied:
+      return const _PreparationEmptyContent(
+        Icons.location_disabled_outlined,
+        'Permiso de ubicación requerido',
+        'Autoriza la ubicación y vuelve a actualizar para ver estos pedidos.',
+      );
+    case BranchPresenceStatus.permissionDeniedForever:
+      return const _PreparationEmptyContent(
+        Icons.location_disabled_outlined,
+        'Habilita la ubicación en ajustes',
+        'El permiso está bloqueado. Habilítalo desde los ajustes de la aplicación.',
+      );
+    case BranchPresenceStatus.locationUnavailable:
+      return const _PreparationEmptyContent(
+        Icons.gps_not_fixed_outlined,
+        'No pudimos verificar tu ubicación',
+        'Busca una zona con señal GPS y vuelve a actualizar.',
+      );
+    case BranchPresenceStatus.initial:
+    case BranchPresenceStatus.checking:
+      return const _PreparationEmptyContent(
+        Icons.my_location_outlined,
+        'Verificando ubicación',
+        'Espera un momento mientras confirmamos que estás en la sucursal.',
+      );
+    case BranchPresenceStatus.inside:
+      return const _PreparationEmptyContent(
+        Icons.restaurant_outlined,
+        'Sin pedidos en preparación',
+        'Los domicilios en Tomado o En preparación aparecerán aquí, del más al menos urgente.',
+      );
   }
 }
 
@@ -431,7 +498,8 @@ class _NeighborhoodGroupState extends State<_NeighborhoodGroup> {
         child: Column(
           children: [
             Container(
-              padding: const EdgeInsets.only(left: 4, right: 0, top: 4, bottom: 4),
+              padding:
+                  const EdgeInsets.only(left: 4, right: 0, top: 4, bottom: 4),
               decoration: BoxDecoration(
                 color: AppColors.primaryContainer,
                 borderRadius: BorderRadius.vertical(
@@ -471,8 +539,7 @@ class _NeighborhoodGroupState extends State<_NeighborhoodGroup> {
                               padding: const EdgeInsets.symmetric(
                                   horizontal: 8, vertical: 2),
                               decoration: BoxDecoration(
-                                color:
-                                    AppColors.primary.withValues(alpha: 0.2),
+                                color: AppColors.primary.withValues(alpha: 0.2),
                                 borderRadius: BorderRadius.circular(10),
                               ),
                               child: Text(
@@ -494,11 +561,9 @@ class _NeighborhoodGroupState extends State<_NeighborhoodGroup> {
                       widget.onToggleNeighborhood != null) ...[
                     Builder(
                       builder: (context) {
-                        final ids =
-                            widget.orders.map((o) => o.id).toList();
+                        final ids = widget.orders.map((o) => o.id).toList();
                         final allSelected = ids.isNotEmpty &&
-                            ids.every(
-                                (id) => widget.selectedIds.contains(id));
+                            ids.every((id) => widget.selectedIds.contains(id));
                         return IconButton(
                           padding: EdgeInsets.zero,
                           constraints: const BoxConstraints(
@@ -509,8 +574,7 @@ class _NeighborhoodGroupState extends State<_NeighborhoodGroup> {
                           tooltip: allSelected
                               ? 'Quitar todos de este barrio'
                               : 'Seleccionar todos de este barrio',
-                          onPressed: () =>
-                              widget.onToggleNeighborhood!(ids),
+                          onPressed: () => widget.onToggleNeighborhood!(ids),
                           icon: Icon(
                             Icons.done_all,
                             size: 22,
@@ -530,8 +594,7 @@ class _NeighborhoodGroupState extends State<_NeighborhoodGroup> {
                     ),
                     splashRadius: 20,
                     tooltip: _expanded ? 'Contraer' : 'Expandir',
-                    onPressed: () =>
-                        setState(() => _expanded = !_expanded),
+                    onPressed: () => setState(() => _expanded = !_expanded),
                     icon: AnimatedRotation(
                       turns: _expanded ? 0 : -0.5,
                       duration: const Duration(milliseconds: 200),
@@ -558,8 +621,7 @@ class _NeighborhoodGroupState extends State<_NeighborhoodGroup> {
                         _CompactAvailableOrderTile(
                           order: order,
                           now: DateTime.now(),
-                          isSelected:
-                              widget.selectedIds.contains(order.id),
+                          isSelected: widget.selectedIds.contains(order.id),
                           allowSelection: widget.allowSelection,
                           onToggle: () => widget.onToggle(order.id),
                           onOpenMap: () =>
@@ -606,8 +668,7 @@ class _CompactAvailableOrderTile extends StatelessWidget {
     final tier = urgencyTierForOrder(order, now);
     final strip = _stripColor(tier);
     final fill = _fillColor(tier);
-    final borderColor =
-        isSelected ? AppColors.primary : _borderColor(tier);
+    final borderColor = isSelected ? AppColors.primary : _borderColor(tier);
     final borderW = isSelected ? 2.5 : 1.0;
 
     final addr = order.displayAddressLine ?? 'Sin dirección';
@@ -708,10 +769,8 @@ class _CompactAvailableOrderTile extends StatelessWidget {
       };
 
   Color _borderColor(DeliveryUrgencyTier t) => switch (t) {
-        DeliveryUrgencyTier.green =>
-          AppColors.success.withValues(alpha: 0.65),
-        DeliveryUrgencyTier.orange =>
-          AppColors.warning.withValues(alpha: 0.75),
+        DeliveryUrgencyTier.green => AppColors.success.withValues(alpha: 0.65),
+        DeliveryUrgencyTier.orange => AppColors.warning.withValues(alpha: 0.75),
         DeliveryUrgencyTier.orangeRed =>
           const Color(0xFFFF6B35).withValues(alpha: 0.85),
         DeliveryUrgencyTier.red => AppColors.error.withValues(alpha: 0.85),
@@ -720,8 +779,7 @@ class _CompactAvailableOrderTile extends StatelessWidget {
   Color _fillColor(DeliveryUrgencyTier t) => switch (t) {
         DeliveryUrgencyTier.green =>
           AppColors.accentContainer.withValues(alpha: 0.35),
-        DeliveryUrgencyTier.orange =>
-          AppColors.warning.withValues(alpha: 0.08),
+        DeliveryUrgencyTier.orange => AppColors.warning.withValues(alpha: 0.08),
         DeliveryUrgencyTier.orangeRed =>
           const Color(0xFFFF6B35).withValues(alpha: 0.12),
         DeliveryUrgencyTier.red => AppColors.error.withValues(alpha: 0.12),

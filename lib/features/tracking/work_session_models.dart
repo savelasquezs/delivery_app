@@ -52,6 +52,8 @@ class DeliveryWorkSession {
   final int id;
   final int deliverymanId;
   final int branchId;
+  final double? branchLatitude;
+  final double? branchLongitude;
   final String deviceInstallationId;
   final String status;
   final DateTime startedAt;
@@ -63,6 +65,8 @@ class DeliveryWorkSession {
     required this.id,
     required this.deliverymanId,
     required this.branchId,
+    this.branchLatitude,
+    this.branchLongitude,
     required this.deviceInstallationId,
     required this.status,
     required this.startedAt,
@@ -78,6 +82,8 @@ class DeliveryWorkSession {
         id: (json['id'] as num).toInt(),
         deliverymanId: (json['deliverymanId'] as num).toInt(),
         branchId: (json['branchId'] as num).toInt(),
+        branchLatitude: _optionalDouble(json['branchLatitude']),
+        branchLongitude: _optionalDouble(json['branchLongitude']),
         deviceInstallationId: json['deviceInstallationId'] as String? ?? '',
         status: json['status'] as String? ?? '',
         startedAt: DateTime.parse(json['startedAt'] as String).toUtc(),
@@ -93,6 +99,8 @@ class DeliveryWorkSession {
         'id': id,
         'deliverymanId': deliverymanId,
         'branchId': branchId,
+        'branchLatitude': branchLatitude,
+        'branchLongitude': branchLongitude,
         'deviceInstallationId': deviceInstallationId,
         'status': status,
         'startedAt': startedAt.toIso8601String(),
@@ -100,4 +108,9 @@ class DeliveryWorkSession {
         'lastCommunicationAt': lastCommunicationAt.toIso8601String(),
         'tracking': tracking.toJson(),
       };
+}
+
+double? _optionalDouble(dynamic value) {
+  if (value is num) return value.toDouble();
+  return double.tryParse(value?.toString() ?? '');
 }

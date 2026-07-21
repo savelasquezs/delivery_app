@@ -45,6 +45,8 @@ abstract class ApiConstants {
 
   // Orders delivery
   static const String deliveryAvailable = '/orders/delivery/available';
+  static const String deliveryPreparationNearBranch =
+      '/orders/delivery/preparation/near-branch';
   static const String ordersSearch = '/orders/search';
   static const String deliveryReady = '/orders/delivery/ready';
   static const String deliverySelfAssign = '/orders/delivery/self-assign';

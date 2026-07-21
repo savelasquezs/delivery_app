@@ -7,6 +7,8 @@ void main() {
       'id': 12,
       'deliverymanId': 4,
       'branchId': 2,
+      'branchLatitude': 4.60971,
+      'branchLongitude': -74.08175,
       'deviceInstallationId': 'device-a',
       'status': 'active',
       'startedAt': '2026-07-20T18:00:00Z',
@@ -26,6 +28,8 @@ void main() {
 
     expect(session.isActive, isTrue);
     expect(session.autoCloseAt, DateTime.utc(2026, 7, 21, 2));
+    expect(session.branchLatitude, 4.60971);
+    expect(session.branchLongitude, -74.08175);
     expect(session.tracking.lightIntervalSeconds, 300);
     expect(session.tracking.activeIntervalSeconds, 30);
     expect(session.tracking.locationRetentionDays, 3);
