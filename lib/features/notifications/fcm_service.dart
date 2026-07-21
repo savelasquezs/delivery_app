@@ -103,6 +103,8 @@ const AndroidNotificationChannel _orderChannel = AndroidNotificationChannel(
 class FcmService {
   static final _localNotifications = FlutterLocalNotificationsPlugin();
   static bool _initialized = false;
+  static DioClient? _authenticatedClient;
+  static StreamSubscription<String>? _tokenRefreshSubscription;
 
   /// Inicializa Firebase + FCM + canal local. Llamar desde `main()` antes de `runApp`.
   static Future<void> initialize() async {
@@ -173,8 +175,32 @@ class FcmService {
 
   /// Registra el token en el backend.
   static Future<void> registerToken(DioClient client) async {
+    _authenticatedClient = client;
+    _listenForTokenRefresh();
     final token = await getToken();
     if (token == null) return;
+    await _registerKnownToken(client, token);
+  }
+
+  static void _listenForTokenRefresh() {
+    if (_tokenRefreshSubscription != null) return;
+    _tokenRefreshSubscription =
+        FirebaseMessaging.instance.onTokenRefresh.listen(
+      (token) {
+        final client = _authenticatedClient;
+        if (client == null) return;
+        unawaited(_registerKnownToken(client, token));
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        debugPrint('FCM: error renovando token: $error');
+      },
+    );
+  }
+
+  static Future<void> _registerKnownToken(
+    DioClient client,
+    String token,
+  ) async {
     try {
       await client.post<void>(
         ApiConstants.myDeviceToken,
@@ -192,16 +218,20 @@ class FcmService {
   /// Elimina el token del backend (al cerrar sesión).
   static Future<void> unregisterToken(DioClient client) async {
     final token = await getToken();
-    if (token == null) return;
-    try {
-      await client.delete<void>(
-        ApiConstants.myDeviceToken,
-        data: {'token': token},
-      );
-      debugPrint('FCM: token eliminado del backend');
-    } catch (e) {
-      debugPrint('FCM: error eliminando token: $e');
+    if (token != null) {
+      try {
+        await client.delete<void>(
+          ApiConstants.myDeviceToken,
+          data: {'token': token},
+        );
+        debugPrint('FCM: token eliminado del backend');
+      } catch (e) {
+        debugPrint('FCM: error eliminando token: $e');
+      }
     }
+    _authenticatedClient = null;
+    await _tokenRefreshSubscription?.cancel();
+    _tokenRefreshSubscription = null;
   }
 
   static void _showForegroundNotification(RemoteMessage message) {

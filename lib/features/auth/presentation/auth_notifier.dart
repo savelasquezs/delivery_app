@@ -91,6 +91,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
         workSession: session,
         trackingActive: await LocationTrackingService.isRunning,
       );
+      await _registerFcmTokenSafely();
     } catch (e) {
       await _endLocalSession(errorMessage: e.toString());
     }
@@ -125,6 +126,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
         workSession: session,
         trackingActive: await LocationTrackingService.isRunning,
       );
+      await _registerFcmTokenSafely();
     } catch (e) {
       await _endLocalSession(errorMessage: e.toString());
     }
@@ -147,7 +149,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
       try {
         final notificationsGranted = await FcmService.requestPermission();
         if (notificationsGranted) {
-          await FcmService.registerToken(_client);
+          await _registerFcmTokenSafely();
         }
       } catch (_) {}
     } catch (e) {
@@ -176,6 +178,14 @@ class AuthNotifier extends StateNotifier<AuthState> {
       }
     }
     return session;
+  }
+
+  Future<void> _registerFcmTokenSafely() async {
+    try {
+      await FcmService.registerToken(_client);
+    } catch (_) {
+      // El push es complementario: un fallo de Firebase no debe cerrar sesión.
+    }
   }
 
   Future<void> logout() async {
