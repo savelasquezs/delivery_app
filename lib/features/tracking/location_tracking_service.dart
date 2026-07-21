@@ -446,7 +446,7 @@ class LocationTrackingService {
       ),
       foregroundTaskOptions: ForegroundTaskOptions(
         eventAction: ForegroundTaskEventAction.repeat(300000),
-        autoRunOnBoot: false,
+        autoRunOnBoot: true,
         allowWakeLock: true,
         allowAutoRestart: true,
       ),
@@ -609,7 +609,7 @@ class LocationTrackingService {
     final result = await FlutterForegroundTask.updateService(
       foregroundTaskOptions: ForegroundTaskOptions(
         eventAction: ForegroundTaskEventAction.repeat(safeInterval * 1000),
-        autoRunOnBoot: false,
+        autoRunOnBoot: true,
         allowWakeLock: true,
         allowAutoRestart: true,
       ),

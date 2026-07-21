@@ -31,4 +31,31 @@ void main() {
     expect(session.tracking.locationRetentionDays, 3);
     expect(session.tracking.incidentRetentionDays, 15);
   });
+
+  test('normalizes Colombia offset cutoff to the same UTC instant', () {
+    final session = DeliveryWorkSession.fromJson({
+      'id': 12,
+      'deliverymanId': 4,
+      'branchId': 2,
+      'deviceInstallationId': 'device-a',
+      'status': 'active',
+      'startedAt': '2026-07-20T13:00:00-05:00',
+      'autoCloseAt': '2026-07-20T21:00:00-05:00',
+      'lastCommunicationAt': '2026-07-20T13:00:00-05:00',
+      'tracking': {
+        'autoCloseTime': '21:00:00',
+        'lightIntervalSeconds': 300,
+        'activeIntervalSeconds': 30,
+        'stayThresholdMinutes': 10,
+        'stayRadiusMeters': 50,
+        'allowedDistanceMeters': 50,
+        'locationRetentionDays': 3,
+        'incidentRetentionDays': 15,
+      },
+    });
+
+    expect(session.startedAt, DateTime.utc(2026, 7, 20, 18));
+    expect(session.autoCloseAt, DateTime.utc(2026, 7, 21, 2));
+    expect(session.toJson()['autoCloseAt'], '2026-07-21T02:00:00.000Z');
+  });
 }
