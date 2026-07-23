@@ -15,9 +15,13 @@ class AuthRepository {
 
   Future<AuthUser> login(LoginRequest request) async {
     try {
+      final installationId = await _storage.getOrCreateInstallationId();
       final response = await _client.post<Map<String, dynamic>>(
         ApiConstants.login,
-        data: request.toJson(),
+        data: {
+          ...request.toJson(),
+          'deviceInstallationId': installationId,
+        },
         fromJson: (data) => data as Map<String, dynamic>,
       );
       final loginResponse = LoginResponse.fromJson(response);
@@ -81,7 +85,22 @@ class AuthRepository {
     }
   }
 
-  Future<void> logout() => _storage.clearAll();
+  Future<void> logout() async {
+    final refreshToken = await _storage.getRefreshToken();
+    try {
+      if (refreshToken != null && refreshToken.isNotEmpty) {
+        await _client.post<void>(
+          ApiConstants.logout,
+          data: {'refreshToken': refreshToken},
+          fromJson: (_) {},
+        );
+      }
+    } finally {
+      await _storage.clearAll();
+    }
+  }
+
+  Future<void> clearLocalSession() => _storage.clearAll();
 }
 
 final authRepositoryProvider = Provider<AuthRepository>((ref) {

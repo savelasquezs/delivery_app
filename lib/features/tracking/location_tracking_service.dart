@@ -9,6 +9,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
+import '../../core/auth/session_replacement.dart';
 import 'location_tracking_policy.dart';
 
 const _kAuthToken = 'sa_loc_auth_token';
@@ -68,6 +69,16 @@ Future<void> _recordDeviceEvent(
     await _trackingDio(baseUrl, token)
         .post('/deliverymen/device-event', data: payload);
   } on DioException catch (error) {
+    if (isSessionReplacedResponse(
+      error.response?.statusCode,
+      error.response?.data,
+    )) {
+      await LocationTrackingService.stopTracking(
+        recordEvent: false,
+        discardPending: true,
+      );
+      return;
+    }
     if (!_isPermanentClientErrorStatus(error.response?.statusCode)) {
       await _enqueueDeviceEvent(payload);
     }
@@ -98,6 +109,16 @@ Future<void> _flushDeviceEvents(String token, String baseUrl) async {
     try {
       await dio.post('/deliverymen/device-event', data: payload);
     } on DioException catch (error) {
+      if (isSessionReplacedResponse(
+        error.response?.statusCode,
+        error.response?.data,
+      )) {
+        await LocationTrackingService.stopTracking(
+          recordEvent: false,
+          discardPending: true,
+        );
+        return;
+      }
       if (!_isPermanentClientErrorStatus(error.response?.statusCode)) {
         remaining.add(payload);
       }
@@ -317,6 +338,13 @@ class LocationTaskHandler extends TaskHandler {
       }
     } on DioException catch (error) {
       final status = error.response?.statusCode;
+      if (isSessionReplacedResponse(status, error.response?.data)) {
+        await LocationTrackingService.stopTracking(
+          recordEvent: false,
+          discardPending: true,
+        );
+        return;
+      }
       final disposition = locationFailureDisposition(status);
       if (disposition == LocationFailureDisposition.discardPoint) {
         debugPrint(
@@ -368,6 +396,13 @@ class LocationTaskHandler extends TaskHandler {
         syncedCount++;
       } on DioException catch (error) {
         final status = error.response?.statusCode;
+        if (isSessionReplacedResponse(status, error.response?.data)) {
+          await LocationTrackingService.stopTracking(
+            recordEvent: false,
+            discardPending: true,
+          );
+          return syncedCount;
+        }
         if (locationFailureDisposition(status) ==
             LocationFailureDisposition.retryPoint) {
           remaining.add(payload);
@@ -657,12 +692,15 @@ class LocationTrackingService {
     }
   }
 
-  static Future<void> stopTracking() async {
+  static Future<void> stopTracking({
+    bool recordEvent = true,
+    bool discardPending = false,
+  }) async {
     final expectedActive = await FlutterForegroundTask.getData<bool>(
           key: _kTrackingExpectedActive,
         ) ??
         false;
-    if (expectedActive) {
+    if (expectedActive && recordEvent) {
       await _recordDeviceEvent('tracking_stopped');
     }
     await FlutterForegroundTask.saveData(
@@ -693,6 +731,9 @@ class LocationTrackingService {
     await FlutterForegroundTask.removeData(key: _kBatteryLowReported);
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_kOfflineQueue);
+    if (discardPending) {
+      await prefs.remove(_kDeviceEventQueue);
+    }
     await prefs.remove(_kUnexpectedStopReportedSession);
   }
 

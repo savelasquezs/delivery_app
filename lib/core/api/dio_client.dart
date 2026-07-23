@@ -5,6 +5,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../auth/auth_session_bridge.dart';
+import '../auth/session_replacement.dart';
 import '../../features/tracking/location_tracking_service.dart';
 import '../storage/secure_storage.dart';
 import 'api_constants.dart';
@@ -14,7 +15,7 @@ import 'refresh_access_result.dart';
 class DioClient {
   final Dio _dio;
   final SecureStorage _storage;
-  final void Function()? onSessionInvalidated;
+  final void Function(String? reason)? onSessionInvalidated;
 
   /// Una sola renovación a la vez (el backend rota el refresh token al usarlo).
   Completer<RefreshAccessResult>? _refreshCompleter;
@@ -69,6 +70,24 @@ class DioClient {
     DioException err,
     ErrorInterceptorHandler handler,
   ) async {
+    if (isSessionReplacedResponse(
+      err.response?.statusCode,
+      err.response?.data,
+    )) {
+      final reason = sessionReplacementMessage(err.response?.data) ??
+          sessionReplacedMessage;
+      await _storage.clearAll();
+      onSessionInvalidated?.call(reason);
+      return handler.next(
+        DioException(
+          requestOptions: err.requestOptions,
+          response: err.response,
+          type: DioExceptionType.badResponse,
+          error: ApiException(reason, statusCode: 401),
+        ),
+      );
+    }
+
     if (_isAuthPath(err.requestOptions)) {
       final apiError = _mapDioError(err);
       return handler.next(
@@ -125,8 +144,7 @@ class DioClient {
     final mapped = _mapDioError(original);
     if (mapped.message ==
             'No se pudo conectar con el servidor. Verifica tu conexión y la URL del API en .env' ||
-        mapped.message ==
-            'Tiempo de espera agotado. Verifica tu conexión' ||
+        mapped.message == 'Tiempo de espera agotado. Verifica tu conexión' ||
         mapped.message == 'Sin conexión a internet') {
       return mapped;
     }
@@ -135,8 +153,7 @@ class DioClient {
     );
   }
 
-  bool _isRetry(RequestOptions options) =>
-      options.extra['_retry'] == true;
+  bool _isRetry(RequestOptions options) => options.extra['_retry'] == true;
 
   static Map<String, dynamic>? _tryParseJsonObject(dynamic data) {
     if (data == null) return null;
@@ -153,8 +170,9 @@ class DioClient {
 
   /// Acepta camelCase o PascalCase (según serialización del API).
   static String? _readStringKey(Map<String, dynamic> map, String camelKey) {
-    final pascal =
-        camelKey.isEmpty ? camelKey : '${camelKey[0].toUpperCase()}${camelKey.substring(1)}';
+    final pascal = camelKey.isEmpty
+        ? camelKey
+        : '${camelKey[0].toUpperCase()}${camelKey.substring(1)}';
     final v = map[camelKey] ?? map[pascal];
     if (v is String && v.isNotEmpty) return v;
     return null;
@@ -163,7 +181,8 @@ class DioClient {
   static String _extractErrorMessage(dynamic data) {
     final map = _tryParseJsonObject(data);
     if (map != null) {
-      final m = map['message'] ?? map['Message'] ?? map['title'] ?? map['Title'];
+      final m =
+          map['message'] ?? map['Message'] ?? map['title'] ?? map['Title'];
       if (m is String) return m;
     }
     if (data is String) return data;
@@ -205,7 +224,7 @@ class DioClient {
             accessToken == null ||
             accessToken.isEmpty) {
           await _storage.clearAll();
-          onSessionInvalidated?.call();
+          onSessionInvalidated?.call(null);
           completer.complete(const RefreshAccessSessionEnded());
           return;
         }
@@ -232,8 +251,7 @@ class DioClient {
           return;
         }
         final newToken = _readStringKey(map, 'token');
-        final newRefresh =
-            _readStringKey(map, 'refreshToken') ?? refreshToken;
+        final newRefresh = _readStringKey(map, 'refreshToken') ?? refreshToken;
         if (newToken == null || newToken.isEmpty) {
           completer.complete(const RefreshAccessTransientFailure());
           return;
@@ -252,8 +270,14 @@ class DioClient {
           );
         }
         if (_refreshFailureShouldLogout(e)) {
+          final replacementReason = isSessionReplacedResponse(
+            e.response?.statusCode,
+            e.response?.data,
+          )
+              ? sessionReplacementMessage(e.response?.data)
+              : null;
           await _storage.clearAll();
-          onSessionInvalidated?.call();
+          onSessionInvalidated?.call(replacementReason);
           completer.complete(const RefreshAccessSessionEnded());
         } else {
           completer.complete(const RefreshAccessTransientFailure());
@@ -282,7 +306,8 @@ class DioClient {
     if (err.type == DioExceptionType.connectionTimeout ||
         err.type == DioExceptionType.receiveTimeout ||
         err.type == DioExceptionType.sendTimeout) {
-      return const ApiException('Tiempo de espera agotado. Verifica tu conexión');
+      return const ApiException(
+          'Tiempo de espera agotado. Verifica tu conexión');
     }
     if (err.type == DioExceptionType.connectionError) {
       return const ApiException(
@@ -298,7 +323,8 @@ class DioClient {
     Map<String, dynamic>? queryParameters,
     T Function(dynamic)? fromJson,
   }) async {
-    final response = await _dio.get<dynamic>(path, queryParameters: queryParameters);
+    final response =
+        await _dio.get<dynamic>(path, queryParameters: queryParameters);
     return fromJson != null ? fromJson(response.data) : response.data as T;
   }
 
@@ -308,7 +334,8 @@ class DioClient {
     T Function(dynamic)? fromJson,
     Options? options,
   }) async {
-    final response = await _dio.post<dynamic>(path, data: data, options: options);
+    final response =
+        await _dio.post<dynamic>(path, data: data, options: options);
     return fromJson != null ? fromJson(response.data) : response.data as T;
   }
 

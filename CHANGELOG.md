@@ -2,6 +2,12 @@
 
 El número de build (`+N` en `pubspec.yaml`) debe coincidir con `buildNumber` en `senorArrozFront/public/delivery-app-release.json` al publicar un APK.
 
+## Próxima versión
+
+- El inicio de sesión más reciente reemplaza la sesión de domiciliario de otro dispositivo.
+- El celular reemplazado detiene el seguimiento GPS y muestra el motivo al volver a la app.
+- El login y la jornada quedan vinculados al identificador seguro de instalación.
+
 ## [1.2.1] — build 5 — 2026-04-27
 
 ### Añadido

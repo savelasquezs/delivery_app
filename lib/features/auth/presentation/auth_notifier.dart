@@ -67,8 +67,8 @@ class AuthNotifier extends StateNotifier<AuthState> {
     super.dispose();
   }
 
-  void onSessionInvalidatedByApi() {
-    unawaited(_endLocalSession());
+  void onSessionInvalidatedByApi(String? reason) {
+    unawaited(_endLocalSession(errorMessage: reason));
   }
 
   void onWorkSessionChangedByPush() {
@@ -203,9 +203,14 @@ class AuthNotifier extends StateNotifier<AuthState> {
   }
 
   Future<void> _endLocalSession({String? errorMessage}) async {
-    await LocationTrackingService.stopTracking();
+    final wasReplaced =
+        errorMessage?.toLowerCase().contains('otro dispositivo') == true;
+    await LocationTrackingService.stopTracking(
+      recordEvent: false,
+      discardPending: wasReplaced,
+    );
     await _workSessions.clearLocal();
-    await _repository.logout();
+    await _repository.clearLocalSession();
     state = AuthState(
       status:
           errorMessage == null ? AuthStatus.unauthenticated : AuthStatus.error,
