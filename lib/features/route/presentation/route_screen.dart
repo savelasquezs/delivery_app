@@ -252,7 +252,7 @@ class _RouteScreenState extends ConsumerState<RouteScreen> {
   Widget build(BuildContext context) {
     final state = ref.watch(routeNotifierProvider);
     final now = DateTime.now();
-    final nextOrder = selectNextRouteOrder(state.orders, now);
+    final displayOrders = prioritizeRouteOrdersForDisplay(state.orders, now);
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -270,35 +270,20 @@ class _RouteScreenState extends ConsumerState<RouteScreen> {
                       ref.read(routeNotifierProvider.notifier).load(),
                 ),
               ),
-            if (nextOrder != null)
-              SliverToBoxAdapter(
-                child: _NextDeliveryCard(
-                  order: nextOrder,
-                  now: now,
-                  onOpenMap: () => _openSingleOrderMap(nextOrder),
-                  onWhatsApp: _hasCustomerPhone(nextOrder)
-                      ? () => _openCustomerWhatsApp(nextOrder)
-                      : null,
-                  onCall: _hasCustomerPhone(nextOrder)
-                      ? () => _callCustomer(nextOrder)
-                      : null,
-                  onStatus: () => _changeStatus(nextOrder),
-                ),
-              ),
-            if (state.orders.isNotEmpty)
+            if (displayOrders.isNotEmpty)
               SliverToBoxAdapter(
                 child: _RouteSummaryBar(
-                  orders: state.orders,
-                  onOpenRoute: () => _openRouteInMaps(state.orders),
+                  orders: displayOrders,
+                  onOpenRoute: () => _openRouteInMaps(displayOrders),
                 ),
               ),
-            if (state.isLoading && state.orders.isEmpty)
+            if (state.isLoading && displayOrders.isEmpty)
               const SliverFillRemaining(
                 child: Center(
                   child: CircularProgressIndicator(color: AppColors.primary),
                 ),
               )
-            else if (state.orders.isEmpty && !state.isLoading)
+            else if (displayOrders.isEmpty && !state.isLoading)
               SliverFillRemaining(
                 child: EmptyStateWidget(
                   icon: Icons.route_outlined,
@@ -314,7 +299,8 @@ class _RouteScreenState extends ConsumerState<RouteScreen> {
                 sliver: SliverList(
                   delegate: SliverChildBuilderDelegate(
                     (context, index) {
-                      final order = state.orders[index];
+                      final order = displayOrders[index];
+                      final isNextDelivery = index == 0;
                       return Padding(
                         padding:
                             const EdgeInsets.only(bottom: AppTheme.spacingSm),
@@ -324,11 +310,22 @@ class _RouteScreenState extends ConsumerState<RouteScreen> {
                             _RouteReservationBanner(order: order, now: now),
                             OrderCard(
                               order: order,
+                              topContent: isNextDelivery
+                                  ? const _NextDeliveryMarker()
+                                  : null,
                               onTap: () => _openOrderDetail(order),
                               trailing: _OrderActions(
                                 order: order,
                                 onDetail: () => _openOrderDetail(order),
                                 onOpenMap: () => _openSingleOrderMap(order),
+                                onWhatsApp:
+                                    isNextDelivery && _hasCustomerPhone(order)
+                                        ? () => _openCustomerWhatsApp(order)
+                                        : null,
+                                onCall:
+                                    isNextDelivery && _hasCustomerPhone(order)
+                                        ? () => _callCustomer(order)
+                                        : null,
                                 onStatus: () => _changeStatus(order),
                                 onReprint: order.status == OrderStatus.onTheWay
                                     ? () => _reprintOrder(order)
@@ -340,7 +337,7 @@ class _RouteScreenState extends ConsumerState<RouteScreen> {
                         ),
                       );
                     },
-                    childCount: state.orders.length,
+                    childCount: displayOrders.length,
                   ),
                 ),
               ),
@@ -351,170 +348,35 @@ class _RouteScreenState extends ConsumerState<RouteScreen> {
   }
 }
 
-class _NextDeliveryCard extends StatelessWidget {
-  final Order order;
-  final DateTime now;
-  final VoidCallback onOpenMap;
-  final VoidCallback? onWhatsApp;
-  final VoidCallback? onCall;
-  final VoidCallback onStatus;
-
-  const _NextDeliveryCard({
-    required this.order,
-    required this.now,
-    required this.onOpenMap,
-    required this.onWhatsApp,
-    required this.onCall,
-    required this.onStatus,
-  });
+class _NextDeliveryMarker extends StatelessWidget {
+  const _NextDeliveryMarker();
 
   @override
   Widget build(BuildContext context) {
-    final isOnTheWay = order.status == OrderStatus.onTheWay;
-    final statusColor =
-        isOnTheWay ? AppColors.accentDark : AppColors.statusOnTheWay;
-    final statusLabel = isOnTheWay ? 'Entregado' : 'En camino';
-    final cashLabel = order.showYaPagoMessage
-        ? 'Ya pagó'
-        : 'Cobrar ${_currencyFormat.format(order.cashToCollectOnDelivery)}';
-    final reservationLabel = reservationLabelForOrder(order, now);
-    final address = order.displayAddressLine?.trim();
-    final neighborhood = order.displayNeighborhoodLabel?.trim();
-    final customerName = order.customer?.name.trim();
-    final locationLabel = [
-      if (neighborhood != null && neighborhood.isNotEmpty) neighborhood,
-      if (address != null && address.isNotEmpty) address,
-    ].join(' - ');
-
     return Container(
-      margin: const EdgeInsets.fromLTRB(
-        AppTheme.spacingMd,
-        AppTheme.spacingMd,
-        AppTheme.spacingMd,
-        0,
-      ),
-      padding: const EdgeInsets.all(AppTheme.spacingMd),
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
       decoration: BoxDecoration(
-        color: AppColors.cardElevated,
-        borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-        border: Border.all(color: AppColors.primary.withValues(alpha: 0.35)),
+        color: AppColors.primary.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+        border: Border.all(
+          color: AppColors.primary.withValues(alpha: 0.45),
+        ),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: const Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: AppColors.primary.withValues(alpha: 0.14),
-                  borderRadius: BorderRadius.circular(AppTheme.radiusSm),
-                ),
-                child: const Icon(
-                  Icons.near_me_outlined,
-                  size: 18,
-                  color: AppColors.primaryLight,
-                ),
-              ),
-              const SizedBox(width: AppTheme.spacingSm),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Siguiente entrega',
-                      style: TextStyle(
-                        color: AppColors.primaryLight,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      customerName != null && customerName.isNotEmpty
-                          ? customerName
-                          : 'Cliente sin nombre',
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                            color: AppColors.onBackground,
-                            fontWeight: FontWeight.w800,
-                          ),
-                    ),
-                    if (locationLabel.isNotEmpty) ...[
-                      const SizedBox(height: 4),
-                      Text(
-                        locationLabel,
-                        style: const TextStyle(
-                          color: AppColors.onCard,
-                          fontSize: 12,
-                        ),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              const SizedBox(width: AppTheme.spacingSm),
-              Text(
-                cashLabel,
-                style: TextStyle(
-                  color: order.showYaPagoMessage
-                      ? AppColors.accentLight
-                      : AppColors.primaryLight,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-            ],
+          Icon(
+            Icons.near_me_outlined,
+            size: 14,
+            color: AppColors.primaryLight,
           ),
-          if (reservationLabel != null) ...[
-            const SizedBox(height: AppTheme.spacingSm),
-            _ReservationChip(
-              label: reservationLabel,
-              state: reservationStateForOrder(order, now),
-            ),
-          ],
-          const SizedBox(height: AppTheme.spacingMd),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: [
-                CompactActionButton(
-                  icon: Icons.navigation_outlined,
-                  label: 'Ir',
-                  color: AppColors.primary,
-                  onTap: onOpenMap,
-                ),
-                const SizedBox(width: 8),
-                if (onWhatsApp != null) ...[
-                  CompactActionButton(
-                    icon: Icons.chat_outlined,
-                    label: 'WhatsApp',
-                    color: AppColors.accent,
-                    onTap: onWhatsApp,
-                  ),
-                  const SizedBox(width: 8),
-                ],
-                if (onCall != null) ...[
-                  CompactActionButton(
-                    icon: Icons.call_outlined,
-                    label: 'Llamar',
-                    color: AppColors.info,
-                    onTap: onCall,
-                  ),
-                  const SizedBox(width: 8),
-                ],
-                CompactActionButton(
-                  icon: isOnTheWay
-                      ? Icons.check_circle_outline
-                      : Icons.delivery_dining,
-                  label: statusLabel,
-                  color: statusColor,
-                  onTap: onStatus,
-                  filled: true,
-                ),
-              ],
+          SizedBox(width: 5),
+          Text(
+            'Siguiente entrega',
+            style: TextStyle(
+              color: AppColors.primaryLight,
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
             ),
           ),
         ],
@@ -692,6 +554,8 @@ class _OrderActions extends StatelessWidget {
   final Order order;
   final VoidCallback onDetail;
   final VoidCallback onOpenMap;
+  final VoidCallback? onWhatsApp;
+  final VoidCallback? onCall;
   final VoidCallback onStatus;
   final VoidCallback? onReprint;
   final bool reprintLoading;
@@ -700,6 +564,8 @@ class _OrderActions extends StatelessWidget {
     required this.order,
     required this.onDetail,
     required this.onOpenMap,
+    this.onWhatsApp,
+    this.onCall,
     required this.onStatus,
     this.onReprint,
     this.reprintLoading = false,
@@ -732,6 +598,24 @@ class _OrderActions extends StatelessWidget {
             onTap: onOpenMap,
           ),
           const SizedBox(width: 8),
+          if (onWhatsApp != null) ...[
+            CompactActionButton(
+              icon: Icons.chat_outlined,
+              label: 'WhatsApp',
+              color: AppColors.accent,
+              onTap: onWhatsApp,
+            ),
+            const SizedBox(width: 8),
+          ],
+          if (onCall != null) ...[
+            CompactActionButton(
+              icon: Icons.call_outlined,
+              label: 'Llamar',
+              color: AppColors.info,
+              onTap: onCall,
+            ),
+            const SizedBox(width: 8),
+          ],
           if (onReprint != null) ...[
             CompactActionButton(
               icon:

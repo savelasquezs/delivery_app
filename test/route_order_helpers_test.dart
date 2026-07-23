@@ -88,6 +88,50 @@ void main() {
     });
   });
 
+  group('prioritizeRouteOrdersForDisplay', () {
+    final now = DateTime.utc(2026, 6, 13, 18);
+
+    test('mueve solo el pedido prioritario al inicio', () {
+      final firstNormal = _order(id: 1);
+      final urgentReservation = _order(
+        id: 2,
+        reservedFor: now.add(const Duration(minutes: 15)),
+      );
+      final secondNormal = _order(id: 3);
+
+      final result = prioritizeRouteOrdersForDisplay(
+        [firstNormal, urgentReservation, secondNormal],
+        now,
+      );
+
+      expect(result.map((order) => order.id), [2, 1, 3]);
+    });
+
+    test('sin reservas conserva el orden original', () {
+      final result = prioritizeRouteOrdersForDisplay(
+        [_order(id: 3), _order(id: 1), _order(id: 2)],
+        now,
+      );
+
+      expect(result.map((order) => order.id), [3, 1, 2]);
+    });
+
+    test('cada pedido aparece una sola vez', () {
+      final first = _order(id: 1);
+      final urgentReservation = _order(
+        id: 2,
+        reservedFor: now.subtract(const Duration(minutes: 5)),
+      );
+
+      final result = prioritizeRouteOrdersForDisplay(
+        [first, urgentReservation, first, urgentReservation],
+        now,
+      );
+
+      expect(result.map((order) => order.id), [2, 1]);
+    });
+  });
+
   group('buildDeliveryWhatsAppMessage', () {
     test('usa nombre de domiciliario si existe', () {
       expect(

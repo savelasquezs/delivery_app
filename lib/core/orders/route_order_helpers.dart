@@ -80,6 +80,33 @@ Order? selectNextRouteOrder(
   return indexed.first.$2;
 }
 
+List<Order> prioritizeRouteOrdersForDisplay(
+  List<Order> orders,
+  DateTime now, {
+  Duration soonWindow = kReservationSoonWindow,
+}) {
+  if (orders.isEmpty) return const [];
+
+  final uniqueById = <int, Order>{};
+  for (final order in orders) {
+    uniqueById.putIfAbsent(order.id, () => order);
+  }
+
+  final uniqueOrders = uniqueById.values.toList();
+  final nextOrder = selectNextRouteOrder(
+    uniqueOrders,
+    now,
+    soonWindow: soonWindow,
+  );
+  if (nextOrder == null) return const [];
+
+  return [
+    nextOrder,
+    for (final order in uniqueOrders)
+      if (order.id != nextOrder.id) order,
+  ];
+}
+
 String buildDeliveryWhatsAppMessage(Order order) {
   final rawName = order.deliveryManName?.trim();
   final sender =

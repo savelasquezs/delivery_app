@@ -11,6 +11,7 @@ final _currencyFormat =
 class OrderCard extends StatelessWidget {
   final Order order;
   final VoidCallback? onTap;
+  final Widget? topContent;
   final Widget? trailing;
 
   /// Muestra domicilio y efectivo a cobrar / «Ya pagó» (p. ej. historial).
@@ -20,6 +21,7 @@ class OrderCard extends StatelessWidget {
     super.key,
     required this.order,
     this.onTap,
+    this.topContent,
     this.trailing,
     this.showFeeAndCashSummary = false,
   });
@@ -35,6 +37,10 @@ class OrderCard extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              if (topContent != null) ...[
+                topContent!,
+                const SizedBox(height: AppTheme.spacingSm),
+              ],
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -57,8 +63,7 @@ class OrderCard extends StatelessWidget {
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          _currencyFormat
-                              .format(order.cashToCollectOnDelivery),
+                          _currencyFormat.format(order.cashToCollectOnDelivery),
                           style: const TextStyle(
                             color: AppColors.primary,
                             fontWeight: FontWeight.w800,
@@ -71,7 +76,8 @@ class OrderCard extends StatelessWidget {
                           Text(
                             'Ya pagó',
                             style: TextStyle(
-                              color: AppColors.accentLight.withValues(alpha: 0.98),
+                              color:
+                                  AppColors.accentLight.withValues(alpha: 0.98),
                               fontSize: 14,
                               fontWeight: FontWeight.w800,
                             ),
@@ -92,8 +98,7 @@ class OrderCard extends StatelessWidget {
               ),
               if (showFeeAndCashSummary &&
                   ((order.deliveryFee != null &&
-                          order.deliveryFee! >
-                              Order.kPaymentCoverTolerance) ||
+                          order.deliveryFee! > Order.kPaymentCoverTolerance) ||
                       (order.total > Order.kPaymentCoverTolerance))) ...[
                 const SizedBox(height: 10),
                 Wrap(
