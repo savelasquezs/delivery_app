@@ -22,7 +22,7 @@ bool shouldResumeActiveTracking({
   required int? deliveryRouteId,
 }) =>
     previousWorkSessionId == workSessionId &&
-    previousMode == 'ACTIVE_DELIVERY' &&
+    (previousMode == 'active_delivery' || previousMode == 'ACTIVE_DELIVERY') &&
     deliveryRouteId != null;
 
 double? validAccuracyMeters(double value) =>

@@ -24,15 +24,17 @@ void main() {
 
   group('shouldResumeActiveTracking', () {
     test('resumes every 30-second tracking for the same route and session', () {
-      expect(
-        shouldResumeActiveTracking(
-          previousWorkSessionId: 3,
-          workSessionId: 3,
-          previousMode: 'ACTIVE_DELIVERY',
-          deliveryRouteId: 2088,
-        ),
-        isTrue,
-      );
+      for (final mode in <String>['active_delivery', 'ACTIVE_DELIVERY']) {
+        expect(
+          shouldResumeActiveTracking(
+            previousWorkSessionId: 3,
+            workSessionId: 3,
+            previousMode: mode,
+            deliveryRouteId: 2088,
+          ),
+          isTrue,
+        );
+      }
     });
 
     test('does not carry an old route into a different work session', () {
