@@ -83,4 +83,6 @@ abstract class ApiConstants {
   /// Cola de impresión térmica (ticket domicilio — mismo contrato que el front web).
   static String branchPrintJobs(int branchId) =>
       '/branches/$branchId/print-jobs';
+  static String branchPrintJobStatus(int branchId, int jobId) =>
+      '/branches/$branchId/print-jobs/$jobId';
 }

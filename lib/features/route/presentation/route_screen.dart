@@ -90,14 +90,17 @@ class _RouteScreenState extends ConsumerState<RouteScreen> {
     if (_reprintingOrderId != null) return;
     setState(() => _reprintingOrderId = order.id);
     try {
-      await ref.read(orderRepositoryProvider).enqueueDeliveryPrintJob(
+      final result =
+          await ref.read(orderRepositoryProvider).enqueueDeliveryPrintJob(
         branchId: order.branchId,
         orderIds: [order.id],
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Pedido #${order.id}: impresion enviada a la sucursal'),
+          content: Text(
+            'Impresión recibida por la sucursal · solicitud #${result.jobId}',
+          ),
           backgroundColor: AppColors.accentContainer,
         ),
       );
@@ -733,7 +736,7 @@ class _OrderActions extends StatelessWidget {
             CompactActionButton(
               icon:
                   reprintLoading ? Icons.hourglass_empty : Icons.print_outlined,
-              label: reprintLoading ? '...' : 'Imprimir',
+              label: reprintLoading ? 'Enviando…' : 'Imprimir',
               color: AppColors.onSurface,
               onTap: reprintLoading ? null : onReprint,
             ),

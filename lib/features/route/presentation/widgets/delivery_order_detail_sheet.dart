@@ -178,14 +178,17 @@ class _DeliveryOrderDetailBodyState
     if (_reprintLoading) return;
     setState(() => _reprintLoading = true);
     try {
-      await ref.read(orderRepositoryProvider).enqueueDeliveryPrintJob(
-            branchId: _order.branchId,
-            orderIds: [_order.id],
-          );
+      final result =
+          await ref.read(orderRepositoryProvider).enqueueDeliveryPrintJob(
+        branchId: _order.branchId,
+        orderIds: [_order.id],
+      );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Impresión enviada a la sucursal'),
+        SnackBar(
+          content: Text(
+            'Impresión recibida por la sucursal · solicitud #${result.jobId}',
+          ),
           backgroundColor: AppColors.accentContainer,
         ),
       );
@@ -1036,6 +1039,7 @@ class _SectionHeader extends StatelessWidget {
       );
 }
 
+
 class _InfoCard extends StatelessWidget {
   final Widget child;
   const _InfoCard({required this.child});
@@ -1682,4 +1686,3 @@ class _ContactBtn extends StatelessWidget {
         ),
       );
 }
-
