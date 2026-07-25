@@ -241,6 +241,16 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
               const SizedBox(height: AppTheme.spacingLg),
               const Divider(),
               ListTile(
+                leading: const Icon(Icons.description_outlined,
+                    color: AppColors.primaryLight),
+                title: const Text('Documentos'),
+                subtitle: const Text('Reglamentos y políticas'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  navContext.push(routeBusinessDocuments);
+                },
+              ),
+              ListTile(
                 leading: const Icon(Icons.person_outline,
                     color: AppColors.primaryLight),
                 title: const Text('Mi perfil'),

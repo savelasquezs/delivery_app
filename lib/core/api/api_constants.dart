@@ -35,6 +35,9 @@ abstract class ApiConstants {
   static String userProfile(int id) => '/Users/$id/profile';
   static String userProfileImage(int id) => '/Users/$id/profile-image';
 
+  // Corporate documents
+  static const String businessDocuments = '/business-documents';
+
   /// Origen del API sin sufijo `/api` (imágenes estáticas).
   static String get originUrl {
     final base = baseUrl;

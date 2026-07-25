@@ -6,11 +6,13 @@ import '../../features/auth/presentation/forgot_password_screen.dart';
 import '../../features/auth/presentation/login_screen.dart';
 import '../../features/home/home_screen.dart';
 import '../../features/profile/presentation/profile_screen.dart';
+import '../../features/documents/presentation/business_documents_screen.dart';
 
 const _routeLogin = '/login';
 const _routeHome = '/';
 const routeForgotPassword = '/forgot-password';
 const routeProfile = '/profile';
+const routeBusinessDocuments = '/documents';
 
 /// Evita recrear [GoRouter] en cada `AuthStatus.loading` (p. ej. al pulsar login):
 /// una nueva instancia con `initialLocation: /` montaba Home y disparaba APIs sin token.
@@ -57,6 +59,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: routeProfile,
         builder: (_, __) => const ProfileScreen(),
+      ),
+      GoRoute(
+        path: routeBusinessDocuments,
+        builder: (_, __) => const BusinessDocumentsScreen(),
       ),
       GoRoute(
         path: _routeLogin,
