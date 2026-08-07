@@ -190,6 +190,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
 
   Future<void> logout() async {
     await LocationTrackingService.stopTracking();
+    await FcmService.clearTrackingReviewNotices();
     try {
       await FcmService.unregisterToken(_client);
     } catch (_) {}
@@ -209,6 +210,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
       recordEvent: false,
       discardPending: wasReplaced,
     );
+    await FcmService.clearTrackingReviewNotices();
     await _workSessions.clearLocal();
     await _repository.clearLocalSession();
     state = AuthState(

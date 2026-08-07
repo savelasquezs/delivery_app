@@ -13,6 +13,7 @@ const _routeHome = '/';
 const routeForgotPassword = '/forgot-password';
 const routeProfile = '/profile';
 const routeBusinessDocuments = '/documents';
+final rootNavigatorKey = GlobalKey<NavigatorState>();
 
 /// Evita recrear [GoRouter] en cada `AuthStatus.loading` (p. ej. al pulsar login):
 /// una nueva instancia con `initialLocation: /` montaba Home y disparaba APIs sin token.
@@ -35,6 +36,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
   });
 
   return GoRouter(
+    navigatorKey: rootNavigatorKey,
     refreshListenable: refresh,
     initialLocation: _routeHome,
     redirect: (context, state) {

@@ -13,6 +13,7 @@ import 'core/router/app_router.dart';
 import 'core/theme/app_theme.dart';
 import 'features/auth/presentation/auth_notifier.dart';
 import 'features/notifications/fcm_service.dart';
+import 'features/notifications/tracking_review_dialog.dart';
 import 'features/tracking/location_tracking_service.dart';
 
 Future<void> main() async {
@@ -59,26 +60,93 @@ class DeliveryApp extends ConsumerStatefulWidget {
 
 class _DeliveryAppState extends ConsumerState<DeliveryApp>
     with WidgetsBindingObserver {
+  final List<DeliveryTrackingReviewNotice> _pendingReviewNotices = [];
+  final Set<int> _queuedReviewAlertIds = {};
+  StreamSubscription<DeliveryTrackingReviewNotice>? _reviewSubscription;
+  bool _reviewDialogOpen = false;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _reviewSubscription =
+        FcmService.trackingReviewNotices.listen(_queueTrackingReviewNotice);
+    ref.listenManual<AuthState>(authNotifierProvider, (_, next) {
+      if (next.status == AuthStatus.authenticated) {
+        _scheduleNextTrackingReview();
+      } else if (next.status == AuthStatus.unauthenticated) {
+        _pendingReviewNotices.clear();
+        _queuedReviewAlertIds.clear();
+      }
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(FcmService.emitPendingTrackingReviewNotices());
+    });
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _reviewSubscription?.cancel();
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
+      unawaited(FcmService.emitPendingTrackingReviewNotices());
       unawaited(
         ref
             .read(authNotifierProvider.notifier)
             .refreshSessionIfNeededAfterResume(),
       );
+    }
+  }
+
+  void _queueTrackingReviewNotice(DeliveryTrackingReviewNotice notice) {
+    if (!_queuedReviewAlertIds.add(notice.alertId)) return;
+    _pendingReviewNotices.add(notice);
+    _scheduleNextTrackingReview();
+  }
+
+  void _scheduleNextTrackingReview() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_showNextTrackingReview());
+    });
+  }
+
+  Future<void> _showNextTrackingReview() async {
+    if (!mounted || _reviewDialogOpen || _pendingReviewNotices.isEmpty) return;
+    final authState = ref.read(authNotifierProvider);
+    if (authState.status != AuthStatus.authenticated ||
+        authState.user == null) {
+      return;
+    }
+
+    final notice = _pendingReviewNotices.first;
+    if (notice.deliverymanId != authState.user!.id) {
+      _pendingReviewNotices.removeAt(0);
+      _queuedReviewAlertIds.remove(notice.alertId);
+      await FcmService.dismissTrackingReviewNotice(notice.alertId);
+      _scheduleNextTrackingReview();
+      return;
+    }
+
+    final dialogContext = rootNavigatorKey.currentContext;
+    if (dialogContext == null) {
+      _scheduleNextTrackingReview();
+      return;
+    }
+
+    _reviewDialogOpen = true;
+    try {
+      await showTrackingReviewDialog(dialogContext, notice);
+      await FcmService.dismissTrackingReviewNotice(notice.alertId);
+      _pendingReviewNotices.removeAt(0);
+      _queuedReviewAlertIds.remove(notice.alertId);
+    } finally {
+      _reviewDialogOpen = false;
+      _scheduleNextTrackingReview();
     }
   }
 

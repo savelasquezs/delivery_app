@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/api/api_constants.dart';
 import '../../core/api/dio_client.dart';
@@ -29,12 +31,15 @@ int _notificationId(RemoteMessage message) {
   return DateTime.now().millisecondsSinceEpoch % 2147483647;
 }
 
-NotificationDetails _notificationDetails() {
+NotificationDetails _notificationDetailsForData(Map<String, dynamic> data) {
+  final channel = data['type'] == DeliveryTrackingReviewNotice.type
+      ? _trackingReviewChannel
+      : _orderChannel;
   return NotificationDetails(
     android: AndroidNotificationDetails(
-      _orderChannel.id,
-      _orderChannel.name,
-      channelDescription: _orderChannel.description,
+      channel.id,
+      channel.name,
+      channelDescription: channel.description,
       importance: Importance.max,
       priority: Priority.high,
       playSound: true,
@@ -52,6 +57,7 @@ NotificationDetails _notificationDetails() {
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
+  await FcmService.handleTrackingReviewData(message.data, notifyUi: false);
   await _applyWorkSessionCommand(message.data, notifyUi: false);
   debugPrint(
     'FCM background: messageId=${message.messageId} hasNotification=${message.notification != null} dataKeys=${message.data.keys.join(",")}',
@@ -78,6 +84,10 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       .resolvePlatformSpecificImplementation<
           AndroidFlutterLocalNotificationsPlugin>()
       ?.createNotificationChannel(_orderChannel);
+  await plugin
+      .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>()
+      ?.createNotificationChannel(_trackingReviewChannel);
 
   final (title, body) = _titleBodyFromRemoteMessage(message);
   if (title == null && body == null) {
@@ -86,7 +96,12 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   }
 
   final id = _notificationId(message);
-  await plugin.show(id, title, body, _notificationDetails());
+  await plugin.show(
+    id,
+    title,
+    body,
+    _notificationDetailsForData(message.data),
+  );
   debugPrint('FCM background: notificación local mostrada id=$id');
 }
 
@@ -100,11 +115,90 @@ const AndroidNotificationChannel _orderChannel = AndroidNotificationChannel(
   enableVibration: true,
 );
 
+const AndroidNotificationChannel _trackingReviewChannel =
+    AndroidNotificationChannel(
+  'delivery_tracking_reviews',
+  'Revisiones de seguimiento',
+  description: 'Avisos importantes sobre el seguimiento durante la jornada',
+  importance: Importance.max,
+  playSound: true,
+  enableVibration: true,
+);
+
+class DeliveryTrackingReviewNotice {
+  static const type = 'delivery_tracking_review';
+
+  final int alertId;
+  final int deliverymanId;
+  final String alertType;
+  final String title;
+  final String body;
+
+  const DeliveryTrackingReviewNotice({
+    required this.alertId,
+    required this.deliverymanId,
+    required this.alertType,
+    required this.title,
+    required this.body,
+  });
+
+  factory DeliveryTrackingReviewNotice.fromJson(Map<String, dynamic> json) =>
+      DeliveryTrackingReviewNotice(
+        alertId: int.parse(json['alertId'].toString()),
+        deliverymanId: int.parse(json['deliverymanId'].toString()),
+        alertType: json['alertType'].toString(),
+        title: json['title'].toString(),
+        body: json['body'].toString(),
+      );
+
+  static DeliveryTrackingReviewNotice? fromData(
+    Map<String, dynamic> data,
+  ) {
+    if (data['type']?.toString() != type) return null;
+    final alertId = int.tryParse(data['alertId']?.toString() ?? '');
+    final deliverymanId = int.tryParse(data['deliverymanId']?.toString() ?? '');
+    final alertType = data['alertType']?.toString().trim() ?? '';
+    final title = data['title']?.toString().trim() ?? '';
+    final body = data['body']?.toString().trim() ?? '';
+    if (alertId == null ||
+        deliverymanId == null ||
+        alertType.isEmpty ||
+        title.isEmpty ||
+        body.isEmpty) {
+      return null;
+    }
+    return DeliveryTrackingReviewNotice(
+      alertId: alertId,
+      deliverymanId: deliverymanId,
+      alertType: alertType,
+      title: title,
+      body: body,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'alertId': alertId,
+        'deliverymanId': deliverymanId,
+        'alertType': alertType,
+        'title': title,
+        'body': body,
+      };
+}
+
 class FcmService {
+  static const _pendingTrackingReviewKey =
+      'delivery_tracking_review_pending_notices';
+  static const _handledTrackingReviewKey =
+      'delivery_tracking_review_handled_alert_ids';
   static final _localNotifications = FlutterLocalNotificationsPlugin();
+  static final _trackingReviewController =
+      StreamController<DeliveryTrackingReviewNotice>.broadcast();
   static bool _initialized = false;
   static DioClient? _authenticatedClient;
   static StreamSubscription<String>? _tokenRefreshSubscription;
+
+  static Stream<DeliveryTrackingReviewNotice> get trackingReviewNotices =>
+      _trackingReviewController.stream;
 
   /// Inicializa Firebase + FCM + canal local. Llamar desde `main()` antes de `runApp`.
   static Future<void> initialize() async {
@@ -116,6 +210,10 @@ class FcmService {
         .resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin>()
         ?.createNotificationChannel(_orderChannel);
+    await _localNotifications
+        .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>()
+        ?.createNotificationChannel(_trackingReviewChannel);
 
     // Configuración local notifications
     const androidSettings =
@@ -142,13 +240,90 @@ class FcmService {
 
     // Escuchar mensajes FOREGROUND (cuando la app está abierta)
     FirebaseMessaging.onMessage.listen(_showForegroundNotification);
-    FirebaseMessaging.onMessageOpenedApp.listen(
-      (message) => unawaited(_applyWorkSessionCommand(message.data)),
-    );
+    FirebaseMessaging.onMessageOpenedApp.listen((message) {
+      unawaited(_applyWorkSessionCommand(message.data));
+      unawaited(handleTrackingReviewData(message.data));
+    });
     final initialMessage = await FirebaseMessaging.instance.getInitialMessage();
     if (initialMessage != null) {
       await _applyWorkSessionCommand(initialMessage.data);
+      await handleTrackingReviewData(initialMessage.data);
     }
+  }
+
+  static Future<void> handleTrackingReviewData(
+    Map<String, dynamic> data, {
+    bool notifyUi = true,
+  }) async {
+    final notice = DeliveryTrackingReviewNotice.fromData(data);
+    if (notice == null) return;
+    final preferences = await SharedPreferences.getInstance();
+    final handled = preferences.getStringList(_handledTrackingReviewKey) ?? [];
+    if (handled.contains(notice.alertId.toString())) return;
+    final pending = await pendingTrackingReviewNotices();
+    if (!pending.any((item) => item.alertId == notice.alertId)) {
+      pending.add(notice);
+      await _savePendingTrackingReviewNotices(pending);
+    }
+    if (notifyUi) _trackingReviewController.add(notice);
+  }
+
+  static Future<List<DeliveryTrackingReviewNotice>>
+      pendingTrackingReviewNotices() async {
+    final preferences = await SharedPreferences.getInstance();
+    final raw = preferences.getString(_pendingTrackingReviewKey);
+    if (raw == null || raw.isEmpty) return [];
+    try {
+      final decoded = jsonDecode(raw) as List<dynamic>;
+      return decoded
+          .map((item) => DeliveryTrackingReviewNotice.fromJson(
+                Map<String, dynamic>.from(item as Map),
+              ))
+          .toList();
+    } catch (_) {
+      await preferences.remove(_pendingTrackingReviewKey);
+      return [];
+    }
+  }
+
+  static Future<void> emitPendingTrackingReviewNotices() async {
+    for (final notice in await pendingTrackingReviewNotices()) {
+      _trackingReviewController.add(notice);
+    }
+  }
+
+  static Future<void> dismissTrackingReviewNotice(int alertId) async {
+    final pending = await pendingTrackingReviewNotices();
+    pending.removeWhere((notice) => notice.alertId == alertId);
+    await _savePendingTrackingReviewNotices(pending);
+    final preferences = await SharedPreferences.getInstance();
+    final handled = preferences.getStringList(_handledTrackingReviewKey) ?? [];
+    handled.remove(alertId.toString());
+    handled.add(alertId.toString());
+    await preferences.setStringList(
+      _handledTrackingReviewKey,
+      handled.length <= 100 ? handled : handled.sublist(handled.length - 100),
+    );
+  }
+
+  static Future<void> clearTrackingReviewNotices() async {
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.remove(_pendingTrackingReviewKey);
+    await preferences.remove(_handledTrackingReviewKey);
+  }
+
+  static Future<void> _savePendingTrackingReviewNotices(
+    List<DeliveryTrackingReviewNotice> notices,
+  ) async {
+    final preferences = await SharedPreferences.getInstance();
+    if (notices.isEmpty) {
+      await preferences.remove(_pendingTrackingReviewKey);
+      return;
+    }
+    await preferences.setString(
+      _pendingTrackingReviewKey,
+      jsonEncode(notices.map((notice) => notice.toJson()).toList()),
+    );
   }
 
   /// Solicita permiso push (Android 13+ / iOS).
@@ -238,6 +413,7 @@ class FcmService {
     debugPrint(
       'FCM onMessage: messageId=${message.messageId} dataKeys=${message.data.keys.join(",")}',
     );
+    unawaited(handleTrackingReviewData(message.data));
     unawaited(_applyWorkSessionCommand(message.data));
     final (title, body) = _titleBodyFromRemoteMessage(message);
     if (title == null && body == null) {
@@ -247,7 +423,14 @@ class FcmService {
 
     final id = _notificationId(message);
     unawaited(
-      _localNotifications.show(id, title, body, _notificationDetails()).then(
+      _localNotifications
+          .show(
+            id,
+            title,
+            body,
+            _notificationDetailsForData(message.data),
+          )
+          .then(
             (_) =>
                 debugPrint('FCM onMessage: local notification show ok id=$id'),
             onError: (Object e, StackTrace st) =>
