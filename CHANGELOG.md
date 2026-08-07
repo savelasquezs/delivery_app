@@ -2,6 +2,11 @@
 
 El número de build (`+N` en `pubspec.yaml`) debe coincidir con `buildNumber` en `senorArrozFront/public/delivery-app-release.json` al publicar un APK.
 
+## [1.2.5] — build 10 — 2026-08-06
+
+- Avisos informativos al domiciliario cuando se genera una revisión grave de seguimiento por GPS apagado, permiso de ubicación retirado o permanencia no autorizada.
+- Modal obligatorio de lectura, con cola local y deduplicación de avisos.
+
 ## [1.2.4] — build 8 — 2026-07-23
 
 - El inicio de sesión más reciente reemplaza la sesión de domiciliario de otro dispositivo.
