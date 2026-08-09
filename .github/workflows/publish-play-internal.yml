@@ -1,6 +1,7 @@
 name: Publicar en Google Play - Prueba interna
 
 on:
+  workflow_dispatch:
   push:
     tags:
       - "v*"
@@ -15,14 +16,14 @@ concurrency:
 
 env:
   PACKAGE_NAME: com.senorarroz.delivery_app
-  PLAY_TRACK: internal
+  PLAY_TRACK: qa
   FLUTTER_REVISION: db50e20168db8fee486b9abf32fc912de3bc5b6a
   WORKLOAD_IDENTITY_PROVIDER: projects/347957868437/locations/global/workloadIdentityPools/github-actions/providers/github-delivery
   GOOGLE_SERVICE_ACCOUNT: google-play-publisher@restaurante-railway.iam.gserviceaccount.com
 
 jobs:
-  publish:
-    name: Compilar y publicar AAB
+  play:
+    name: Compilar, validar y publicar
     runs-on: ubuntu-latest
 
     steps:
@@ -60,7 +61,7 @@ jobs:
             chmod +x android/gradlew
           fi
 
-      - name: Validar versión del tag
+      - name: Leer y validar versión
         id: version
         shell: bash
         run: |
@@ -74,17 +75,19 @@ jobs:
 
           VERSION_NAME="${PUBSPEC_VERSION%%+*}"
           VERSION_CODE="${PUBSPEC_VERSION##*+}"
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
 
           if [[ ! "$VERSION_CODE" =~ ^[0-9]+$ ]]; then
-            echo "::error::El build number de pubspec.yaml debe ser numérico."
+            echo "::error::El build number debe ser numérico."
             exit 1
           fi
 
-          if [[ "$TAG_VERSION" != "$VERSION_NAME" ]]; then
-            echo "::error::El tag $GITHUB_REF_NAME no coincide con pubspec.yaml ($VERSION_NAME)."
-            echo "::error::Ejemplo: version: 1.2.6+11 requiere el tag v1.2.6."
-            exit 1
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            TAG_VERSION="${GITHUB_REF_NAME#v}"
+            if [[ "$TAG_VERSION" != "$VERSION_NAME" ]]; then
+              echo "::error::El tag $GITHUB_REF_NAME no coincide con pubspec.yaml ($VERSION_NAME)."
+              echo "::error::Ejemplo: version: 1.2.6+11 requiere el tag v1.2.6."
+              exit 1
+            fi
           fi
 
           echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
@@ -103,7 +106,7 @@ jobs:
           set -euo pipefail
 
           if [[ -z "$ANDROID_KEYSTORE_BASE64" || -z "$ANDROID_STORE_PASSWORD" || -z "$ANDROID_KEY_PASSWORD" ]]; then
-            echo "::error::Faltan secretos de firma Android en Settings > Secrets and variables > Actions."
+            echo "::error::Faltan secretos de firma Android."
             exit 1
           fi
 
@@ -128,7 +131,46 @@ jobs:
           token_format: access_token
           access_token_scopes: https://www.googleapis.com/auth/androidpublisher
 
+      - name: Validar conexión con Google Play
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: |
+          set -euo pipefail
+          API_ROOT="https://androidpublisher.googleapis.com/androidpublisher/v3/applications/$PACKAGE_NAME"
+
+          EDIT_RESPONSE="$(curl --fail-with-body --silent --show-error \
+            -X POST \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{}' \
+            "$API_ROOT/edits")"
+
+          EDIT_ID="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])' <<< "$EDIT_RESPONSE")"
+
+          TRACKS_RESPONSE="$(curl --fail-with-body --silent --show-error \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            "$API_ROOT/edits/$EDIT_ID/tracks")"
+
+          python3 - <<'PY' <<< "$TRACKS_RESPONSE"
+          import json, sys
+          data = json.load(sys.stdin)
+          tracks = [t.get("track") for t in data.get("tracks", [])]
+          print("Tracks disponibles:", ", ".join(tracks))
+          if "qa" not in tracks:
+              raise SystemExit("No se encontró el track interno 'qa'.")
+          PY
+
+          curl --fail-with-body --silent --show-error \
+            -X DELETE \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            "$API_ROOT/edits/$EDIT_ID" > /dev/null
+
+          echo "Validación correcta: firma, WIF y acceso a Google Play funcionan."
+
       - name: Publicar en Prueba interna de Google Play
+        if: github.event_name == 'push'
         shell: bash
         env:
           ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
@@ -141,12 +183,6 @@ jobs:
           API_ROOT="https://androidpublisher.googleapis.com/androidpublisher/v3/applications/$PACKAGE_NAME"
           UPLOAD_ROOT="https://androidpublisher.googleapis.com/upload/androidpublisher/v3/applications/$PACKAGE_NAME"
 
-          if [[ ! -f "$AAB_PATH" ]]; then
-            echo "::error::No se encontró $AAB_PATH"
-            exit 1
-          fi
-
-          echo "Creando edición en Google Play..."
           EDIT_RESPONSE="$(curl --fail-with-body --silent --show-error \
             -X POST \
             -H "Authorization: Bearer $ACCESS_TOKEN" \
@@ -156,7 +192,6 @@ jobs:
 
           EDIT_ID="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])' <<< "$EDIT_RESPONSE")"
 
-          echo "Subiendo AAB..."
           BUNDLE_RESPONSE="$(curl --fail-with-body --silent --show-error \
             --retry 3 \
             --max-time 180 \
@@ -175,21 +210,15 @@ jobs:
 
           export UPLOADED_VERSION_CODE
           TRACK_BODY="$(python3 - <<'PY'
-          import json
-          import os
-
-          version_name = os.environ["VERSION_NAME"]
-          version_code = os.environ["UPLOADED_VERSION_CODE"]
-          track = os.environ["PLAY_TRACK"]
-
+          import json, os
           print(json.dumps({
-              "track": track,
+              "track": os.environ["PLAY_TRACK"],
               "releases": [{
-                  "name": f"{version_name} ({version_code})",
-                  "versionCodes": [version_code],
+                  "name": f"{os.environ['VERSION_NAME']} ({os.environ['UPLOADED_VERSION_CODE']})",
+                  "versionCodes": [os.environ["UPLOADED_VERSION_CODE"]],
                   "releaseNotes": [{
                       "language": "es-419",
-                      "text": f"Actualización interna {version_name}."
+                      "text": f"Actualización interna {os.environ['VERSION_NAME']}."
                   }],
                   "status": "completed"
               }]
@@ -197,7 +226,6 @@ jobs:
           PY
           )"
 
-          echo "Asignando versionCode $UPLOADED_VERSION_CODE al canal interno..."
           curl --fail-with-body --silent --show-error \
             -X PUT \
             -H "Authorization: Bearer $ACCESS_TOKEN" \
@@ -205,7 +233,6 @@ jobs:
             -d "$TRACK_BODY" \
             "$API_ROOT/edits/$EDIT_ID/tracks/$PLAY_TRACK" > /dev/null
 
-          echo "Confirmando edición..."
           curl --fail-with-body --silent --show-error \
             -X POST \
             -H "Authorization: Bearer $ACCESS_TOKEN" \
