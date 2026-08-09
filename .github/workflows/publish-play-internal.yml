@@ -15,7 +15,7 @@ concurrency:
 
 env:
   PACKAGE_NAME: com.senorarroz.delivery_app
-  PLAY_TRACK: qa
+  PLAY_TRACK: internal
   FLUTTER_REVISION: db50e20168db8fee486b9abf32fc912de3bc5b6a
   WORKLOAD_IDENTITY_PROVIDER: projects/347957868437/locations/global/workloadIdentityPools/github-actions/providers/github-delivery
   GOOGLE_SERVICE_ACCOUNT: google-play-publisher@restaurante-railway.iam.gserviceaccount.com
