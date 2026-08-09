@@ -53,8 +53,8 @@ jobs:
         run: |
           set -euo pipefail
           if [[ ! -f android/gradlew || ! -f android/gradle/wrapper/gradle-wrapper.jar ]]; then
-            SEED_DIR="$RUNNER_TEMP/flutter-wrapper-seed"
-            flutter create --platforms=android "$SEED_DIR"
+            SEED_DIR="$RUNNER_TEMP/flutter_wrapper_seed"
+            flutter create --project-name flutter_wrapper_seed --platforms=android "$SEED_DIR"
             cp "$SEED_DIR/android/gradlew" android/gradlew
             cp "$SEED_DIR/android/gradlew.bat" android/gradlew.bat
             cp "$SEED_DIR/android/gradle/wrapper/gradle-wrapper.jar" android/gradle/wrapper/gradle-wrapper.jar
@@ -153,9 +153,10 @@ jobs:
             -H "Authorization: Bearer $ACCESS_TOKEN" \
             "$API_ROOT/edits/$EDIT_ID/tracks")"
 
-          python3 - <<'PY' <<< "$TRACKS_RESPONSE"
-          import json, sys
-          data = json.load(sys.stdin)
+          export TRACKS_RESPONSE
+          python3 - <<'PY'
+          import json, os
+          data = json.loads(os.environ["TRACKS_RESPONSE"])
           tracks = [t.get("track") for t in data.get("tracks", [])]
           print("Tracks disponibles:", ", ".join(tracks))
           if "qa" not in tracks:
