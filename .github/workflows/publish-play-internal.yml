@@ -17,7 +17,7 @@ concurrency:
 env:
   PACKAGE_NAME: com.senorarroz.delivery_app
   PLAY_TRACK: qa
-  FLUTTER_REVISION: db50e20168db8fee486b9abf32fc912de3bc5b6a
+  FLUTTER_VERSION: 3.41.6
   WORKLOAD_IDENTITY_PROVIDER: projects/347957868437/locations/global/workloadIdentityPools/github-actions/providers/github-delivery
   GOOGLE_SERVICE_ACCOUNT: google-play-publisher@restaurante-railway.iam.gserviceaccount.com
 
@@ -36,15 +36,12 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Instalar Flutter fijado al proyecto
+      - name: Instalar Flutter del proyecto
         shell: bash
         run: |
           set -euo pipefail
           FLUTTER_DIR="$RUNNER_TEMP/flutter"
-          git init "$FLUTTER_DIR"
-          git -C "$FLUTTER_DIR" remote add origin https://github.com/flutter/flutter.git
-          git -C "$FLUTTER_DIR" fetch --depth=1 origin "$FLUTTER_REVISION"
-          git -C "$FLUTTER_DIR" checkout --detach FETCH_HEAD
+          git clone --depth=1 --branch "$FLUTTER_VERSION" https://github.com/flutter/flutter.git "$FLUTTER_DIR"
           echo "$FLUTTER_DIR/bin" >> "$GITHUB_PATH"
           "$FLUTTER_DIR/bin/flutter" --version
 
@@ -54,7 +51,7 @@ jobs:
           set -euo pipefail
           if [[ ! -f android/gradlew || ! -f android/gradle/wrapper/gradle-wrapper.jar ]]; then
             SEED_DIR="$RUNNER_TEMP/flutter_wrapper_seed"
-            flutter create --project-name flutter_wrapper_seed --platforms=android "$SEED_DIR"
+            flutter create --no-pub --project-name flutter_wrapper_seed --platforms=android "$SEED_DIR"
             cp "$SEED_DIR/android/gradlew" android/gradlew
             cp "$SEED_DIR/android/gradlew.bat" android/gradlew.bat
             cp "$SEED_DIR/android/gradle/wrapper/gradle-wrapper.jar" android/gradle/wrapper/gradle-wrapper.jar
