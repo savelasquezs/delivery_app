@@ -7,6 +7,7 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../core/router/app_router.dart';
+import '../../core/api/api_constants.dart';
 import '../../core/updates/app_update_prefs.dart';
 import '../../core/updates/app_update_provider.dart';
 import '../../core/updates/delivery_app_release_manifest.dart';
@@ -277,7 +278,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 
   String get _currentTitle => _tabs[_currentIndex].label;
 
-  Future<void> _openApkDownload(Uri uri) async {
+  Future<void> _openUpdate(Uri uri) async {
     final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
     if (!mounted || ok) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -304,7 +305,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     await showAppUpdateDialog(
       context: context,
       result: result,
-      onDownload: () => _openApkDownload(result.apkUri),
+      onDownload: () => _openUpdate(result.updateUri),
       onDismiss: () => _onDismissUpdate(result),
     );
   }
@@ -403,12 +404,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                       ),
                       const SizedBox(width: AppTheme.spacingXs),
                       FilledButton(
-                        onPressed: () => _openApkDownload(result.apkUri),
+                        onPressed: () => _openUpdate(result.updateUri),
                         style: FilledButton.styleFrom(
                           backgroundColor: AppColors.primary,
                           foregroundColor: AppColors.onPrimary,
                         ),
-                        child: const Text('Descargar'),
+                        child: Text(
+                          kPlayDistribution ? 'Actualizar en Play Store' : 'Descargar',
+                        ),
                       ),
                     ],
                   ),

@@ -6,6 +6,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_logo.dart';
 import '../../../core/router/app_router.dart';
 import 'auth_notifier.dart';
+import '../../../core/widgets/location_disclosure.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
@@ -27,8 +28,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     super.dispose();
   }
 
-  void _submit() {
+  Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
+    final accepted = await showLocationDisclosure(context);
+    if (!accepted || !mounted) return;
     ref.read(authNotifierProvider.notifier).login(
           _emailController.text.trim(),
           _passwordController.text,

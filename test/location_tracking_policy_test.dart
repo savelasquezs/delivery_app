@@ -12,11 +12,11 @@ void main() {
       }
     });
 
-    test('discards one rejected point without stopping future captures', () {
+    test('retains every rejected point for at-least-once delivery', () {
       for (final status in <int>[400, 403, 404, 422]) {
         expect(
           locationFailureDisposition(status),
-          LocationFailureDisposition.discardPoint,
+          LocationFailureDisposition.retryPoint,
         );
       }
     });

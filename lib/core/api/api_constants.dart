@@ -4,6 +4,14 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 const String kDefaultDeliveryAppUpdateManifestUrl =
     'https://senorarroz.up.railway.app/delivery-app-release.json';
 
+const String kPlayStoreUrl =
+    'https://play.google.com/store/apps/details?id=com.senorarroz.delivery_app';
+
+const bool kPlayDistribution = bool.fromEnvironment(
+  'DELIVERY_PLAY_DISTRIBUTION',
+  defaultValue: true,
+);
+
 abstract class ApiConstants {
   static String get baseUrl =>
       dotenv.env['API_BASE_URL'] ?? 'https://senorarrozapi.up.railway.app/api';

@@ -208,7 +208,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     }
   }
 
-  Future<void> _openApkDownload(Uri uri) async {
+  Future<void> _openUpdate(Uri uri) async {
     final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
     if (!mounted || ok) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -239,7 +239,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
             const SizedBox(height: AppTheme.spacingMd),
             AppUpdateCard(
               result: result,
-              onDownload: () => _openApkDownload(result.apkUri),
+              onDownload: () => _openUpdate(result.updateUri),
               onDismiss: canDismiss ? () => _dismissUpdate(result) : null,
             ),
           ],

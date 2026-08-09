@@ -29,8 +29,8 @@ class AppUpdateChecker {
       if (data is! Map<String, dynamic>) return null;
 
       final manifest = DeliveryAppReleaseManifest.fromJson(data);
-      final apkUri = resolveApkDownloadUri(url, manifest.apkUrl);
-      if (apkUri == null) return null;
+      final apkUri = resolveApkDownloadUri(url, manifest.apkUrl) ??
+          Uri.parse(kPlayStoreUrl);
 
       if (!shouldOfferInAppUpdate(
         localBuild: localBuild,
@@ -51,6 +51,7 @@ class AppUpdateChecker {
         localBuild: localBuild,
         kind: kind,
         apkUri: apkUri,
+        updateUri: kPlayDistribution ? Uri.parse(kPlayStoreUrl) : apkUri,
       );
     } on DioException {
       return null;

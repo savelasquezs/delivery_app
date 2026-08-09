@@ -1,5 +1,32 @@
 # delivery_app — domiciliarios (Señor Arroz)
 
+## Build para Google Play
+
+La distribución actual es **interna**: sube el AAB únicamente al track
+**Internal testing** de Google Play Console y agrega allí los correos de los
+domiciliarios autorizados. No publiques la versión en Open testing, Production
+ni Pre-registration.
+
+Los usuarios deben aceptar la invitación con una cuenta de Google para poder
+instalar la aplicación desde Play Store. El paquete de la aplicación es
+`com.senorarroz.delivery_app`.
+
+La distribución Play usa Google Play App Signing y requiere el keystore de carga
+local. `android/key.properties` y `android/upload-keystore.jks` nunca deben
+subirse al repositorio.
+
+```bash
+flutter clean
+flutter pub get
+flutter build appbundle --release --dart-define=DELIVERY_PLAY_DISTRIBUTION=true
+```
+
+Artefacto: `build/app/outputs/bundle/release/app-release.aab`.
+
+Para una variante APK externa se puede compilar con
+`--dart-define=DELIVERY_PLAY_DISTRIBUTION=false`; esa variante conserva el
+actualizador APK de Railway.
+
 **Versión actual:** ver `pubspec.yaml` (`version: x.y.z+build`). Historial y notas de cada release: [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Generar el APK para `senorArrozFront/public`
@@ -17,7 +44,7 @@ bash Scripts/build_delivery_app_apk.sh
 ```bash
 cd delivery_app
 flutter pub get
-flutter build apk --release
+flutter build apk --release --dart-define=DELIVERY_PLAY_DISTRIBUTION=false
 ```
 
 Luego copia `delivery_app/build/app/outputs/flutter-apk/app-release.apk` a  

@@ -31,7 +31,6 @@ const _kUnexpectedStopReportedSession = 'sa_loc_stop_reported_session';
 const _modeLight = 'light';
 const _modeActiveDelivery = 'active_delivery';
 const _modeOffline = 'offline';
-const _maxOfflinePoints = 100;
 const _batteryLowThresholdPercent = 15;
 const _uuid = Uuid();
 
@@ -75,7 +74,7 @@ Future<void> _recordDeviceEvent(
     )) {
       await LocationTrackingService.stopTracking(
         recordEvent: false,
-        discardPending: true,
+        discardPending: false,
       );
       return;
     }
@@ -115,7 +114,7 @@ Future<void> _flushDeviceEvents(String token, String baseUrl) async {
       )) {
         await LocationTrackingService.stopTracking(
           recordEvent: false,
-          discardPending: true,
+          discardPending: false,
         );
         return;
       }
@@ -341,7 +340,7 @@ class LocationTaskHandler extends TaskHandler {
       if (isSessionReplacedResponse(status, error.response?.data)) {
         await LocationTrackingService.stopTracking(
           recordEvent: false,
-          discardPending: true,
+          discardPending: false,
         );
         return;
       }
@@ -399,7 +398,7 @@ class LocationTaskHandler extends TaskHandler {
         if (isSessionReplacedResponse(status, error.response?.data)) {
           await LocationTrackingService.stopTracking(
             recordEvent: false,
-            discardPending: true,
+            discardPending: false,
           );
           return syncedCount;
         }
@@ -440,10 +439,10 @@ class LocationTaskHandler extends TaskHandler {
     final queue = queueJson != null
         ? jsonDecode(queueJson) as List<dynamic>
         : <dynamic>[];
-    if (queue.length < _maxOfflinePoints) {
-      queue.add(payload);
-      await prefs.setString(_kOfflineQueue, jsonEncode(queue));
-    }
+    // Do not silently discard a location. The queue is drained before every
+    // new point is posted and every item remains until the API acknowledges it.
+    queue.add(payload);
+    await prefs.setString(_kOfflineQueue, jsonEncode(queue));
   }
 
   Map<String, dynamic> _asOfflinePayload(Map<String, dynamic> payload) => {
@@ -562,7 +561,6 @@ class LocationTrackingService {
     );
     if (previousSessionId != null && previousSessionId != workSessionId) {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.remove(_kOfflineQueue);
       await prefs.remove(_kUnexpectedStopReportedSession);
       await FlutterForegroundTask.removeData(key: _kGpsEnabled);
       await FlutterForegroundTask.removeData(
@@ -730,8 +728,8 @@ class LocationTrackingService {
     await FlutterForegroundTask.removeData(key: _kInternetAvailable);
     await FlutterForegroundTask.removeData(key: _kBatteryLowReported);
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_kOfflineQueue);
     if (discardPending) {
+      await prefs.remove(_kOfflineQueue);
       await prefs.remove(_kDeviceEventQueue);
     }
     await prefs.remove(_kUnexpectedStopReportedSession);

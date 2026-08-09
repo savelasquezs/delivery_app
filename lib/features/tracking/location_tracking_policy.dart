@@ -2,17 +2,10 @@ enum LocationFailureDisposition { discardPoint, retryPoint }
 
 /// An HTTP rejection must never stop the foreground location service.
 ///
-/// Transient failures are queued for a later retry. Other client errors only
-/// discard the rejected point, allowing the next scheduled capture to proceed.
+/// Every failed point is queued for a later retry. This deliberately favors
+/// at-least-once delivery over silently losing a worker location.
 LocationFailureDisposition locationFailureDisposition(int? statusCode) {
-  if (statusCode == null ||
-      statusCode == 401 ||
-      statusCode == 408 ||
-      statusCode == 429 ||
-      statusCode >= 500) {
-    return LocationFailureDisposition.retryPoint;
-  }
-  return LocationFailureDisposition.discardPoint;
+  return LocationFailureDisposition.retryPoint;
 }
 
 bool shouldResumeActiveTracking({

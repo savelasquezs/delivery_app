@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../api/api_constants.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_theme.dart';
 import 'delivery_app_release_manifest.dart';
@@ -102,7 +103,9 @@ class AppUpdateCard extends StatelessWidget {
                   backgroundColor: AppColors.primary,
                   foregroundColor: AppColors.onPrimary,
                 ),
-                label: const Text('Actualizar app'),
+                label: Text(
+                  kPlayDistribution ? 'Actualizar en Play Store' : 'Descargar APK',
+                ),
               ),
             ],
           ),

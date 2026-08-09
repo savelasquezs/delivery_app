@@ -138,7 +138,18 @@ class AuthNotifier extends StateNotifier<AuthState> {
       final user = await _repository.login(
         LoginRequest(email: email, password: password),
       );
-      final session = await _startWorkSessionTracking(requestPermission: true);
+      if (!await _requestLocationPermissions()) {
+        throw StateError(
+          'Para iniciar la jornada debes permitir ubicación precisa "Todo el tiempo" en los ajustes de Android.',
+        );
+      }
+      try {
+        final notificationsGranted = await FcmService.requestPermission();
+        if (notificationsGranted) {
+          await _registerFcmTokenSafely();
+        }
+      } catch (_) {}
+      final session = await _startWorkSessionTracking(requestPermission: false);
       state = AuthState(
         status: AuthStatus.authenticated,
         user: user,
@@ -146,12 +157,6 @@ class AuthNotifier extends StateNotifier<AuthState> {
         trackingActive: await LocationTrackingService.isRunning,
       );
 
-      try {
-        final notificationsGranted = await FcmService.requestPermission();
-        if (notificationsGranted) {
-          await _registerFcmTokenSafely();
-        }
-      } catch (_) {}
     } catch (e) {
       await _endLocalSession(errorMessage: e.toString());
     }
@@ -160,22 +165,26 @@ class AuthNotifier extends StateNotifier<AuthState> {
   Future<DeliveryWorkSession> _startWorkSessionTracking({
     required bool requestPermission,
   }) async {
-    final session = await _workSessions.startOrResume();
     final canTrack = requestPermission
         ? await _requestLocationPermissions()
         : await _hasLocationPermission();
-    if (canTrack) {
-      final token = await _repository.getStoredAccessToken();
-      if (token != null) {
-        await LocationTrackingService.startTracking(
-          authToken: token,
-          baseUrl: ApiConstants.baseUrl,
-          workSessionId: session.id,
-          autoCloseAtUtc: session.autoCloseAt,
-          lightIntervalSeconds: session.tracking.lightIntervalSeconds,
-          activeIntervalSeconds: session.tracking.activeIntervalSeconds,
-        );
-      }
+    if (!canTrack) {
+      throw StateError(
+        'Para iniciar la jornada debes permitir ubicación precisa "Todo el tiempo" en los ajustes de Android.',
+      );
+    }
+
+    final session = await _workSessions.startOrResume();
+    final token = await _repository.getStoredAccessToken();
+    if (token != null) {
+      await LocationTrackingService.startTracking(
+        authToken: token,
+        baseUrl: ApiConstants.baseUrl,
+        workSessionId: session.id,
+        autoCloseAtUtc: session.autoCloseAt,
+        lightIntervalSeconds: session.tracking.lightIntervalSeconds,
+        activeIntervalSeconds: session.tracking.activeIntervalSeconds,
+      );
     }
     return session;
   }
@@ -204,11 +213,11 @@ class AuthNotifier extends StateNotifier<AuthState> {
   }
 
   Future<void> _endLocalSession({String? errorMessage}) async {
-    final wasReplaced =
-        errorMessage?.toLowerCase().contains('otro dispositivo') == true;
     await LocationTrackingService.stopTracking(
       recordEvent: false,
-      discardPending: wasReplaced,
+      // Preserve queued locations even if the API invalidates this session;
+      // they must not disappear silently before an acknowledgement.
+      discardPending: false,
     );
     await FcmService.clearTrackingReviewNotices();
     await _workSessions.clearLocal();
@@ -232,11 +241,17 @@ class AuthNotifier extends StateNotifier<AuthState> {
         permission = await Geolocator.requestPermission();
       }
       if (permission == LocationPermission.whileInUse) {
-        permission = await Geolocator.requestPermission();
+        await Geolocator.openAppSettings();
+        permission = await Geolocator.checkPermission();
       }
+      if (permission == LocationPermission.deniedForever) {
+        await Geolocator.openAppSettings();
+        permission = await Geolocator.checkPermission();
+      }
+      final accuracy = await Geolocator.getLocationAccuracy();
       return await Geolocator.isLocationServiceEnabled() &&
-          permission != LocationPermission.denied &&
-          permission != LocationPermission.deniedForever;
+          permission == LocationPermission.always &&
+          accuracy == LocationAccuracyStatus.precise;
     } catch (_) {
       return false;
     }
@@ -245,9 +260,10 @@ class AuthNotifier extends StateNotifier<AuthState> {
   Future<bool> _hasLocationPermission() async {
     try {
       final permission = await Geolocator.checkPermission();
+      final accuracy = await Geolocator.getLocationAccuracy();
       return await Geolocator.isLocationServiceEnabled() &&
-          permission != LocationPermission.denied &&
-          permission != LocationPermission.deniedForever;
+          permission == LocationPermission.always &&
+          accuracy == LocationAccuracyStatus.precise;
     } catch (_) {
       return false;
     }

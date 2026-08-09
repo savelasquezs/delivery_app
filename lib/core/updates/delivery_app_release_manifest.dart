@@ -53,12 +53,14 @@ class AppUpdateCheckResult {
   final int localBuild;
   final AppUpdateKind kind;
   final Uri apkUri;
+  final Uri updateUri;
 
   const AppUpdateCheckResult({
     required this.manifest,
     required this.localBuild,
     required this.kind,
     required this.apkUri,
+    required this.updateUri,
   });
 }
 
