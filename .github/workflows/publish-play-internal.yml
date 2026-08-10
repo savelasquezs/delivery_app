@@ -16,7 +16,7 @@ concurrency:
 
 env:
   PACKAGE_NAME: com.senorarroz.delivery_app
-  PLAY_TRACK: qa
+  PLAY_TRACK: internal
   FLUTTER_VERSION: 3.41.6
   WORKLOAD_IDENTITY_PROVIDER: projects/347957868437/locations/global/workloadIdentityPools/github-actions/providers/github-delivery
   GOOGLE_SERVICE_ACCOUNT: google-play-publisher@restaurante-railway.iam.gserviceaccount.com
@@ -156,8 +156,8 @@ jobs:
           data = json.loads(os.environ["TRACKS_RESPONSE"])
           tracks = [t.get("track") for t in data.get("tracks", [])]
           print("Tracks disponibles:", ", ".join(tracks))
-          if "qa" not in tracks:
-              raise SystemExit("No se encontró el track interno 'qa'.")
+          if "internal" not in tracks:
+              raise SystemExit("No se encontró el track interno 'internal'.")
           PY
 
           curl --fail-with-body --silent --show-error \
