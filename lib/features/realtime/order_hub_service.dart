@@ -26,13 +26,11 @@ class OrderHubService {
     _statusListeners.remove(listener);
   }
 
-  void addEventListener(
-      void Function(String, List<Object?>?) listener) {
+  void addEventListener(void Function(String, List<Object?>?) listener) {
     _eventListeners.add(listener);
   }
 
-  void removeEventListener(
-      void Function(String, List<Object?>?) listener) {
+  void removeEventListener(void Function(String, List<Object?>?) listener) {
     _eventListeners.remove(listener);
   }
 
@@ -131,6 +129,8 @@ class OrderHubService {
       'OrderModified',
       'OrderStatusChanged',
       'OrderCancelled',
+      'DeliveryRoutingPlanChanged',
+      'RouteProposalClaimed',
     ]) {
       _connection!.on(event, (args) {
         for (final listener in _eventListeners) {

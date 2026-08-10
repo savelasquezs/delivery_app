@@ -13,6 +13,7 @@ import '../../../core/widgets/confirm_password_dialog.dart';
 import '../../orders/models/order_models.dart';
 import '../data/branch_presence_verifier.dart';
 import 'available_notifier.dart';
+import '../../routing/delivery_routing_models.dart';
 
 Future<void> _openOrderDestinationMap(BuildContext context, Order order) async {
   if (!orderHasOpenableMapDestination(order)) {
@@ -49,7 +50,7 @@ class _AvailableScreenState extends ConsumerState<AvailableScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
+    _tabController = TabController(length: 3, vsync: this);
     _tabController.addListener(() => setState(() {}));
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(availableNotifierProvider.notifier).loadAll();
@@ -128,6 +129,43 @@ class _AvailableScreenState extends ConsumerState<AvailableScreen>
     }
   }
 
+  Future<void> _confirmRoutingProposal(DeliveryRouteProposal proposal) async {
+    if (proposal.claimableReadyOrderIds.isEmpty) return;
+    final plan = ref.read(availableNotifierProvider).routingPlan;
+    if (plan == null) return;
+    final storage = ref.read(secureStorageProvider);
+    final savedPassword = await storage.getSelfAssignPassword();
+    if (!mounted) return;
+    final confirmed = await ConfirmPasswordDialog.show(
+      context,
+      title: 'Tomar ruta ${proposal.sequence}',
+      subtitle:
+          'Se asignarán ${proposal.claimableReadyOrderIds.length} pedido(s) listos en el orden sugerido.',
+      initialPassword: savedPassword,
+      onPersistPassword: (password, remember) async {
+        if (remember) {
+          await storage.saveSelfAssignPassword(password);
+        } else {
+          await storage.deleteSelfAssignPassword();
+        }
+      },
+      onConfirm: (password) =>
+          ref.read(availableNotifierProvider.notifier).selfAssign(
+                orderIds: proposal.claimableReadyOrderIds,
+                password: password,
+                proposalId: proposal.id,
+                expectedPlanVersion: plan.version,
+              ),
+    );
+    if (confirmed && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Ruta asignada exitosamente ✓'),
+        backgroundColor: AppColors.accentContainer,
+      ));
+      await ref.read(availableNotifierProvider.notifier).loadAll();
+    }
+  }
+
   Future<void> _refreshAll() =>
       ref.read(availableNotifierProvider.notifier).loadAll();
 
@@ -145,6 +183,7 @@ class _AvailableScreenState extends ConsumerState<AvailableScreen>
             controller: _tabController,
             availableCount: state.orders.length,
             prepCount: state.preparationOrders.length,
+            routeCount: state.routingPlan?.proposals.length ?? 0,
           ),
           Expanded(
             child: TabBarView(
@@ -163,6 +202,15 @@ class _AvailableScreenState extends ConsumerState<AvailableScreen>
                   onToggle: _toggleSelection,
                   onToggleNeighborhood: _toggleNeighborhoodSelection,
                   onRefresh: _refreshAll,
+                ),
+                _RoutingTabContent(
+                  plan: state.routingPlan,
+                  isLoading: state.isLoadingRouting,
+                  error: state.errorRouting,
+                  onRefresh: () => ref
+                      .read(availableNotifierProvider.notifier)
+                      .loadRouting(),
+                  onClaim: _confirmRoutingProposal,
                 ),
                 _OrderTabContent(
                   orders: state.preparationOrders,
@@ -191,6 +239,158 @@ class _AvailableScreenState extends ConsumerState<AvailableScreen>
           : null,
     );
   }
+}
+
+class _RoutingTabContent extends StatelessWidget {
+  final DeliveryRoutingPlan? plan;
+  final bool isLoading;
+  final String? error;
+  final Future<void> Function() onRefresh;
+  final ValueChanged<DeliveryRouteProposal> onClaim;
+
+  const _RoutingTabContent({
+    required this.plan,
+    required this.isLoading,
+    required this.error,
+    required this.onRefresh,
+    required this.onClaim,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (isLoading && plan == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (error != null && plan == null) {
+      return RefreshIndicator(
+        onRefresh: onRefresh,
+        child: ListView(children: [
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: ErrorBanner(message: error!),
+          ),
+        ]),
+      );
+    }
+    final current = plan;
+    if (current == null) return const SizedBox.shrink();
+    return RefreshIndicator(
+      onRefresh: onRefresh,
+      child: ListView(
+        padding: const EdgeInsets.all(12),
+        children: [
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Text(
+                'Plan v${current.version} · ${current.availableNow} libres · ${current.availableSoon} próximos',
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+          ),
+          if (current.warning != null)
+            Padding(
+              padding: const EdgeInsets.all(8),
+              child: Text(current.warning!,
+                  style: const TextStyle(color: AppColors.warning)),
+            ),
+          if (current.proposals.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(32),
+              child: Center(child: Text('No hay rutas sugeridas por ahora.')),
+            ),
+          for (final proposal in current.proposals)
+            Card(
+              margin: const EdgeInsets.only(bottom: 12),
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(children: [
+                      Expanded(
+                        child: Text(
+                          'Ruta ${proposal.sequence} · ${_recommendation(proposal.recommendation)}',
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                      Text('${(proposal.durationSeconds / 60).round()} min'),
+                    ]),
+                    const SizedBox(height: 8),
+                    for (final stop in proposal.stops)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 5),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            CircleAvatar(
+                              radius: 12,
+                              child: Text('${stop.sequence ?? '-'}',
+                                  style: const TextStyle(fontSize: 11)),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                '#${stop.orderId} · ${stop.neighborhood ?? stop.address}\n${stop.isReady ? 'Listo' : 'En espera'}',
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    if (proposal.warning != null)
+                      Text(proposal.warning!,
+                          style: const TextStyle(color: AppColors.warning)),
+                    if (proposal.isClaimable)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: SizedBox(
+                          width: double.infinity,
+                          child: FilledButton.icon(
+                            onPressed: () => onClaim(proposal),
+                            icon: const Icon(Icons.delivery_dining),
+                            label: Text(
+                                'Tomar ${proposal.claimableReadyOrderIds.length} listo(s)'),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          if (current.unroutedOrders.isNotEmpty)
+            Card(
+              color: AppColors.warning.withValues(alpha: .08),
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Sin ruta sugerida',
+                        style: TextStyle(fontWeight: FontWeight.w700)),
+                    for (final stop in current.unroutedOrders)
+                      Text(
+                          '#${stop.orderId} · ${_reason(stop.unroutedReason)}'),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  static String _recommendation(String value) => switch (value) {
+        'leaveNow' => 'Salir ahora',
+        'wait' => 'Esperar',
+        'next' => 'Siguiente salida',
+        _ => value,
+      };
+
+  static String _reason(String? value) => switch (value) {
+        'requiresLocation' => 'falta ubicación',
+        'noCapacity' => 'sin domiciliario disponible',
+        _ => 'pendiente',
+      };
 }
 
 class _PreparationEmptyContent {
@@ -267,11 +467,13 @@ class _OrderTabBar extends StatelessWidget {
   final TabController controller;
   final int availableCount;
   final int prepCount;
+  final int routeCount;
 
   const _OrderTabBar({
     required this.controller,
     required this.availableCount,
     required this.prepCount,
+    required this.routeCount,
   });
 
   @override
@@ -295,6 +497,18 @@ class _OrderTabBar extends StatelessWidget {
                 if (availableCount > 0) ...[
                   const SizedBox(width: 6),
                   _CountBadge(count: availableCount, color: AppColors.accent),
+                ],
+              ],
+            ),
+          ),
+          Tab(
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('Rutas'),
+                if (routeCount > 0) ...[
+                  const SizedBox(width: 6),
+                  _CountBadge(count: routeCount, color: AppColors.primaryLight),
                 ],
               ],
             ),

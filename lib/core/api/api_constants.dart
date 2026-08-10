@@ -61,6 +61,7 @@ abstract class ApiConstants {
   static const String ordersSearch = '/orders/search';
   static const String deliveryReady = '/orders/delivery/ready';
   static const String deliverySelfAssign = '/orders/delivery/self-assign';
+  static const String deliveryRoutingPlan = '/delivery-routing/plan';
   static String deliveryAssigned(int deliverymanId) =>
       '/orders/delivery/assigned/$deliverymanId';
   static String deliveryAssignedBranchSummary(int deliverymanId) =>

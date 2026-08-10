@@ -86,10 +86,18 @@ class OrderRepository {
   Future<void> selfAssignOrders({
     required List<int> orderIds,
     required String password,
+    int? proposalId,
+    int? expectedPlanVersion,
   }) async {
     await _client.post<dynamic>(
       ApiConstants.deliverySelfAssign,
-      data: {'orderIds': orderIds, 'password': password},
+      data: {
+        'orderIds': orderIds,
+        'password': password,
+        if (proposalId != null) 'proposalId': proposalId,
+        if (expectedPlanVersion != null)
+          'expectedPlanVersion': expectedPlanVersion,
+      },
     );
   }
 

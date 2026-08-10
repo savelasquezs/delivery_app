@@ -141,7 +141,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         event == 'OrderAssignedToDelivery' ||
         event == 'OrderModified' ||
         event == 'OrderStatusChanged' ||
-        event == 'OrderCancelled') {
+        event == 'OrderCancelled' ||
+        event == 'DeliveryRoutingPlanChanged' ||
+        event == 'RouteProposalClaimed') {
       ref.invalidate(availableNotifierProvider);
       ref.invalidate(routeNotifierProvider);
       ref.invalidate(historyNotifierProvider);

@@ -4,6 +4,8 @@ import '../../orders/models/order_models.dart';
 import '../../auth/data/auth_models.dart';
 import '../../auth/presentation/auth_notifier.dart';
 import '../data/branch_presence_verifier.dart';
+import '../../routing/delivery_routing_models.dart';
+import '../../routing/delivery_routing_repository.dart';
 
 class AvailableState {
   final List<Order> orders;
@@ -13,6 +15,9 @@ class AvailableState {
   final String? error;
   final String? errorPrep;
   final BranchPresenceResult branchPresence;
+  final DeliveryRoutingPlan? routingPlan;
+  final bool isLoadingRouting;
+  final String? errorRouting;
 
   const AvailableState({
     this.orders = const [],
@@ -24,6 +29,9 @@ class AvailableState {
     this.branchPresence = const BranchPresenceResult(
       status: BranchPresenceStatus.initial,
     ),
+    this.routingPlan,
+    this.isLoadingRouting = false,
+    this.errorRouting,
   });
 
   AvailableState copyWith({
@@ -34,6 +42,10 @@ class AvailableState {
     String? error,
     String? errorPrep,
     BranchPresenceResult? branchPresence,
+    DeliveryRoutingPlan? routingPlan,
+    bool? isLoadingRouting,
+    String? errorRouting,
+    bool clearErrorRouting = false,
     bool clearError = false,
     bool clearErrorPrep = false,
   }) =>
@@ -45,12 +57,17 @@ class AvailableState {
         error: clearError ? null : (error ?? this.error),
         errorPrep: clearErrorPrep ? null : (errorPrep ?? this.errorPrep),
         branchPresence: branchPresence ?? this.branchPresence,
+        routingPlan: routingPlan ?? this.routingPlan,
+        isLoadingRouting: isLoadingRouting ?? this.isLoadingRouting,
+        errorRouting:
+            clearErrorRouting ? null : (errorRouting ?? this.errorRouting),
       );
 }
 
 class AvailableNotifier extends StateNotifier<AvailableState> {
   final OrderRepository _repository;
   final BranchPresenceVerifier _branchPresenceVerifier;
+  final DeliveryRoutingRepository _routingRepository;
   final AuthUser? _user;
   final double? _branchLatitude;
   final double? _branchLongitude;
@@ -59,6 +76,7 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
   AvailableNotifier(
     this._repository,
     this._branchPresenceVerifier,
+    this._routingRepository,
     this._user,
     this._branchLatitude,
     this._branchLongitude,
@@ -136,16 +154,35 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
     await Future.wait([
       load(branchId: branchId),
       loadPreparation(),
+      loadRouting(),
     ]);
+  }
+
+  Future<void> loadRouting() async {
+    if (!mounted) return;
+    state = state.copyWith(isLoadingRouting: true, clearErrorRouting: true);
+    try {
+      final plan = await _routingRepository.getPlan();
+      if (!mounted) return;
+      state = state.copyWith(routingPlan: plan, isLoadingRouting: false);
+    } catch (e) {
+      if (!mounted) return;
+      state =
+          state.copyWith(isLoadingRouting: false, errorRouting: e.toString());
+    }
   }
 
   Future<bool> selfAssign({
     required List<int> orderIds,
     required String password,
+    int? proposalId,
+    int? expectedPlanVersion,
   }) async {
     await _repository.selfAssignOrders(
       orderIds: orderIds,
       password: password,
+      proposalId: proposalId,
+      expectedPlanVersion: expectedPlanVersion,
     );
     if (!mounted) return false;
     return true;
@@ -158,6 +195,7 @@ final availableNotifierProvider =
   return AvailableNotifier(
     ref.watch(orderRepositoryProvider),
     ref.watch(branchPresenceVerifierProvider),
+    ref.watch(deliveryRoutingRepositoryProvider),
     auth.user,
     auth.workSession?.branchLatitude ?? auth.user?.branchLatitude,
     auth.workSession?.branchLongitude ?? auth.user?.branchLongitude,
