@@ -58,7 +58,7 @@ jobs:
             chmod +x android/gradlew
           fi
 
-      - name: Leer y validar versión
+      - name: Leer y validar versión visible
         id: version
         shell: bash
         run: |
@@ -71,15 +71,15 @@ jobs:
           fi
 
           VERSION_NAME="${PUBSPEC_VERSION%%+*}"
-          VERSION_CODE="${PUBSPEC_VERSION##*+}"
+          CONFIGURED_VERSION_CODE="${PUBSPEC_VERSION##*+}"
 
-          if [[ ! "$VERSION_CODE" =~ ^[0-9]+$ ]]; then
-            echo "::error::El build number debe ser numérico."
+          if [[ ! "$CONFIGURED_VERSION_CODE" =~ ^[0-9]+$ ]]; then
+            echo "::error::El build number de pubspec.yaml debe ser numérico."
             exit 1
           fi
 
           echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
-          echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+          echo "configured_version_code=$CONFIGURED_VERSION_CODE" >> "$GITHUB_OUTPUT"
 
       - name: Autenticar con Google Cloud sin clave JSON
         id: auth
@@ -90,13 +90,12 @@ jobs:
           token_format: access_token
           access_token_scopes: https://www.googleapis.com/auth/androidpublisher
 
-      - name: Comprobar si el versionCode ya existe en Google Play
-        id: play_check
-        if: github.event_name == 'push'
+      - name: Resolver versionCode automático desde Google Play
+        id: play_version
         shell: bash
         env:
           ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
-          VERSION_CODE: ${{ steps.version.outputs.version_code }}
+          CONFIGURED_VERSION_CODE: ${{ steps.version.outputs.configured_version_code }}
         run: |
           set -euo pipefail
           API_ROOT="https://androidpublisher.googleapis.com/androidpublisher/v3/applications/$PACKAGE_NAME"
@@ -114,13 +113,19 @@ jobs:
             -H "Authorization: Bearer $ACCESS_TOKEN" \
             "$API_ROOT/edits/$EDIT_ID/bundles")"
 
-          export BUNDLES_RESPONSE VERSION_CODE
-          EXISTS="$(python3 - <<'PY'
+          export BUNDLES_RESPONSE CONFIGURED_VERSION_CODE
+          VERSION_CODE="$(python3 - <<'PY'
           import json, os
+
           data = json.loads(os.environ["BUNDLES_RESPONSE"])
-          wanted = str(os.environ["VERSION_CODE"])
-          codes = {str(bundle.get("versionCode")) for bundle in data.get("bundles", [])}
-          print("true" if wanted in codes else "false")
+          configured = int(os.environ["CONFIGURED_VERSION_CODE"])
+          existing = [
+              int(bundle["versionCode"])
+              for bundle in data.get("bundles", [])
+              if str(bundle.get("versionCode", "")).isdigit()
+          ]
+          next_from_play = (max(existing) + 1) if existing else 1
+          print(max(configured, next_from_play))
           PY
           )"
 
@@ -129,20 +134,13 @@ jobs:
             -H "Authorization: Bearer $ACCESS_TOKEN" \
             "$API_ROOT/edits/$EDIT_ID" > /dev/null
 
-          if [[ "$EXISTS" == "true" ]]; then
-            echo "should_publish=false" >> "$GITHUB_OUTPUT"
-            echo "versionCode $VERSION_CODE ya existe en Google Play; no se volverá a subir."
-          else
-            echo "should_publish=true" >> "$GITHUB_OUTPUT"
-            echo "versionCode $VERSION_CODE es nuevo; se compilará y publicará."
-          fi
+          echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+          echo "versionCode resuelto automáticamente: $VERSION_CODE"
 
       - name: Instalar dependencias Flutter
-        if: ${{ github.event_name == 'workflow_dispatch' || steps.play_check.outputs.should_publish == 'true' }}
         run: flutter pub get
 
       - name: Restaurar firma Android
-        if: ${{ github.event_name == 'workflow_dispatch' || steps.play_check.outputs.should_publish == 'true' }}
         shell: bash
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -166,8 +164,16 @@ jobs:
           EOF
 
       - name: Compilar App Bundle firmado
-        if: ${{ github.event_name == 'workflow_dispatch' || steps.play_check.outputs.should_publish == 'true' }}
-        run: flutter build appbundle --release --dart-define=DELIVERY_PLAY_DISTRIBUTION=true
+        shell: bash
+        env:
+          VERSION_NAME: ${{ steps.version.outputs.version_name }}
+          VERSION_CODE: ${{ steps.play_version.outputs.version_code }}
+        run: |
+          set -euo pipefail
+          flutter build appbundle --release \
+            --build-name="$VERSION_NAME" \
+            --build-number="$VERSION_CODE" \
+            --dart-define=DELIVERY_PLAY_DISTRIBUTION=true
 
       - name: Validar conexión con Google Play
         if: github.event_name == 'workflow_dispatch'
@@ -209,12 +215,12 @@ jobs:
           echo "Validación correcta: firma, WIF y acceso a Google Play funcionan."
 
       - name: Publicar en Prueba interna de Google Play
-        if: ${{ github.event_name == 'push' && steps.play_check.outputs.should_publish == 'true' }}
+        if: github.event_name == 'push'
         shell: bash
         env:
           ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
           VERSION_NAME: ${{ steps.version.outputs.version_name }}
-          VERSION_CODE: ${{ steps.version.outputs.version_code }}
+          VERSION_CODE: ${{ steps.play_version.outputs.version_code }}
         run: |
           set -euo pipefail
 
@@ -243,7 +249,7 @@ jobs:
           UPLOADED_VERSION_CODE="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["versionCode"])' <<< "$BUNDLE_RESPONSE")"
 
           if [[ "$UPLOADED_VERSION_CODE" != "$VERSION_CODE" ]]; then
-            echo "::error::Google Play recibió versionCode $UPLOADED_VERSION_CODE, pero pubspec.yaml indica $VERSION_CODE."
+            echo "::error::Google Play recibió versionCode $UPLOADED_VERSION_CODE, pero el CI resolvió $VERSION_CODE."
             exit 1
           fi
 
@@ -278,7 +284,3 @@ jobs:
             "$API_ROOT/edits/$EDIT_ID:commit" > /dev/null
 
           echo "Publicado: $PACKAGE_NAME $VERSION_NAME ($UPLOADED_VERSION_CODE) en Prueba interna."
-
-      - name: Omitir publicación repetida
-        if: ${{ github.event_name == 'push' && steps.play_check.outputs.should_publish != 'true' }}
-        run: echo "El versionCode ${{ steps.version.outputs.version_code }} ya existe en Google Play. No hay nada que publicar."
