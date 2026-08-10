@@ -410,7 +410,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                           foregroundColor: AppColors.onPrimary,
                         ),
                         child: Text(
-                          kPlayDistribution ? 'Actualizar en Play Store' : 'Descargar',
+                          kPlayDistribution
+                              ? 'Actualizar en Play Store'
+                              : 'Descargar',
                         ),
                       ),
                     ],
@@ -518,7 +520,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           _buildUpdateBanner(),
-          _TrackingStatusBanner(authState: authState),
+          _TrackingStatusBanner(
+            authState: authState,
+            onOpenSettings: () =>
+                ref.read(authNotifierProvider.notifier).openTrackingSettings(),
+          ),
           Expanded(
             child: IndexedStack(
               index: _currentIndex,
@@ -548,15 +554,21 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 }
 
 class _TrackingStatusBanner extends StatelessWidget {
-  const _TrackingStatusBanner({required this.authState});
+  const _TrackingStatusBanner({
+    required this.authState,
+    required this.onOpenSettings,
+  });
 
   final AuthState authState;
+  final VoidCallback onOpenSettings;
 
   @override
   Widget build(BuildContext context) {
     final session = authState.workSession;
     if (session == null) return const SizedBox.shrink();
-    final tracking = authState.trackingActive;
+    final tracking =
+        authState.trackingActive && authState.trackingIssue == null;
+    final issue = authState.trackingIssue;
     final closeTime = session.tracking.autoCloseTime.length >= 5
         ? session.tracking.autoCloseTime.substring(0, 5)
         : session.tracking.autoCloseTime;
@@ -577,18 +589,43 @@ class _TrackingStatusBanner extends StatelessWidget {
             color: color,
           ),
           const SizedBox(width: AppTheme.spacingXs),
-          Expanded(
-            child: Text(
-              tracking
-                  ? 'Ubicación monitoreada · cierre $closeTime (Colombia)'
-                  : 'Jornada activa · revisa el GPS y los permisos de ubicación',
-              style: TextStyle(
-                color: color,
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
+          if (issue != null)
+            Expanded(
+              child: Text(
+                issue,
+                style: TextStyle(
+                  color: color,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
-          ),
+          if (issue == null)
+            Expanded(
+              child: Text(
+                tracking
+                    ? 'Ubicación monitoreada · cierre $closeTime (Colombia)'
+                    : 'Jornada activa · revisa el GPS y los permisos de ubicación',
+                style: TextStyle(
+                  color: color,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          if (issue != null)
+            SizedBox(
+              width: 112,
+              child: TextButton(
+                onPressed: onOpenSettings,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text('Abrir Ajustes'),
+                  ],
+                ),
+              ),
+            ),
         ],
       ),
     );

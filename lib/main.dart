@@ -95,11 +95,6 @@ class _DeliveryAppState extends ConsumerState<DeliveryApp>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       unawaited(FcmService.emitPendingTrackingReviewNotices());
-      unawaited(
-        ref
-            .read(authNotifierProvider.notifier)
-            .refreshSessionIfNeededAfterResume(),
-      );
     }
   }
 

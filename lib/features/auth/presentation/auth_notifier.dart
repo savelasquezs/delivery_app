@@ -9,6 +9,7 @@ import '../../../core/api/refresh_access_result.dart';
 import '../../../core/auth/auth_session_bridge.dart';
 import '../../../core/auth/jwt_expiration.dart';
 import '../../notifications/fcm_service.dart';
+import '../../tracking/location_tracking_policy.dart';
 import '../../tracking/location_tracking_service.dart';
 import '../../tracking/work_session_models.dart';
 import '../../tracking/work_session_repository.dart';
@@ -22,6 +23,7 @@ class AuthState {
   final AuthUser? user;
   final DeliveryWorkSession? workSession;
   final bool trackingActive;
+  final String? trackingIssue;
   final String? errorMessage;
 
   const AuthState({
@@ -29,6 +31,7 @@ class AuthState {
     this.user,
     this.workSession,
     this.trackingActive = false,
+    this.trackingIssue,
     this.errorMessage,
   });
 
@@ -37,6 +40,8 @@ class AuthState {
     AuthUser? user,
     DeliveryWorkSession? workSession,
     bool? trackingActive,
+    String? trackingIssue,
+    bool clearTrackingIssue = false,
     String? errorMessage,
   }) =>
       AuthState(
@@ -44,14 +49,27 @@ class AuthState {
         user: user ?? this.user,
         workSession: workSession ?? this.workSession,
         trackingActive: trackingActive ?? this.trackingActive,
+        trackingIssue:
+            clearTrackingIssue ? null : trackingIssue ?? this.trackingIssue,
         errorMessage: errorMessage,
       );
+}
+
+class _TrackingReconciliation {
+  final DeliveryWorkSession? session;
+  final String? issue;
+
+  const _TrackingReconciliation({
+    required this.session,
+    this.issue,
+  });
 }
 
 class AuthNotifier extends StateNotifier<AuthState> {
   final AuthRepository _repository;
   final WorkSessionRepository _workSessions;
   final DioClient _client;
+  Future<void>? _resumeInFlight;
 
   AuthNotifier(this._repository, this._workSessions, this._client)
       : super(const AuthState()) {
@@ -75,8 +93,22 @@ class AuthNotifier extends StateNotifier<AuthState> {
     unawaited(refreshSessionIfNeededAfterResume());
   }
 
+  /// Coalesces lifecycle, push and route refreshes into one reconciliation.
   Future<void> refreshSessionIfNeededAfterResume() async {
     if (state.status != AuthStatus.authenticated) return;
+    final current = _resumeInFlight;
+    if (current != null) return current;
+
+    final refresh = _refreshSessionInternal();
+    _resumeInFlight = refresh;
+    try {
+      await refresh;
+    } finally {
+      if (identical(_resumeInFlight, refresh)) _resumeInFlight = null;
+    }
+  }
+
+  Future<void> _refreshSessionInternal() async {
     try {
       final accessToken = await _repository.getStoredAccessToken();
       if (JwtExpiration.shouldProactivelyRefresh(accessToken)) {
@@ -86,10 +118,18 @@ class AuthNotifier extends StateNotifier<AuthState> {
           return;
         }
       }
-      final session = await _startWorkSessionTracking(requestPermission: false);
+
+      final reconciliation = await _reconcileWorkSession(
+        requestPermission: false,
+        preserveExistingSessionOnIssue: true,
+      );
       state = state.copyWith(
-        workSession: session,
-        trackingActive: await LocationTrackingService.isRunning,
+        workSession: reconciliation.session ?? state.workSession,
+        trackingActive: reconciliation.session != null &&
+            reconciliation.issue == null &&
+            await LocationTrackingService.isRunning,
+        trackingIssue: reconciliation.issue,
+        clearTrackingIssue: reconciliation.issue == null,
       );
       await _registerFcmTokenSafely();
     } catch (e) {
@@ -119,12 +159,18 @@ class AuthNotifier extends StateNotifier<AuthState> {
         state = const AuthState(status: AuthStatus.unauthenticated);
         return;
       }
-      final session = await _startWorkSessionTracking(requestPermission: false);
+      final reconciliation = await _reconcileWorkSession(
+        requestPermission: false,
+        preserveExistingSessionOnIssue: true,
+      );
       state = AuthState(
         status: AuthStatus.authenticated,
         user: user,
-        workSession: session,
-        trackingActive: await LocationTrackingService.isRunning,
+        workSession: reconciliation.session,
+        trackingActive: reconciliation.session != null &&
+            reconciliation.issue == null &&
+            await LocationTrackingService.isRunning,
+        trackingIssue: reconciliation.issue,
       );
       await _registerFcmTokenSafely();
     } catch (e) {
@@ -149,34 +195,64 @@ class AuthNotifier extends StateNotifier<AuthState> {
           await _registerFcmTokenSafely();
         }
       } catch (_) {}
-      final session = await _startWorkSessionTracking(requestPermission: false);
+
+      final reconciliation = await _reconcileWorkSession(
+        requestPermission: false,
+        preserveExistingSessionOnIssue: false,
+      );
+      if (reconciliation.issue != null || reconciliation.session == null) {
+        throw StateError(
+          reconciliation.issue ?? 'No se pudo iniciar la jornada.',
+        );
+      }
       state = AuthState(
         status: AuthStatus.authenticated,
         user: user,
-        workSession: session,
+        workSession: reconciliation.session,
         trackingActive: await LocationTrackingService.isRunning,
       );
-
     } catch (e) {
       await _endLocalSession(errorMessage: e.toString());
     }
   }
 
-  Future<DeliveryWorkSession> _startWorkSessionTracking({
+  Future<_TrackingReconciliation> _reconcileWorkSession({
     required bool requestPermission,
+    required bool preserveExistingSessionOnIssue,
   }) async {
-    final canTrack = requestPermission
-        ? await _requestLocationPermissions()
-        : await _hasLocationPermission();
-    if (!canTrack) {
-      throw StateError(
-        'Para iniciar la jornada debes permitir ubicación precisa "Todo el tiempo" en los ajustes de Android.',
-      );
+    final permission = requestPermission
+        ? await _requestLocationPermissionState()
+        : await readLocationPermissionState();
+    final stored = await _workSessions.getStored();
+    final storedIsActive = stored != null &&
+        stored.isActive &&
+        DateTime.now().toUtc().isBefore(stored.autoCloseAt);
+
+    if (!permission.canTrackInBackground) {
+      if (preserveExistingSessionOnIssue && storedIsActive) {
+        return _TrackingReconciliation(
+          session: stored,
+          issue: permission.issueMessage,
+        );
+      }
+      if (preserveExistingSessionOnIssue) {
+        return _TrackingReconciliation(
+          session: null,
+          issue: permission.issueMessage,
+        );
+      }
+      throw StateError(permission.issueMessage);
     }
 
     final session = await _workSessions.startOrResume();
     final token = await _repository.getStoredAccessToken();
-    if (token != null) {
+    if (token == null) {
+      throw StateError(
+        'No se encontró la sesión de autenticación para iniciar el rastreo.',
+      );
+    }
+
+    try {
       await LocationTrackingService.startTracking(
         authToken: token,
         baseUrl: ApiConstants.baseUrl,
@@ -185,8 +261,13 @@ class AuthNotifier extends StateNotifier<AuthState> {
         lightIntervalSeconds: session.tracking.lightIntervalSeconds,
         activeIntervalSeconds: session.tracking.activeIntervalSeconds,
       );
+    } on TrackingServiceException catch (error) {
+      if (preserveExistingSessionOnIssue) {
+        return _TrackingReconciliation(session: session, issue: error.message);
+      }
+      rethrow;
     }
-    return session;
+    return _TrackingReconciliation(session: session);
   }
 
   Future<void> _registerFcmTokenSafely() async {
@@ -215,8 +296,6 @@ class AuthNotifier extends StateNotifier<AuthState> {
   Future<void> _endLocalSession({String? errorMessage}) async {
     await LocationTrackingService.stopTracking(
       recordEvent: false,
-      // Preserve queued locations even if the API invalidates this session;
-      // they must not disappear silently before an acknowledgement.
       discardPending: false,
     );
     await FcmService.clearTrackingReviewNotices();
@@ -235,37 +314,34 @@ class AuthNotifier extends StateNotifier<AuthState> {
   }
 
   Future<bool> _requestLocationPermissions() async {
-    try {
-      var permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-      }
-      if (permission == LocationPermission.whileInUse) {
-        await Geolocator.openAppSettings();
-        permission = await Geolocator.checkPermission();
-      }
-      if (permission == LocationPermission.deniedForever) {
-        await Geolocator.openAppSettings();
-        permission = await Geolocator.checkPermission();
-      }
-      final accuracy = await Geolocator.getLocationAccuracy();
-      return await Geolocator.isLocationServiceEnabled() &&
-          permission == LocationPermission.always &&
-          accuracy == LocationAccuracyStatus.precise;
-    } catch (_) {
-      return false;
-    }
+    final state = await _requestLocationPermissionState();
+    return state.canTrackInBackground;
   }
 
-  Future<bool> _hasLocationPermission() async {
-    try {
-      final permission = await Geolocator.checkPermission();
-      final accuracy = await Geolocator.getLocationAccuracy();
-      return await Geolocator.isLocationServiceEnabled() &&
-          permission == LocationPermission.always &&
-          accuracy == LocationAccuracyStatus.precise;
-    } catch (_) {
-      return false;
+  Future<LocationPermissionState> _requestLocationPermissionState() async {
+    var state = await readLocationPermissionState();
+    if (state.permission == LocationPermission.denied) {
+      await Geolocator.requestPermission();
+      state = await readLocationPermissionState();
+    }
+    if (!state.serviceEnabled) {
+      await Geolocator.openLocationSettings();
+      state = await readLocationPermissionState();
+    }
+    if (state.permission != LocationPermission.always ||
+        state.accuracy != LocationAccuracyStatus.precise) {
+      await Geolocator.openAppSettings();
+      state = await readLocationPermissionState();
+    }
+    return state;
+  }
+
+  Future<void> openTrackingSettings() async {
+    final state = await readLocationPermissionState();
+    if (!state.serviceEnabled) {
+      await Geolocator.openLocationSettings();
+    } else {
+      await Geolocator.openAppSettings();
     }
   }
 }

@@ -72,7 +72,7 @@ Future<void> _recordDeviceEvent(
       error.response?.statusCode,
       error.response?.data,
     )) {
-      await LocationTrackingService.stopTracking(
+      await LocationTrackingService._stopTracking(
         recordEvent: false,
         discardPending: false,
       );
@@ -112,7 +112,7 @@ Future<void> _flushDeviceEvents(String token, String baseUrl) async {
         error.response?.statusCode,
         error.response?.data,
       )) {
-        await LocationTrackingService.stopTracking(
+        await LocationTrackingService._stopTracking(
           recordEvent: false,
           discardPending: false,
         );
@@ -248,7 +248,8 @@ class LocationTaskHandler extends TaskHandler {
         return;
       }
 
-      final gpsEnabled = await Geolocator.isLocationServiceEnabled();
+      final permissionState = await readLocationPermissionState();
+      final gpsEnabled = permissionState.serviceEnabled;
       await _recordBooleanTransition(
         storageKey: _kGpsEnabled,
         current: gpsEnabled,
@@ -258,15 +259,14 @@ class LocationTaskHandler extends TaskHandler {
       );
       if (!gpsEnabled) return;
 
-      final permission = await Geolocator.checkPermission();
-      final permissionGranted = permission == LocationPermission.always ||
-          permission == LocationPermission.whileInUse;
+      final permissionGranted = permissionState.canTrackInBackground;
       await _recordBooleanTransition(
         storageKey: _kLocationPermissionGranted,
         current: permissionGranted,
         negativeEvent: 'location_permission_revoked',
         positiveEvent: 'location_permission_recovered',
         permissionState: true,
+        details: permissionState.eventDetails,
       );
       if (!permissionGranted) return;
 
@@ -338,7 +338,7 @@ class LocationTaskHandler extends TaskHandler {
     } on DioException catch (error) {
       final status = error.response?.statusCode;
       if (isSessionReplacedResponse(status, error.response?.data)) {
-        await LocationTrackingService.stopTracking(
+        await LocationTrackingService._stopTracking(
           recordEvent: false,
           discardPending: false,
         );
@@ -396,7 +396,7 @@ class LocationTaskHandler extends TaskHandler {
       } on DioException catch (error) {
         final status = error.response?.statusCode;
         if (isSessionReplacedResponse(status, error.response?.data)) {
-          await LocationTrackingService.stopTracking(
+          await LocationTrackingService._stopTracking(
             recordEvent: false,
             discardPending: false,
           );
@@ -474,6 +474,29 @@ class LocationTaskHandler extends TaskHandler {
 
 class LocationTrackingService {
   static bool _initialized = false;
+  static Future<void> _commandTail = Future<void>.value();
+
+  static ForegroundTaskOptions _foregroundTaskOptions(int intervalMs) =>
+      ForegroundTaskOptions(
+        eventAction: ForegroundTaskEventAction.repeat(intervalMs),
+        autoRunOnBoot: true,
+        autoRunOnMyPackageReplaced: true,
+        allowWakeLock: true,
+        allowAutoRestart: true,
+        stopWithTask: false,
+      );
+
+  static Future<T> _enqueue<T>(Future<T> Function() operation) async {
+    final previous = _commandTail;
+    final gate = Completer<void>();
+    _commandTail = gate.future;
+    try {
+      await previous;
+      return await operation();
+    } finally {
+      gate.complete();
+    }
+  }
 
   static void initialize() {
     if (_initialized) return;
@@ -495,8 +518,10 @@ class LocationTrackingService {
       foregroundTaskOptions: ForegroundTaskOptions(
         eventAction: ForegroundTaskEventAction.repeat(300000),
         autoRunOnBoot: true,
+        autoRunOnMyPackageReplaced: true,
         allowWakeLock: true,
         allowAutoRestart: true,
+        stopWithTask: false,
       ),
     );
   }
@@ -533,6 +558,25 @@ class LocationTrackingService {
   }
 
   static Future<void> startTracking({
+    required String authToken,
+    required String baseUrl,
+    required int workSessionId,
+    required DateTime autoCloseAtUtc,
+    required int lightIntervalSeconds,
+    required int activeIntervalSeconds,
+  }) =>
+      _enqueue(
+        () => _startTracking(
+          authToken: authToken,
+          baseUrl: baseUrl,
+          workSessionId: workSessionId,
+          autoCloseAtUtc: autoCloseAtUtc,
+          lightIntervalSeconds: lightIntervalSeconds,
+          activeIntervalSeconds: activeIntervalSeconds,
+        ),
+      );
+
+  static Future<void> _startTracking({
     required String authToken,
     required String baseUrl,
     required int workSessionId,
@@ -597,9 +641,9 @@ class LocationTrackingService {
         await _recordDeviceEvent('tracking_started');
       }
       if (resumeActive) {
-        await setActiveDeliveryMode(routeId: previousRouteId);
+        await _setActiveDeliveryMode(routeId: previousRouteId);
       } else {
-        await setLightMode();
+        await _setLightMode();
       }
       return;
     }
@@ -618,8 +662,9 @@ class LocationTrackingService {
       callback: locationTaskCallback,
     );
     if (result is ServiceRequestFailure) {
-      debugPrint('LocationTrackingService: failed to start — ${result.error}');
-      return;
+      throw TrackingServiceException(
+        'No se pudo iniciar el servicio de ubicación: ${result.error}',
+      );
     }
     await FlutterForegroundTask.saveData(
       key: _kTrackingExpectedActive,
@@ -632,13 +677,15 @@ class LocationTrackingService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_kUnexpectedStopReportedSession);
     if (resumeActive) {
-      await setActiveDeliveryMode(routeId: previousRouteId);
+      await _setActiveDeliveryMode(routeId: previousRouteId);
     } else {
-      await setLightMode();
+      await _setLightMode();
     }
   }
 
-  static Future<void> setLightMode() async {
+  static Future<void> setLightMode() => _enqueue(_setLightMode);
+
+  static Future<void> _setLightMode() async {
     await FlutterForegroundTask.removeData(key: _kDeliveryRouteId);
     final interval = await FlutterForegroundTask.getData<int>(
           key: _kLightIntervalSeconds,
@@ -648,7 +695,10 @@ class LocationTrackingService {
         _modeLight, interval, 'Jornada activa — seguimiento liviano');
   }
 
-  static Future<void> setActiveDeliveryMode({int? routeId}) async {
+  static Future<void> setActiveDeliveryMode({int? routeId}) =>
+      _enqueue(() => _setActiveDeliveryMode(routeId: routeId));
+
+  static Future<void> _setActiveDeliveryMode({int? routeId}) async {
     if (routeId == null) {
       await FlutterForegroundTask.removeData(key: _kDeliveryRouteId);
     } else {
@@ -673,24 +723,36 @@ class LocationTrackingService {
     int intervalSeconds,
     String notificationText,
   ) async {
-    if (!await FlutterForegroundTask.isRunningService) return;
+    if (!await FlutterForegroundTask.isRunningService) {
+      throw const TrackingServiceException(
+        'El servicio de ubicación no está ejecutándose.',
+      );
+    }
     await FlutterForegroundTask.saveData(key: _kTrackingMode, value: mode);
     final safeInterval = intervalSeconds.clamp(1, 86400).toInt();
     final result = await FlutterForegroundTask.updateService(
-      foregroundTaskOptions: ForegroundTaskOptions(
-        eventAction: ForegroundTaskEventAction.repeat(safeInterval * 1000),
-        autoRunOnBoot: true,
-        allowWakeLock: true,
-        allowAutoRestart: true,
-      ),
+      foregroundTaskOptions: _foregroundTaskOptions(safeInterval * 1000),
       notificationText: notificationText,
     );
     if (result is ServiceRequestFailure) {
-      debugPrint('LocationTrackingService: failed to update — ${result.error}');
+      throw TrackingServiceException(
+        'No se pudo actualizar el intervalo de ubicación: ${result.error}',
+      );
     }
   }
 
   static Future<void> stopTracking({
+    bool recordEvent = true,
+    bool discardPending = false,
+  }) =>
+      _enqueue(
+        () => _stopTracking(
+          recordEvent: recordEvent,
+          discardPending: discardPending,
+        ),
+      );
+
+  static Future<void> _stopTracking({
     bool recordEvent = true,
     bool discardPending = false,
   }) async {
@@ -709,7 +771,9 @@ class LocationTrackingService {
     if (await FlutterForegroundTask.isRunningService) {
       final result = await FlutterForegroundTask.stopService();
       if (result is ServiceRequestFailure) {
-        debugPrint('LocationTrackingService: failed to stop — ${result.error}');
+        throw TrackingServiceException(
+          'No se pudo detener el servicio de ubicación: ${result.error}',
+        );
       }
     }
 
