@@ -3,6 +3,8 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import '../../../../core/errors/user_facing_error.dart';
+import '../../../../core/widgets/error_banner.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 
@@ -139,7 +141,12 @@ class _DeliveryMapPickerState extends State<DeliveryMapPicker> {
       _mapCtrl.move(_pin!, 17);
     } catch (e) {
       setState(
-          () => _gpsError = 'No se pudo obtener la ubicación: ${e.toString()}');
+        () => _gpsError = userFacingErrorMessage(
+          e,
+          fallback:
+              'No pudimos obtener tu ubicación. Revisa el GPS y los permisos.',
+        ),
+      );
     } finally {
       setState(() => _gpsLoading = false);
     }
@@ -378,13 +385,11 @@ class _DeliveryMapPickerState extends State<DeliveryMapPicker> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 if (_gpsError != null)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: Text(
-                      _gpsError!,
-                      style:
-                          const TextStyle(color: AppColors.error, fontSize: 12),
-                    ),
+                  ErrorBanner(
+                    title: 'No pudimos ubicarte',
+                    message: _gpsError!,
+                    margin: const EdgeInsets.only(bottom: 8),
+                    onRetry: _getGps,
                   ),
                 Row(
                   children: [

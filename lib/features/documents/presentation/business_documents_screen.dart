@@ -42,7 +42,7 @@ class _BusinessDocumentsScreenState
     final uri = _resolveUrl(document.publicDownloadUrl);
     final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
     if (!mounted || opened) return;
-    ErrorBanner.show(context, 'No se pudo abrir el documento.');
+    ErrorBanner.show(context, 'No pudimos abrir el documento.');
   }
 
   static Uri _resolveUrl(String pathOrUrl) {
@@ -107,7 +107,11 @@ class _BusinessDocumentsScreenState
             ),
           ),
           if (state.error != null)
-            ErrorBanner(message: state.error!, onRetry: () => notifier.load()),
+            ErrorBanner(
+              title: 'No pudimos cargar los documentos',
+              message: state.error!,
+              onRetry: () => notifier.load(),
+            ),
           Expanded(
             child: state.isLoading
                 ? const Center(child: CircularProgressIndicator())

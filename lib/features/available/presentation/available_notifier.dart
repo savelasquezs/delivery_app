@@ -6,6 +6,7 @@ import '../../auth/presentation/auth_notifier.dart';
 import '../data/branch_presence_verifier.dart';
 import '../../routing/delivery_routing_models.dart';
 import '../../routing/delivery_routing_repository.dart';
+import '../../../core/errors/user_facing_error.dart';
 
 class AvailableState {
   final List<Order> orders;
@@ -92,7 +93,13 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
       state = state.copyWith(orders: orders, isLoading: false);
     } catch (e) {
       if (!mounted) return;
-      state = state.copyWith(isLoading: false, error: e.toString());
+      state = state.copyWith(
+        isLoading: false,
+        error: userFacingErrorMessage(
+          e,
+          fallback: 'No pudimos cargar los pedidos disponibles.',
+        ),
+      );
     }
   }
 
@@ -146,7 +153,13 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
       );
     } catch (e) {
       if (!mounted) return;
-      state = state.copyWith(isLoadingPrep: false, errorPrep: e.toString());
+      state = state.copyWith(
+        isLoadingPrep: false,
+        errorPrep: userFacingErrorMessage(
+          e,
+          fallback: 'No pudimos cargar los pedidos en preparación.',
+        ),
+      );
     }
   }
 
@@ -167,8 +180,13 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
       state = state.copyWith(routingPlan: plan, isLoadingRouting: false);
     } catch (e) {
       if (!mounted) return;
-      state =
-          state.copyWith(isLoadingRouting: false, errorRouting: e.toString());
+      state = state.copyWith(
+        isLoadingRouting: false,
+        errorRouting: userFacingErrorMessage(
+          e,
+          fallback: 'No pudimos preparar la ruta sugerida.',
+        ),
+      );
     }
   }
 

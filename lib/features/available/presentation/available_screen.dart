@@ -18,20 +18,15 @@ import '../../routing/delivery_routing_models.dart';
 Future<void> _openOrderDestinationMap(BuildContext context, Order order) async {
   if (!orderHasOpenableMapDestination(order)) {
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text(
-          'Este pedido no tiene dirección ni coordenadas para el mapa.',
-        ),
-      ),
+    ErrorBanner.show(
+      context,
+      'Este pedido no tiene dirección ni coordenadas para abrir el mapa.',
     );
     return;
   }
   final ok = await openDeliveryDestinationInMaps(order);
   if (!ok && context.mounted) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('No se pudo abrir Google Maps.')),
-    );
+    ErrorBanner.show(context, 'No pudimos abrir Google Maps.');
   }
 }
 
@@ -267,7 +262,10 @@ class _RoutingTabContent extends StatelessWidget {
         child: ListView(children: [
           Padding(
             padding: const EdgeInsets.all(16),
-            child: ErrorBanner(message: error!),
+            child: ErrorBanner(
+              title: 'No pudimos preparar la ruta sugerida',
+              message: error!,
+            ),
           ),
         ]),
       );
@@ -631,6 +629,7 @@ class _OrderTabContentState extends State<_OrderTabContent> {
           if (widget.error != null)
             SliverToBoxAdapter(
               child: ErrorBanner(
+                title: 'No pudimos cargar estos pedidos',
                 message: widget.error!,
                 onRetry: widget.onRefresh,
               ),

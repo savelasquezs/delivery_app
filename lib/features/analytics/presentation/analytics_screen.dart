@@ -94,6 +94,7 @@ class _AnalyticsScreenState extends ConsumerState<AnalyticsScreen> {
             // ── Error + día bloqueado ──────────────────────────────
             if (state.error != null)
               ErrorBanner(
+                title: 'No pudimos cargar tus estadísticas',
                 message: state.error!,
                 onRetry: () =>
                     ref.read(analyticsNotifierProvider.notifier).load(),

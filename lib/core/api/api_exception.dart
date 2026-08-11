@@ -16,10 +16,16 @@ class ApiException implements Exception {
         400 => 'Solicitud inválida',
         401 => 'Sesión expirada. Inicia sesión nuevamente',
         403 => 'No tienes permiso para realizar esta acción',
-        404 => 'Recurso no encontrado',
-        409 => 'Conflicto con el estado actual',
-        422 => 'Datos inválidos',
-        500 => 'Error interno del servidor',
-        _ => 'Error desconocido (código $code)',
+        404 => 'No encontramos la información solicitada',
+        408 => 'La solicitud tardó demasiado. Inténtalo de nuevo',
+        409 => 'Esta acción ya no está disponible en el estado actual',
+        422 => 'Revisa la información e inténtalo de nuevo',
+        429 => 'Has realizado demasiados intentos. Espera un momento',
+        500 ||
+        502 ||
+        503 ||
+        504 =>
+          'El servicio no está disponible en este momento. Inténtalo más tarde',
+        _ => 'No pudimos completar la acción. Inténtalo de nuevo',
       };
 }

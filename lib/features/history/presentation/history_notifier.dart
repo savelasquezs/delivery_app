@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../orders/data/order_repository.dart';
 import '../../orders/models/order_models.dart';
 import '../../auth/presentation/auth_notifier.dart';
+import '../../../core/errors/user_facing_error.dart';
 
 class HistoryState {
   final List<Order> orders;
@@ -107,7 +108,13 @@ class HistoryNotifier extends StateNotifier<HistoryState> {
       );
     } catch (e) {
       if (!mounted) return;
-      state = state.copyWith(isLoading: false, error: e.toString());
+      state = state.copyWith(
+        isLoading: false,
+        error: userFacingErrorMessage(
+          e,
+          fallback: 'No pudimos cargar tu historial.',
+        ),
+      );
     }
   }
 
@@ -134,7 +141,13 @@ class HistoryNotifier extends StateNotifier<HistoryState> {
       );
     } catch (e) {
       if (!mounted) return;
-      state = state.copyWith(isLoadingMore: false, error: e.toString());
+      state = state.copyWith(
+        isLoadingMore: false,
+        error: userFacingErrorMessage(
+          e,
+          fallback: 'No pudimos cargar más pedidos.',
+        ),
+      );
     }
   }
 

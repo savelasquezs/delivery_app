@@ -103,12 +103,16 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         builder: (_, __) => const ForgotPasswordScreen(),
       ),
     ],
-    errorBuilder: (_, state) => Scaffold(
-      backgroundColor: const Color(0xFF121212),
+    errorBuilder: (_, __) => const Scaffold(
+      backgroundColor: Color(0xFF121212),
       body: Center(
-        child: Text(
-          'Página no encontrada: ${state.error}',
-          style: const TextStyle(color: Colors.white),
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: Text(
+            'No encontramos esta página. Vuelve al inicio e inténtalo de nuevo.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.white),
+          ),
         ),
       ),
     ),

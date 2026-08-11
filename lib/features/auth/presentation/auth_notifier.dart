@@ -8,6 +8,7 @@ import '../../../core/api/dio_client.dart';
 import '../../../core/api/refresh_access_result.dart';
 import '../../../core/auth/auth_session_bridge.dart';
 import '../../../core/auth/jwt_expiration.dart';
+import '../../../core/errors/user_facing_error.dart';
 import '../../../core/version/delivery_app_version.dart';
 import '../../notifications/fcm_service.dart';
 import '../../tracking/location_tracking_policy.dart';
@@ -180,7 +181,12 @@ class AuthNotifier extends StateNotifier<AuthState> {
         await _activateUpdateRequired(update.policy);
         return;
       }
-      await _endLocalSession(errorMessage: e.toString());
+      await _endLocalSession(
+        errorMessage: userFacingErrorMessage(
+          e,
+          fallback: 'No pudimos recuperar tu sesión. Inicia sesión de nuevo.',
+        ),
+      );
     }
   }
 
@@ -244,7 +250,12 @@ class AuthNotifier extends StateNotifier<AuthState> {
         await _activateUpdateRequired(update.policy);
         return;
       }
-      await _endLocalSession(errorMessage: e.toString());
+      await _endLocalSession(
+        errorMessage: userFacingErrorMessage(
+          e,
+          fallback: 'No pudimos recuperar tu sesión. Inicia sesión de nuevo.',
+        ),
+      );
     }
   }
 
@@ -287,7 +298,12 @@ class AuthNotifier extends StateNotifier<AuthState> {
         await _activateUpdateRequired(update.policy);
         return;
       }
-      await _endLocalSession(errorMessage: e.toString());
+      await _endLocalSession(
+        errorMessage: userFacingErrorMessage(
+          e,
+          fallback: 'No pudimos iniciar sesión. Inténtalo de nuevo.',
+        ),
+      );
     }
   }
 

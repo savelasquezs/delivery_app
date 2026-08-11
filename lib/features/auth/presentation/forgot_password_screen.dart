@@ -3,8 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/errors/user_facing_error.dart';
+import '../../../core/widgets/error_banner.dart';
 import '../data/auth_repository.dart';
-import '../../../core/api/api_exception.dart';
 
 class ForgotPasswordScreen extends ConsumerStatefulWidget {
   const ForgotPasswordScreen({super.key});
@@ -38,10 +39,15 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
           .read(authRepositoryProvider)
           .forgotPassword(_emailController.text.trim());
       if (mounted) setState(() => _sent = true);
-    } on ApiException catch (e) {
-      if (mounted) setState(() => _error = e.message);
     } catch (e) {
-      if (mounted) setState(() => _error = e.toString());
+      if (mounted) {
+        setState(
+          () => _error = userFacingErrorMessage(
+            e,
+            fallback: 'No pudimos enviar el correo. Inténtalo de nuevo.',
+          ),
+        );
+      }
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -138,28 +144,10 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
               ),
               const SizedBox(height: AppTheme.spacingMd),
               if (_error != null) ...[
-                Container(
-                  padding: const EdgeInsets.all(AppTheme.spacingMd),
-                  decoration: BoxDecoration(
-                    color: AppColors.error.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-                    border: Border.all(
-                        color: AppColors.error.withValues(alpha: 0.3)),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.error_outline,
-                          color: AppColors.error, size: 18),
-                      const SizedBox(width: AppTheme.spacingSm),
-                      Expanded(
-                        child: Text(
-                          _error!,
-                          style: const TextStyle(
-                              color: AppColors.error, fontSize: 13),
-                        ),
-                      ),
-                    ],
-                  ),
+                ErrorBanner(
+                  title: 'No pudimos enviar el enlace',
+                  message: _error!,
+                  margin: EdgeInsets.zero,
                 ),
                 const SizedBox(height: AppTheme.spacingMd),
               ],

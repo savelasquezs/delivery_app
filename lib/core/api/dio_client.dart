@@ -178,7 +178,7 @@ class DioClient {
   ApiException _transientRefreshApiError(DioException original) {
     final mapped = _mapDioError(original);
     if (mapped.message ==
-            'No se pudo conectar con el servidor. Verifica tu conexión y la URL del API en .env' ||
+            'No pudimos conectarnos. Revisa tu conexión a internet e inténtalo de nuevo.' ||
         mapped.message == 'Tiempo de espera agotado. Verifica tu conexión' ||
         mapped.message == 'Sin conexión a internet') {
       return mapped;
@@ -379,7 +379,7 @@ class DioClient {
     }
     if (err.type == DioExceptionType.connectionError) {
       return const ApiException(
-        'No se pudo conectar con el servidor. Verifica tu conexión y la URL del API en .env',
+        'No pudimos conectarnos. Revisa tu conexión a internet e inténtalo de nuevo.',
       );
     }
     return const ApiException('Sin conexión a internet');

@@ -3,6 +3,7 @@ import '../../orders/data/order_repository.dart';
 import '../../orders/models/order_models.dart';
 import '../../auth/presentation/auth_notifier.dart';
 import '../../tracking/location_tracking_service.dart';
+import '../../../core/errors/user_facing_error.dart';
 
 class RouteState {
   final List<Order> orders;
@@ -52,7 +53,13 @@ class RouteNotifier extends StateNotifier<RouteState> {
       await _syncTracking(result.items);
     } catch (e) {
       if (!mounted) return;
-      state = state.copyWith(isLoading: false, error: e.toString());
+      state = state.copyWith(
+        isLoading: false,
+        error: userFacingErrorMessage(
+          e,
+          fallback: 'No pudimos cargar tu ruta.',
+        ),
+      );
     }
   }
 

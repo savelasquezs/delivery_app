@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/business_document_repository.dart';
 import '../models/business_document.dart';
+import '../../../core/errors/user_facing_error.dart';
 
 class BusinessDocumentsState {
   final List<BusinessDocument> documents;
@@ -79,7 +80,10 @@ class BusinessDocumentsNotifier extends StateNotifier<BusinessDocumentsState> {
       if (!mounted) return;
       state = state.copyWith(
         isLoading: false,
-        error: _message(error),
+        error: userFacingErrorMessage(
+          error,
+          fallback: 'No pudimos cargar los documentos.',
+        ),
       );
     }
   }
@@ -104,14 +108,12 @@ class BusinessDocumentsNotifier extends StateNotifier<BusinessDocumentsState> {
       if (!mounted) return;
       state = state.copyWith(
         isLoadingMore: false,
-        error: _message(error),
+        error: userFacingErrorMessage(
+          error,
+          fallback: 'No pudimos cargar más documentos.',
+        ),
       );
     }
-  }
-
-  static String _message(Object error) {
-    final text = error.toString();
-    return text.startsWith('Exception: ') ? text.substring(11) : text;
   }
 }
 

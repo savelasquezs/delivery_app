@@ -10,6 +10,7 @@ import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/whatsapp/open_whatsapp.dart';
 import '../../core/widgets/app_logo.dart';
+import '../../core/widgets/error_banner.dart';
 import '../auth/data/auth_models.dart';
 import '../auth/presentation/auth_notifier.dart';
 import '../available/presentation/available_notifier.dart';
@@ -275,9 +276,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     final ok = await openWhatsAppChat(raw);
     if (!mounted) return;
     if (!ok) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No se pudo abrir WhatsApp')),
-      );
+      ErrorBanner.show(context, 'No pudimos abrir WhatsApp.');
     }
   }
 

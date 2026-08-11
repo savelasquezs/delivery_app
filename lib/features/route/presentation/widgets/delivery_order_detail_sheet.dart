@@ -1,10 +1,9 @@
-import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
-import '../../../../core/api/api_exception.dart';
+import '../../../../core/errors/user_facing_error.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/widgets/error_banner.dart';
@@ -116,7 +115,14 @@ class _DeliveryOrderDetailBodyState
           .getOrderWithDetails(widget.initialOrder.id);
       if (mounted) setState(() => _order = full);
     } catch (e) {
-      if (mounted) setState(() => _error = e.toString());
+      if (mounted) {
+        setState(
+          () => _error = userFacingErrorMessage(
+            e,
+            fallback: 'No pudimos cargar todos los detalles del pedido.',
+          ),
+        );
+      }
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -172,7 +178,13 @@ class _DeliveryOrderDetailBodyState
         ),
       );
     } catch (e) {
-      if (mounted) ErrorBanner.show(context, e.toString());
+      if (mounted) {
+        ErrorBanner.show(
+          context,
+          e,
+          fallback: 'No pudimos marcar el pedido como entregado.',
+        );
+      }
     }
   }
 
@@ -196,12 +208,11 @@ class _DeliveryOrderDetailBodyState
       );
     } catch (e) {
       if (mounted) {
-        final msg = e is ApiException
-            ? e.message
-            : e is DioException && e.error is ApiException
-                ? (e.error! as ApiException).message
-                : e.toString();
-        ErrorBanner.show(context, msg);
+        ErrorBanner.show(
+          context,
+          e,
+          fallback: 'No pudimos solicitar la impresión del pedido.',
+        );
       }
     } finally {
       if (mounted) setState(() => _reprintLoading = false);
@@ -357,9 +368,11 @@ class _DeliveryOrderDetailBodyState
                 children: [
                   // ── Error de carga ─────────────────────────────
                   if (_error != null)
-                    _InfoCard(
-                      child: Text(_error!,
-                          style: const TextStyle(color: AppColors.error)),
+                    ErrorBanner(
+                      title: 'No cargamos todos los detalles',
+                      message: _error!,
+                      margin: EdgeInsets.zero,
+                      onRetry: _fetch,
                     ),
 
                   // ── Advertencia de ruta ────────────────────────
@@ -705,7 +718,10 @@ class _EditAddressPageState extends ConsumerState<_EditAddressPage> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          _loadError = e.toString();
+          _loadError = userFacingErrorMessage(
+            e,
+            fallback: 'No pudimos cargar la lista de barrios.',
+          );
           _loadingNeighborhoods = false;
         });
       }
@@ -778,7 +794,12 @@ class _EditAddressPageState extends ConsumerState<_EditAddressPage> {
       );
     } catch (e) {
       if (mounted) {
-        ErrorBanner.show(context, 'No se pudo obtener la ubicación: $e');
+        ErrorBanner.show(
+          context,
+          e,
+          fallback:
+              'No pudimos obtener tu ubicación. Revisa el GPS y los permisos.',
+        );
       }
     } finally {
       if (mounted) setState(() => _gpsLoading = false);
@@ -832,7 +853,13 @@ class _EditAddressPageState extends ConsumerState<_EditAddressPage> {
         ),
       );
     } catch (e) {
-      if (mounted) ErrorBanner.show(context, e.toString());
+      if (mounted) {
+        ErrorBanner.show(
+          context,
+          e,
+          fallback: 'No pudimos guardar la dirección. Inténtalo de nuevo.',
+        );
+      }
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -879,7 +906,13 @@ class _EditAddressPageState extends ConsumerState<_EditAddressPage> {
               child: ListView(
                 padding: const EdgeInsets.all(20),
                 children: [
-                  if (_loadError != null) _ErrorBox(message: _loadError!),
+                  if (_loadError != null)
+                    ErrorBanner(
+                      title: 'No pudimos cargar los barrios',
+                      message: _loadError!,
+                      margin: const EdgeInsets.only(bottom: 16),
+                      onRetry: _loadNeighborhoods,
+                    ),
 
                   // ── Barrio ──────────────────────────────────────
                   _FieldLabel('Barrio'),
@@ -1387,32 +1420,6 @@ class _FieldLabel extends StatelessWidget {
       );
 }
 
-class _ErrorBox extends StatelessWidget {
-  final String message;
-  const _ErrorBox({required this.message});
-
-  @override
-  Widget build(BuildContext context) => Container(
-        margin: const EdgeInsets.only(bottom: 16),
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: AppColors.error.withValues(alpha: 0.1),
-          borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-          border: Border.all(color: AppColors.error.withValues(alpha: 0.3)),
-        ),
-        child: Row(
-          children: [
-            const Icon(Icons.error_outline, color: AppColors.error, size: 18),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(message,
-                  style: const TextStyle(color: AppColors.error, fontSize: 13)),
-            ),
-          ],
-        ),
-      );
-}
-
 class _NeighborhoodDropdown extends StatelessWidget {
   final List<Neighborhood> neighborhoods;
   final int? selectedId;
@@ -1608,9 +1615,7 @@ class _PhoneActions extends StatelessWidget {
           mode: LaunchMode.externalApplication);
     } catch (_) {
       if (ctx.mounted) {
-        ScaffoldMessenger.of(ctx).showSnackBar(
-          const SnackBar(content: Text('No se pudo iniciar la llamada')),
-        );
+        ErrorBanner.show(ctx, 'No pudimos iniciar la llamada.');
       }
     }
   }
@@ -1621,9 +1626,7 @@ class _PhoneActions extends StatelessWidget {
           mode: LaunchMode.externalApplication);
     } catch (_) {
       if (ctx.mounted) {
-        ScaffoldMessenger.of(ctx).showSnackBar(
-          const SnackBar(content: Text('No se pudo abrir WhatsApp')),
-        );
+        ErrorBanner.show(ctx, 'No pudimos abrir WhatsApp.');
       }
     }
   }

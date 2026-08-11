@@ -123,6 +123,7 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
             if (state.error != null)
               SliverToBoxAdapter(
                 child: ErrorBanner(
+                  title: 'No pudimos cargar tu historial',
                   message: state.error!,
                   onRetry: () =>
                       ref.read(historyNotifierProvider.notifier).load(),

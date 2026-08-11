@@ -1,6 +1,5 @@
-import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
-import '../api/api_exception.dart';
+import '../errors/user_facing_error.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_theme.dart';
 
@@ -70,14 +69,6 @@ class _ConfirmPasswordDialogState extends State<ConfirmPasswordDialog> {
     super.dispose();
   }
 
-  String _formatError(Object e) {
-    if (e is ApiException) return e.message;
-    if (e is DioException && e.error is ApiException) {
-      return (e.error! as ApiException).message;
-    }
-    return e.toString();
-  }
-
   Future<void> _confirm() async {
     if (_controller.text.isEmpty) {
       setState(() => _error = 'Ingresa tu contraseña');
@@ -96,7 +87,10 @@ class _ConfirmPasswordDialogState extends State<ConfirmPasswordDialog> {
       if (mounted) Navigator.of(context).pop(true);
     } catch (e) {
       setState(() {
-        _error = _formatError(e);
+        _error = userFacingErrorMessage(
+          e,
+          fallback: 'No pudimos confirmar tu contraseña.',
+        );
         _isLoading = false;
       });
     }

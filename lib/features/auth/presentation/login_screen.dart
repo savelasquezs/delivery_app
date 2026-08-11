@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_logo.dart';
+import '../../../core/widgets/error_banner.dart';
 import '../../../core/router/app_router.dart';
 import 'auth_notifier.dart';
 import '../../../core/widgets/location_disclosure.dart';
@@ -147,32 +148,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         ),
                         const SizedBox(height: AppTheme.spacingLg),
                         if (authState.errorMessage != null) ...[
-                          Container(
-                            padding: const EdgeInsets.all(AppTheme.spacingMd),
-                            decoration: BoxDecoration(
-                              color: AppColors.error.withValues(alpha: 0.1),
-                              borderRadius:
-                                  BorderRadius.circular(AppTheme.radiusMd),
-                              border: Border.all(
-                                  color:
-                                      AppColors.error.withValues(alpha: 0.3)),
-                            ),
-                            child: Row(
-                              children: [
-                                const Icon(Icons.error_outline,
-                                    color: AppColors.error, size: 18),
-                                const SizedBox(width: AppTheme.spacingSm),
-                                Expanded(
-                                  child: Text(
-                                    authState.errorMessage!,
-                                    style: const TextStyle(
-                                      color: AppColors.error,
-                                      fontSize: 13,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
+                          ErrorBanner(
+                            title: 'No pudimos iniciar sesión',
+                            message: authState.errorMessage!,
+                            margin: EdgeInsets.zero,
                           ),
                           const SizedBox(height: AppTheme.spacingMd),
                         ],

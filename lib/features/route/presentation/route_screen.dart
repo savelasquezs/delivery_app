@@ -1,10 +1,8 @@
-import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../../../core/api/api_exception.dart';
 import '../../../core/maps/open_delivery_destination_maps.dart';
 import '../../../core/orders/route_order_helpers.dart';
 import '../../../core/theme/app_colors.dart';
@@ -81,7 +79,13 @@ class _RouteScreenState extends ConsumerState<RouteScreen> {
           await ref.read(routeNotifierProvider.notifier).markOnTheWay(order.id);
         }
       } catch (e) {
-        if (mounted) ErrorBanner.show(context, e.toString());
+        if (mounted) {
+          ErrorBanner.show(
+            context,
+            e,
+            fallback: 'No pudimos actualizar el estado del pedido.',
+          );
+        }
       }
     }
   }
@@ -106,12 +110,11 @@ class _RouteScreenState extends ConsumerState<RouteScreen> {
       );
     } catch (e) {
       if (!mounted) return;
-      final msg = e is ApiException
-          ? e.message
-          : e is DioException && e.error is ApiException
-              ? (e.error! as ApiException).message
-              : e.toString();
-      ErrorBanner.show(context, msg);
+      ErrorBanner.show(
+        context,
+        e,
+        fallback: 'No pudimos solicitar la impresión del pedido.',
+      );
     } finally {
       if (mounted) setState(() => _reprintingOrderId = null);
     }
@@ -140,21 +143,16 @@ class _RouteScreenState extends ConsumerState<RouteScreen> {
   Future<void> _openSingleOrderMap(Order order) async {
     if (!orderHasOpenableMapDestination(order)) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Este pedido no tiene direccion ni coordenadas para el mapa.',
-            ),
-          ),
+        ErrorBanner.show(
+          context,
+          'Este pedido no tiene dirección ni coordenadas para abrir el mapa.',
         );
       }
       return;
     }
     final ok = await openDeliveryDestinationInMaps(order);
     if (!ok && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No se pudo abrir Google Maps.')),
-      );
+      ErrorBanner.show(context, 'No pudimos abrir Google Maps.');
     }
   }
 
@@ -167,14 +165,14 @@ class _RouteScreenState extends ConsumerState<RouteScreen> {
         mode: LaunchMode.externalApplication,
       );
       if (!ok && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No se pudo abrir la llamada.')),
-        );
+        ErrorBanner.show(context, 'No pudimos iniciar la llamada.');
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('No se pudo abrir la llamada: $e')),
+        ErrorBanner.show(
+          context,
+          e,
+          fallback: 'No pudimos iniciar la llamada.',
         );
       }
     }
@@ -188,9 +186,7 @@ class _RouteScreenState extends ConsumerState<RouteScreen> {
       message: buildDeliveryWhatsAppMessage(order),
     );
     if (!ok && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No se pudo abrir WhatsApp.')),
-      );
+      ErrorBanner.show(context, 'No pudimos abrir WhatsApp.');
     }
   }
 
@@ -207,10 +203,9 @@ class _RouteScreenState extends ConsumerState<RouteScreen> {
 
     if (withCoords.isEmpty) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Ningun pedido tiene coordenadas registradas.'),
-          ),
+        ErrorBanner.show(
+          context,
+          'Ningún pedido tiene una ubicación registrada para crear la ruta.',
         );
       }
       return;
@@ -238,8 +233,10 @@ class _RouteScreenState extends ConsumerState<RouteScreen> {
       );
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('No se pudo abrir Google Maps: $e')),
+        ErrorBanner.show(
+          context,
+          e,
+          fallback: 'No pudimos abrir la ruta en Google Maps.',
         );
       }
     }
@@ -265,6 +262,7 @@ class _RouteScreenState extends ConsumerState<RouteScreen> {
             if (state.error != null)
               SliverToBoxAdapter(
                 child: ErrorBanner(
+                  title: 'No pudimos cargar tu ruta',
                   message: state.error!,
                   onRetry: () =>
                       ref.read(routeNotifierProvider.notifier).load(),

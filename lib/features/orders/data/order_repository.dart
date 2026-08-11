@@ -134,19 +134,23 @@ class OrderRepository {
 
   static Map<String, dynamic> _unwrapApiEnvelope(dynamic data) {
     if (data is! Map) {
-      throw const ApiException('Respuesta inválida del servidor');
+      throw const ApiException(
+        'La sucursal no confirmó la solicitud de impresión. Inténtalo de nuevo.',
+      );
     }
     final map = Map<String, dynamic>.from(data);
     final ok = map['isSuccess'] as bool? ?? map['IsSuccess'] as bool?;
     if (ok == false) {
       final msg = map['message'] as String? ??
           map['Message'] as String? ??
-          'No se pudo encolar la impresión';
+          'La sucursal no pudo recibir la solicitud de impresión';
       throw ApiException(msg);
     }
     final payload = map['data'] ?? map['Data'];
     if (payload is! Map) {
-      throw const ApiException('Respuesta incompleta del servidor');
+      throw const ApiException(
+        'La sucursal no confirmó la impresión. Consulta su estado más tarde.',
+      );
     }
     return Map<String, dynamic>.from(payload);
   }

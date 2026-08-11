@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/api/api_constants.dart';
 import '../../../core/api/dio_client.dart';
 import '../../../core/constants/delivery_payroll.dart';
+import '../../../core/errors/user_facing_error.dart';
 import '../../auth/presentation/auth_notifier.dart';
 import '../models/advance_model.dart';
 import '../models/analytics_dashboard_models.dart';
@@ -339,7 +340,12 @@ class AnalyticsNotifier extends StateNotifier<AnalyticsState> {
           return UserPayrollInsights.fromJson(j);
         } catch (e) {
           if (mounted) {
-            state = state.copyWith(payrollError: e.toString());
+            state = state.copyWith(
+              payrollError: userFacingErrorMessage(
+                e,
+                fallback: 'No pudimos cargar la información de nómina.',
+              ),
+            );
           }
           return null;
         }
@@ -365,7 +371,13 @@ class AnalyticsNotifier extends StateNotifier<AnalyticsState> {
       );
     } catch (e) {
       if (!mounted) return;
-      state = state.copyWith(isLoading: false, error: e.toString());
+      state = state.copyWith(
+        isLoading: false,
+        error: userFacingErrorMessage(
+          e,
+          fallback: 'No pudimos cargar tus estadísticas.',
+        ),
+      );
     }
 
     await _loadAdvances();
@@ -399,7 +411,10 @@ class AnalyticsNotifier extends StateNotifier<AnalyticsState> {
       if (!mounted) return;
       state = state.copyWith(
         isLoadingAdvances: false,
-        advancesError: e.toString(),
+        advancesError: userFacingErrorMessage(
+          e,
+          fallback: 'No pudimos cargar tus préstamos.',
+        ),
       );
     }
   }

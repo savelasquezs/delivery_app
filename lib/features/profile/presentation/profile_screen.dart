@@ -6,9 +6,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 
-import '../../../core/api/api_exception.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/error_banner.dart';
 import '../../auth/data/auth_models.dart';
 import '../../auth/presentation/auth_notifier.dart';
 import '../data/profile_image_url.dart';
@@ -104,15 +104,12 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Foto actualizada')),
       );
-    } on ApiException catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message)),
-      );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: $e')),
+      ErrorBanner.show(
+        context,
+        e,
+        fallback: 'No pudimos actualizar tu foto. Inténtalo de nuevo.',
       );
     } finally {
       if (mounted) setState(() => _uploading = false);
@@ -135,10 +132,12 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Datos guardados')),
       );
-    } on ApiException catch (e) {
+    } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message)),
+      ErrorBanner.show(
+        context,
+        e,
+        fallback: 'No pudimos guardar tus datos. Inténtalo de nuevo.',
       );
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -184,15 +183,12 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Contraseña actualizada')),
       );
-    } on ApiException catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message)),
-      );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('$e')),
+      ErrorBanner.show(
+        context,
+        e,
+        fallback: 'No pudimos actualizar tu contraseña. Inténtalo de nuevo.',
       );
     } finally {
       if (mounted) setState(() => _savingPass = false);

@@ -5,6 +5,7 @@ import 'package:dio/dio.dart';
 import '../../../core/api/dio_client.dart';
 import '../../../core/api/api_constants.dart';
 import '../../../core/api/api_exception.dart';
+import '../../../core/errors/user_facing_error.dart';
 import '../../../core/storage/secure_storage.dart';
 import '../../../core/version/delivery_app_version.dart';
 import 'auth_models.dart';
@@ -58,9 +59,19 @@ class AuthRepository {
       final update = deliveryAppUpdateFromError(error);
       if (update != null) throw update;
       if (error.error is ApiException) throw error.error! as ApiException;
-      throw ApiException('Error al iniciar sesión: ${error.message}');
+      throw ApiException(
+        userFacingErrorMessage(
+          error,
+          fallback: 'No pudimos iniciar sesión. Inténtalo de nuevo.',
+        ),
+      );
     } catch (e) {
-      throw ApiException('Error al iniciar sesión: ${e.toString()}');
+      throw ApiException(
+        userFacingErrorMessage(
+          e,
+          fallback: 'No pudimos iniciar sesión. Inténtalo de nuevo.',
+        ),
+      );
     }
   }
 
@@ -96,7 +107,12 @@ class AuthRepository {
     } on ApiException {
       rethrow;
     } catch (e) {
-      throw ApiException('Error al enviar el correo: ${e.toString()}');
+      throw ApiException(
+        userFacingErrorMessage(
+          e,
+          fallback: 'No pudimos enviar el correo. Inténtalo de nuevo.',
+        ),
+      );
     }
   }
 

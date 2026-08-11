@@ -760,7 +760,7 @@ class LocationTrackingService {
     );
     if (result is ServiceRequestFailure) {
       throw TrackingServiceException(
-        'No se pudo iniciar el servicio de ubicación: ${result.error}',
+        'No pudimos iniciar el seguimiento de ubicación. Revisa el GPS y los permisos.',
       );
     }
     await FlutterForegroundTask.saveData(
@@ -833,7 +833,7 @@ class LocationTrackingService {
     );
     if (result is ServiceRequestFailure) {
       throw TrackingServiceException(
-        'No se pudo actualizar el intervalo de ubicación: ${result.error}',
+        'No pudimos actualizar el seguimiento de ubicación.',
       );
     }
   }
@@ -869,7 +869,7 @@ class LocationTrackingService {
       final result = await FlutterForegroundTask.stopService();
       if (result is ServiceRequestFailure) {
         throw TrackingServiceException(
-          'No se pudo detener el servicio de ubicación: ${result.error}',
+          'No pudimos detener el seguimiento de ubicación.',
         );
       }
     }
