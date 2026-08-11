@@ -27,6 +27,23 @@ class BranchPresenceResult {
   });
 
   bool get isInside => status == BranchPresenceStatus.inside;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is BranchPresenceResult &&
+          status == other.status &&
+          latitude == other.latitude &&
+          longitude == other.longitude &&
+          distanceMeters == other.distanceMeters;
+
+  @override
+  int get hashCode => Object.hash(
+        status,
+        latitude,
+        longitude,
+        distanceMeters,
+      );
 }
 
 class BranchPresenceVerifier {

@@ -4,6 +4,12 @@ import '../../orders/models/order_models.dart';
 import '../../auth/presentation/auth_notifier.dart';
 import '../../tracking/location_tracking_service.dart';
 import '../../../core/errors/user_facing_error.dart';
+import '../../../core/orders/route_order_helpers.dart';
+
+enum RouteOrderChange { none, added, updated, removed }
+
+typedef RouteOrdersLoader = Future<PagedOrders> Function();
+typedef RouteTrackingSync = Future<void> Function(List<Order> orders);
 
 class RouteState {
   final List<Order> orders;
@@ -29,30 +35,60 @@ class RouteState {
 }
 
 class RouteNotifier extends StateNotifier<RouteState> {
-  final OrderRepository _repository;
+  final OrderRepository? _repository;
   final int _deliverymanId;
+  final RouteOrdersLoader? _ordersLoader;
+  final RouteTrackingSync? _trackingSync;
+  Future<void>? _loadInFlight;
 
   RouteNotifier(this._repository, this._deliverymanId)
-      : super(const RouteState());
+      : _ordersLoader = null,
+        _trackingSync = null,
+        super(const RouteState());
 
-  Future<void> load() async {
+  RouteNotifier.withLoader({
+    required int deliverymanId,
+    required RouteOrdersLoader loadOrders,
+    RouteTrackingSync? syncTracking,
+  })  : _repository = null,
+        _deliverymanId = deliverymanId,
+        _ordersLoader = loadOrders,
+        _trackingSync = syncTracking,
+        super(const RouteState());
+
+  bool containsOrder(int orderId) =>
+      state.orders.any((order) => order.id == orderId);
+
+  Future<void> load({bool silently = false}) {
+    final current = _loadInFlight;
+    if (current != null) return current;
+    final operation = _load(silently: silently);
+    _loadInFlight = operation;
+    return operation.whenComplete(() {
+      if (identical(_loadInFlight, operation)) _loadInFlight = null;
+    });
+  }
+
+  Future<void> _load({required bool silently}) async {
     if (!mounted) return;
-    state = state.copyWith(isLoading: true, error: null);
+    if (!silently) {
+      state = state.copyWith(isLoading: true, error: null);
+    }
     try {
-      final today = _todayString();
-      final result = await _repository.getAssignedOrders(
-        deliverymanId: _deliverymanId,
-        fromDate: today,
-        toDate: today,
-        status: 'OnTheWay',
-        type: 'Delivery',
-        pageSize: 100,
-      );
+      final result = await _fetchOrders();
       if (!mounted) return;
-      state = state.copyWith(orders: result.items, isLoading: false);
+      final unchanged = routeOrdersHaveSameContent(state.orders, result.items);
+      if (!unchanged || state.isLoading || state.error != null) {
+        state = state.copyWith(
+          orders: unchanged ? state.orders : result.items,
+          isLoading: false,
+          error: null,
+        );
+      }
       await _syncTracking(result.items);
     } catch (e) {
       if (!mounted) return;
+      if (silently) return;
       state = state.copyWith(
         isLoading: false,
         error: userFacingErrorMessage(
@@ -63,8 +99,44 @@ class RouteNotifier extends StateNotifier<RouteState> {
     }
   }
 
+  Future<RouteOrderChange> applyRealtimeOrder(Order order) async {
+    if (!mounted) return RouteOrderChange.none;
+    final index = state.orders.indexWhere((item) => item.id == order.id);
+    final belongsToCurrentRoute = order.status == OrderStatus.onTheWay &&
+        order.deliveryManId == _deliverymanId;
+
+    if (!belongsToCurrentRoute) {
+      if (index < 0) return RouteOrderChange.none;
+      final next = [...state.orders]..removeAt(index);
+      state = state.copyWith(orders: next, isLoading: false, error: null);
+      await _syncTracking(next);
+      return RouteOrderChange.removed;
+    }
+
+    if (index < 0) {
+      final next = [...state.orders, order];
+      state = state.copyWith(orders: next, isLoading: false, error: null);
+      await _syncTracking(next);
+      return RouteOrderChange.added;
+    }
+
+    if (routeOrderHasSameContent(state.orders[index], order)) {
+      return RouteOrderChange.none;
+    }
+
+    final next = [...state.orders]..[index] = order;
+    state = state.copyWith(orders: next, isLoading: false, error: null);
+    await _syncTracking(next);
+    return RouteOrderChange.updated;
+  }
+
   /// Starts or stops location tracking based on whether there are onTheWay orders.
   Future<void> _syncTracking(List<Order> orders) async {
+    final trackingSync = _trackingSync;
+    if (trackingSync != null) {
+      await trackingSync(orders);
+      return;
+    }
     final hasActiveOrders = orders.isNotEmpty;
     if (hasActiveOrders) {
       int? routeId;
@@ -81,12 +153,12 @@ class RouteNotifier extends StateNotifier<RouteState> {
   }
 
   Future<void> markDelivered(int orderId) async {
-    await _repository.updateOrderStatus(orderId, OrderStatus.delivered);
+    await _repository!.updateOrderStatus(orderId, OrderStatus.delivered);
     await load(); // load() already calls _syncTracking
   }
 
   Future<void> markOnTheWay(int orderId) async {
-    await _repository.updateOrderStatus(orderId, OrderStatus.onTheWay);
+    await _repository!.updateOrderStatus(orderId, OrderStatus.onTheWay);
     await load();
   }
 
@@ -119,13 +191,29 @@ class RouteNotifier extends StateNotifier<RouteState> {
     final now = DateTime.now();
     return '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
   }
+
+  Future<PagedOrders> _fetchOrders() {
+    final ordersLoader = _ordersLoader;
+    if (ordersLoader != null) return ordersLoader();
+    final today = _todayString();
+    return _repository!.getAssignedOrders(
+      deliverymanId: _deliverymanId,
+      fromDate: today,
+      toDate: today,
+      status: 'OnTheWay',
+      type: 'Delivery',
+      pageSize: 100,
+    );
+  }
 }
 
 final routeNotifierProvider =
     StateNotifierProvider.autoDispose<RouteNotifier, RouteState>((ref) {
-  final user = ref.watch(authNotifierProvider).user;
+  final deliverymanId = ref.watch(
+    authNotifierProvider.select((auth) => auth.user?.id ?? 0),
+  );
   return RouteNotifier(
     ref.watch(orderRepositoryProvider),
-    user?.id ?? 0,
+    deliverymanId,
   );
 });

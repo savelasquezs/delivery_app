@@ -21,8 +21,11 @@ import '../history/presentation/history_notifier.dart';
 import '../history/presentation/history_screen.dart';
 import '../analytics/presentation/analytics_notifier.dart';
 import '../analytics/presentation/analytics_screen.dart';
+import '../orders/models/order_models.dart';
 import '../profile/data/profile_image_url.dart';
+import '../realtime/order_hub_event.dart';
 import '../realtime/order_hub_service.dart';
+import 'home_resume_policy.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -37,6 +40,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   HubConnectionStatus _hubStatus = HubConnectionStatus.disconnected;
   OrderHubService? _hubService;
   bool _signalRListenersAttached = false;
+  Future<void>? _resumeInFlight;
+  Future<void>? _hubConnectInFlight;
 
   static const _screens = [
     AvailableScreen(),
@@ -79,29 +84,56 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      unawaited(_onResumed());
+      unawaited(_resumeAfterBackground());
     }
   }
 
-  /// Renueva el access si hace falta y reconecta SignalR con token fresco (storage).
+  Future<void> _resumeAfterBackground() {
+    final current = _resumeInFlight;
+    if (current != null) return current;
+    final operation = _onResumed();
+    _resumeInFlight = operation;
+    return operation.whenComplete(() {
+      if (identical(_resumeInFlight, operation)) _resumeInFlight = null;
+    });
+  }
+
   Future<void> _onResumed() async {
     await ref
         .read(authNotifierProvider.notifier)
         .refreshSessionIfNeededAfterResume();
     if (!mounted) return;
-    await _restartTrackingIfNeeded();
+    final auth = ref.read(authNotifierProvider);
+    if (auth.status != AuthStatus.authenticated || auth.user == null) return;
+    await _connectSignalR();
     if (!mounted) return;
-    await _connectSignalR(forceReconnect: true);
+    switch (homeResumeRefreshForTab(_currentIndex)) {
+      case HomeResumeRefresh.available:
+        await ref
+            .read(availableNotifierProvider.notifier)
+            .loadAll(silently: true);
+        break;
+      case HomeResumeRefresh.route:
+        await ref.read(routeNotifierProvider.notifier).load(silently: true);
+        break;
+      case HomeResumeRefresh.none:
+        break;
+    }
   }
 
-  /// Re-starts location tracking when the app resumes from background,
-  /// in case the service was killed by the OS.
-  Future<void> _restartTrackingIfNeeded() async {
-    if (ref.read(authNotifierProvider).user == null) return;
-    await ref.read(routeNotifierProvider.notifier).load();
+  Future<void> _connectSignalR() {
+    final current = _hubConnectInFlight;
+    if (current != null) return current;
+    final operation = _connectSignalRInternal();
+    _hubConnectInFlight = operation;
+    return operation.whenComplete(() {
+      if (identical(_hubConnectInFlight, operation)) {
+        _hubConnectInFlight = null;
+      }
+    });
   }
 
-  Future<void> _connectSignalR({bool forceReconnect = false}) async {
+  Future<void> _connectSignalRInternal() async {
     final user = ref.read(authNotifierProvider).user;
     if (user == null) return;
 
@@ -113,10 +145,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       _signalRListenersAttached = true;
     }
     // El grupo SignalR lo define el JWT (`branch_id`); el parámetro es solo por compatibilidad.
-    await _hubService!.connect(
-      user.branchId ?? 0,
-      forceReconnect: forceReconnect,
-    );
+    await _hubService!.connect(user.branchId ?? 0);
   }
 
   void _onHubStatusChange(HubConnectionStatus status) {
@@ -125,25 +154,72 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 
   void _onHubEvent(String event, List<Object?>? args) {
     if (!mounted) return;
-    if (event == 'OrderReady' ||
-        event == 'OrderAssigned' ||
-        event == 'OrderAssignedToDelivery' ||
-        event == 'OrderModified' ||
-        event == 'OrderStatusChanged' ||
-        event == 'OrderCancelled' ||
-        event == 'DeliveryRoutingPlanChanged' ||
-        event == 'RouteProposalClaimed') {
-      ref.invalidate(availableNotifierProvider);
-      ref.invalidate(routeNotifierProvider);
-      ref.invalidate(historyNotifierProvider);
+    unawaited(_handleHubEvent(event, args));
+  }
 
-      // Tras invalidar el ruteo, volver a cargar para que `_syncTracking` arranque
-      // o detenga el foreground GPS sin exigir abrir la pestaña "En ruta".
-      WidgetsBinding.instance.addPostFrameCallback((_) async {
-        if (!mounted) return;
-        await ref.read(routeNotifierProvider.notifier).load();
-      });
+  Future<void> _handleHubEvent(String event, List<Object?>? args) async {
+    if (!mounted) return;
+    final available = ref.read(availableNotifierProvider.notifier);
+    final kind = classifyOrderHubEvent(event);
+
+    if (kind == OrderHubEventKind.routing) {
+      await available.loadRouting(silently: true);
+      return;
     }
+    if (kind == OrderHubEventKind.ignored) return;
+
+    final order = orderFromHubEvent(event, args);
+    if (order == null) return;
+
+    if (kind == OrderHubEventKind.ready) {
+      await Future.wait([
+        available.load(silently: true),
+        available.loadRouting(silently: true),
+      ]);
+      return;
+    }
+
+    if (kind == OrderHubEventKind.assigned) {
+      available.removeOrder(order.id);
+      unawaited(available.loadRouting(silently: true));
+    }
+
+    final change = await ref
+        .read(routeNotifierProvider.notifier)
+        .applyRealtimeOrder(order);
+    if (!mounted || change == RouteOrderChange.none) return;
+    _showRouteChangeNotice(order, change);
+  }
+
+  void _showRouteChangeNotice(Order order, RouteOrderChange change) {
+    final userId = ref.read(authNotifierProvider).user?.id;
+    final message = switch (change) {
+      RouteOrderChange.added => 'Pedido #${order.id} agregado a tu ruta.',
+      RouteOrderChange.updated =>
+        'La sucursal actualizó el pedido #${order.id}.',
+      RouteOrderChange.removed when order.status == OrderStatus.cancelled =>
+        'La sucursal canceló el pedido #${order.id}.',
+      RouteOrderChange.removed when order.deliveryManId != userId =>
+        'La sucursal reasignó el pedido #${order.id}.',
+      RouteOrderChange.removed =>
+        'La sucursal actualizó el pedido #${order.id}.',
+      RouteOrderChange.none => '',
+    };
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    messenger?.hideCurrentSnackBar();
+    messenger?.showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Icon(Icons.sync_rounded, color: AppColors.info, size: 20),
+            const SizedBox(width: AppTheme.spacingSm),
+            Expanded(child: Text(message)),
+          ],
+        ),
+        backgroundColor: AppColors.cardElevated,
+        duration: const Duration(seconds: 4),
+      ),
+    );
   }
 
   /// IndexedStack no vuelve a ejecutar `initState` de cada pestaña al cambiar.
@@ -153,10 +229,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       if (!mounted) return;
       switch (index) {
         case 0:
-          ref.read(availableNotifierProvider.notifier).loadAll();
+          ref.read(availableNotifierProvider.notifier).loadAll(silently: true);
           break;
         case 1:
-          ref.read(routeNotifierProvider.notifier).load();
           break;
         case 2:
           ref.read(historyNotifierProvider.notifier).load();
@@ -540,6 +615,11 @@ class _HubStatusIndicator extends StatelessWidget {
   Widget build(BuildContext context) {
     final isConnected = status == HubConnectionStatus.connected;
     final isConnecting = status == HubConnectionStatus.connecting;
+    final color = isConnected
+        ? AppColors.success
+        : isConnecting
+            ? AppColors.warning
+            : AppColors.error;
 
     return Tooltip(
       message: isConnected
@@ -549,21 +629,14 @@ class _HubStatusIndicator extends StatelessWidget {
               : 'Sin conexión en tiempo real',
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 4),
-        child: isConnecting
-            ? const SizedBox(
-                width: 12,
-                height: 12,
-                child: CircularProgressIndicator(
-                    strokeWidth: 1.5, color: AppColors.warning),
-              )
-            : Container(
-                width: 10,
-                height: 10,
-                decoration: BoxDecoration(
-                  color: isConnected ? AppColors.success : AppColors.error,
-                  shape: BoxShape.circle,
-                ),
-              ),
+        child: Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(
+            color: color,
+            shape: BoxShape.circle,
+          ),
+        ),
       ),
     );
   }

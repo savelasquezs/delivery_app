@@ -6,17 +6,23 @@ Order _order({
   required int id,
   DateTime? reservedFor,
   String? deliveryManName,
+  int? deliveryManId,
+  OrderStatus status = OrderStatus.onTheWay,
+  double total = 1000,
+  String? addressDescription,
 }) {
   return Order(
     id: id,
-    status: OrderStatus.onTheWay,
+    status: status,
     type: 'delivery',
     createdAt: DateTime.utc(2026, 1, 1, 12),
-    total: 1000,
+    total: total,
     items: const [],
     branchId: 1,
     reservedFor: reservedFor,
     deliveryManName: deliveryManName,
+    deliveryManId: deliveryManId,
+    addressDescription: addressDescription,
   );
 }
 
@@ -85,6 +91,58 @@ void main() {
       final second = _order(id: 2);
 
       expect(selectNextRouteOrder([first, second], now), first);
+    });
+  });
+
+  group('routeOrdersHaveSameContent', () {
+    test('considera iguales instancias distintas con el mismo contenido', () {
+      final current = [_order(id: 1, deliveryManId: 7)];
+      final next = [_order(id: 1, deliveryManId: 7)];
+
+      expect(routeOrdersHaveSameContent(current, next), isTrue);
+    });
+
+    test('detecta cambios visibles u operativos', () {
+      final current = [_order(id: 1, deliveryManId: 7)];
+
+      expect(
+        routeOrdersHaveSameContent(
+          current,
+          [_order(id: 1, deliveryManId: 7, total: 2000)],
+        ),
+        isFalse,
+      );
+      expect(
+        routeOrdersHaveSameContent(
+          current,
+          [_order(id: 1, deliveryManId: 7, addressDescription: 'Calle 2')],
+        ),
+        isFalse,
+      );
+      expect(
+        routeOrdersHaveSameContent(
+          current,
+          [_order(id: 1, deliveryManId: 8)],
+        ),
+        isFalse,
+      );
+    });
+
+    test('detecta cambios de orden y longitud de la ruta', () {
+      expect(
+        routeOrdersHaveSameContent(
+          [_order(id: 1), _order(id: 2)],
+          [_order(id: 2), _order(id: 1)],
+        ),
+        isFalse,
+      );
+      expect(
+        routeOrdersHaveSameContent(
+          [_order(id: 1)],
+          [_order(id: 1), _order(id: 2)],
+        ),
+        isFalse,
+      );
     });
   });
 

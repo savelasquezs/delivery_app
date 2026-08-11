@@ -1,8 +1,103 @@
+import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
 
 import '../../features/orders/models/order_models.dart';
 
 const Duration kReservationSoonWindow = Duration(minutes: 45);
+
+bool routeOrdersHaveSameContent(List<Order> current, List<Order> next) {
+  if (identical(current, next)) return true;
+  if (current.length != next.length) return false;
+  for (var i = 0; i < current.length; i++) {
+    if (!routeOrderHasSameContent(current[i], next[i])) return false;
+  }
+  return true;
+}
+
+bool routeOrderHasSameContent(Order current, Order next) {
+  return current.id == next.id &&
+      current.status == next.status &&
+      current.type == next.type &&
+      current.createdAt == next.createdAt &&
+      current.total == next.total &&
+      current.deliveryFee == next.deliveryFee &&
+      current.notes == next.notes &&
+      _sameCustomer(current.customer, next.customer) &&
+      _sameAddress(current.address, next.address) &&
+      _sameItems(current.items, next.items) &&
+      current.branchId == next.branchId &&
+      current.branchName == next.branchName &&
+      current.deliveryManId == next.deliveryManId &&
+      current.deliveryManName == next.deliveryManName &&
+      current.deliveryRouteId == next.deliveryRouteId &&
+      current.customerId == next.customerId &&
+      current.addressId == next.addressId &&
+      current.addressDescription == next.addressDescription &&
+      current.addressAdditionalInfo == next.addressAdditionalInfo &&
+      current.neighborhoodId == next.neighborhoodId &&
+      current.neighborhoodName == next.neighborhoodName &&
+      current.latitude == next.latitude &&
+      current.longitude == next.longitude &&
+      current.deliveryRoutePlanningWarnings ==
+          next.deliveryRoutePlanningWarnings &&
+      _sameSummaryLines(current.summaryLines, next.summaryLines) &&
+      current.paidInStoreCash == next.paidInStoreCash &&
+      current.paidInStoreCashAmount == next.paidInStoreCashAmount &&
+      current.nonCashPaymentsTotal == next.nonCashPaymentsTotal &&
+      current.prepareAt == next.prepareAt &&
+      current.reservedFor == next.reservedFor &&
+      mapEquals(current.statusTimes, next.statusTimes);
+}
+
+bool _sameCustomer(OrderCustomer? current, OrderCustomer? next) {
+  if (current == null || next == null) return current == next;
+  return current.id == next.id &&
+      current.name == next.name &&
+      current.phone == next.phone;
+}
+
+bool _sameAddress(OrderAddress? current, OrderAddress? next) {
+  if (current == null || next == null) return current == next;
+  return current.id == next.id &&
+      current.street == next.street &&
+      current.neighborhood == next.neighborhood &&
+      current.city == next.city &&
+      current.notes == next.notes;
+}
+
+bool _sameItems(List<OrderItem> current, List<OrderItem> next) {
+  if (current.length != next.length) return false;
+  for (var i = 0; i < current.length; i++) {
+    final a = current[i];
+    final b = next[i];
+    if (a.id != b.id ||
+        a.productName != b.productName ||
+        a.quantity != b.quantity ||
+        a.unitPrice != b.unitPrice ||
+        a.subtotal != b.subtotal ||
+        a.notes != b.notes) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool _sameSummaryLines(
+  List<OrderLineSummary> current,
+  List<OrderLineSummary> next,
+) {
+  if (current.length != next.length) return false;
+  for (var i = 0; i < current.length; i++) {
+    final a = current[i];
+    final b = next[i];
+    if (a.productName != b.productName ||
+        a.quantity != b.quantity ||
+        a.categoryName != b.categoryName) {
+      return false;
+    }
+  }
+  return true;
+}
 
 enum RouteReservationState { none, overdue, soon, scheduled }
 

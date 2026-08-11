@@ -7,6 +7,7 @@ import '../data/branch_presence_verifier.dart';
 import '../../routing/delivery_routing_models.dart';
 import '../../routing/delivery_routing_repository.dart';
 import '../../../core/errors/user_facing_error.dart';
+import '../../../core/orders/route_order_helpers.dart';
 
 class AvailableState {
   final List<Order> orders;
@@ -73,6 +74,9 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
   final double? _branchLatitude;
   final double? _branchLongitude;
   final int _allowedDistanceMeters;
+  Future<void>? _availableLoadInFlight;
+  Future<void>? _preparationLoadInFlight;
+  Future<void>? _routingLoadInFlight;
 
   AvailableNotifier(
     this._repository,
@@ -84,15 +88,37 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
     this._allowedDistanceMeters,
   ) : super(const AvailableState());
 
-  Future<void> load({int? branchId}) async {
+  Future<void> load({int? branchId, bool silently = false}) {
+    final current = _availableLoadInFlight;
+    if (current != null) return current;
+    final operation = _load(branchId: branchId, silently: silently);
+    _availableLoadInFlight = operation;
+    return operation.whenComplete(() {
+      if (identical(_availableLoadInFlight, operation)) {
+        _availableLoadInFlight = null;
+      }
+    });
+  }
+
+  Future<void> _load({int? branchId, required bool silently}) async {
     if (!mounted) return;
-    state = state.copyWith(isLoading: true, clearError: true);
+    if (!silently) {
+      state = state.copyWith(isLoading: true, clearError: true);
+    }
     try {
       final orders = await _repository.getAvailableOrders(branchId: branchId);
       if (!mounted) return;
-      state = state.copyWith(orders: orders, isLoading: false);
+      final unchanged = routeOrdersHaveSameContent(state.orders, orders);
+      if (!unchanged || state.isLoading || state.error != null) {
+        state = state.copyWith(
+          orders: unchanged ? state.orders : orders,
+          isLoading: false,
+          clearError: true,
+        );
+      }
     } catch (e) {
       if (!mounted) return;
+      if (silently) return;
       state = state.copyWith(
         isLoading: false,
         error: userFacingErrorMessage(
@@ -103,16 +129,30 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
     }
   }
 
-  Future<void> loadPreparation() async {
+  Future<void> loadPreparation({bool silently = false}) {
+    final current = _preparationLoadInFlight;
+    if (current != null) return current;
+    final operation = _loadPreparation(silently: silently);
+    _preparationLoadInFlight = operation;
+    return operation.whenComplete(() {
+      if (identical(_preparationLoadInFlight, operation)) {
+        _preparationLoadInFlight = null;
+      }
+    });
+  }
+
+  Future<void> _loadPreparation({required bool silently}) async {
     if (!mounted) return;
-    state = state.copyWith(
-      preparationOrders: const [],
-      isLoadingPrep: true,
-      clearErrorPrep: true,
-      branchPresence: const BranchPresenceResult(
-        status: BranchPresenceStatus.checking,
-      ),
-    );
+    if (!silently) {
+      state = state.copyWith(
+        preparationOrders: const [],
+        isLoadingPrep: true,
+        clearErrorPrep: true,
+        branchPresence: const BranchPresenceResult(
+          status: BranchPresenceStatus.checking,
+        ),
+      );
+    }
     try {
       final user = _user;
       if (user == null) {
@@ -146,13 +186,24 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
         longitude: presence.longitude!,
       );
       if (!mounted) return;
-      state = state.copyWith(
-        preparationOrders: orders,
-        isLoadingPrep: false,
-        branchPresence: presence,
+      final unchanged = routeOrdersHaveSameContent(
+        state.preparationOrders,
+        orders,
       );
+      if (!unchanged ||
+          state.isLoadingPrep ||
+          state.errorPrep != null ||
+          state.branchPresence != presence) {
+        state = state.copyWith(
+          preparationOrders: unchanged ? state.preparationOrders : orders,
+          isLoadingPrep: false,
+          branchPresence: presence,
+          clearErrorPrep: true,
+        );
+      }
     } catch (e) {
       if (!mounted) return;
+      if (silently) return;
       state = state.copyWith(
         isLoadingPrep: false,
         errorPrep: userFacingErrorMessage(
@@ -163,23 +214,45 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
     }
   }
 
-  Future<void> loadAll({int? branchId}) async {
+  Future<void> loadAll({int? branchId, bool silently = false}) async {
     await Future.wait([
-      load(branchId: branchId),
-      loadPreparation(),
-      loadRouting(),
+      load(branchId: branchId, silently: silently),
+      loadPreparation(silently: silently),
+      loadRouting(silently: silently),
     ]);
   }
 
-  Future<void> loadRouting() async {
+  Future<void> loadRouting({bool silently = false}) {
+    final current = _routingLoadInFlight;
+    if (current != null) return current;
+    final operation = _loadRouting(silently: silently);
+    _routingLoadInFlight = operation;
+    return operation.whenComplete(() {
+      if (identical(_routingLoadInFlight, operation)) {
+        _routingLoadInFlight = null;
+      }
+    });
+  }
+
+  Future<void> _loadRouting({required bool silently}) async {
     if (!mounted) return;
-    state = state.copyWith(isLoadingRouting: true, clearErrorRouting: true);
+    if (!silently) {
+      state = state.copyWith(
+        isLoadingRouting: true,
+        clearErrorRouting: true,
+      );
+    }
     try {
       final plan = await _routingRepository.getPlan();
       if (!mounted) return;
-      state = state.copyWith(routingPlan: plan, isLoadingRouting: false);
+      state = state.copyWith(
+        routingPlan: plan,
+        isLoadingRouting: false,
+        clearErrorRouting: true,
+      );
     } catch (e) {
       if (!mounted) return;
+      if (silently) return;
       state = state.copyWith(
         isLoadingRouting: false,
         errorRouting: userFacingErrorMessage(
@@ -188,6 +261,21 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
         ),
       );
     }
+  }
+
+  void removeOrder(int orderId) {
+    if (!mounted) return;
+    final orders = state.orders.where((order) => order.id != orderId).toList();
+    final preparationOrders =
+        state.preparationOrders.where((order) => order.id != orderId).toList();
+    if (orders.length == state.orders.length &&
+        preparationOrders.length == state.preparationOrders.length) {
+      return;
+    }
+    state = state.copyWith(
+      orders: orders,
+      preparationOrders: preparationOrders,
+    );
   }
 
   Future<bool> selfAssign({
@@ -209,14 +297,31 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
 
 final availableNotifierProvider =
     StateNotifierProvider.autoDispose<AvailableNotifier, AvailableState>((ref) {
-  final auth = ref.watch(authNotifierProvider);
+  final hasUser = ref.watch(
+    authNotifierProvider.select((auth) => auth.user != null),
+  );
+  final branchLatitude = ref.watch(
+    authNotifierProvider.select(
+      (auth) => auth.workSession?.branchLatitude ?? auth.user?.branchLatitude,
+    ),
+  );
+  final branchLongitude = ref.watch(
+    authNotifierProvider.select(
+      (auth) => auth.workSession?.branchLongitude ?? auth.user?.branchLongitude,
+    ),
+  );
+  final allowedDistanceMeters = ref.watch(
+    authNotifierProvider.select(
+      (auth) => auth.workSession?.tracking.allowedDistanceMeters ?? 50,
+    ),
+  );
   return AvailableNotifier(
     ref.watch(orderRepositoryProvider),
     ref.watch(branchPresenceVerifierProvider),
     ref.watch(deliveryRoutingRepositoryProvider),
-    auth.user,
-    auth.workSession?.branchLatitude ?? auth.user?.branchLatitude,
-    auth.workSession?.branchLongitude ?? auth.user?.branchLongitude,
-    auth.workSession?.tracking.allowedDistanceMeters ?? 50,
+    hasUser ? ref.read(authNotifierProvider).user : null,
+    branchLatitude,
+    branchLongitude,
+    allowedDistanceMeters,
   );
 });

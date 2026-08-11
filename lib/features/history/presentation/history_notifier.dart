@@ -158,9 +158,11 @@ class HistoryNotifier extends StateNotifier<HistoryState> {
 
 final historyNotifierProvider =
     StateNotifierProvider.autoDispose<HistoryNotifier, HistoryState>((ref) {
-  final user = ref.watch(authNotifierProvider).user;
+  final deliverymanId = ref.watch(
+    authNotifierProvider.select((auth) => auth.user?.id ?? 0),
+  );
   return HistoryNotifier(
     ref.watch(orderRepositoryProvider),
-    user?.id ?? 0,
+    deliverymanId,
   );
 });
