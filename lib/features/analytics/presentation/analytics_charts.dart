@@ -39,10 +39,13 @@ class DeliveryEvolutionCharts extends StatelessWidget {
           height: 200,
           child: _LineChart(
             color: AppColors.accent,
-            maxYHint: deliveries.reduce((a, b) => a > b ? a : b).toDouble() * 1.15 + 1,
+            maxYHint:
+                deliveries.reduce((a, b) => a > b ? a : b).toDouble() * 1.15 +
+                    1,
             spots: [
               for (var i = 0; i < n; i++)
-                FlSpot(i.toDouble(), (i < deliveries.length ? deliveries[i] : 0).toDouble()),
+                FlSpot(i.toDouble(),
+                    (i < deliveries.length ? deliveries[i] : 0).toDouble()),
             ],
             labels: labels,
             isIntegerY: true,
@@ -122,8 +125,10 @@ class _LineChart extends StatelessWidget {
         ),
         borderData: FlBorderData(show: false),
         titlesData: FlTitlesData(
-          topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-          rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          topTitles:
+              const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          rightTitles:
+              const AxisTitles(sideTitles: SideTitles(showTitles: false)),
           leftTitles: AxisTitles(
             sideTitles: SideTitles(
               showTitles: true,
@@ -150,8 +155,7 @@ class _LineChart extends StatelessWidget {
                   padding: const EdgeInsets.only(top: 6),
                   child: Text(
                     short,
-                    style:
-                        const TextStyle(color: AppColors.hint, fontSize: 9),
+                    style: const TextStyle(color: AppColors.hint, fontSize: 9),
                   ),
                 );
               },
@@ -241,10 +245,10 @@ class RouteMetricsSection extends StatelessWidget {
                   ),
                   borderData: FlBorderData(show: false),
                   titlesData: FlTitlesData(
-                    topTitles:
-                        const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                    rightTitles:
-                        const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                    topTitles: const AxisTitles(
+                        sideTitles: SideTitles(showTitles: false)),
+                    rightTitles: const AxisTitles(
+                        sideTitles: SideTitles(showTitles: false)),
                     bottomTitles: AxisTitles(
                       sideTitles: SideTitles(
                         showTitles: false,
@@ -351,8 +355,8 @@ class RouteMetricsSection extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(label,
-              style: TextStyle(
-                  color: color.withValues(alpha: 0.9), fontSize: 10)),
+              style:
+                  TextStyle(color: color.withValues(alpha: 0.9), fontSize: 10)),
           Text(value,
               style: TextStyle(
                   color: color, fontWeight: FontWeight.w800, fontSize: 14)),

@@ -1,3 +1,5 @@
+import '../version/delivery_app_version.dart';
+
 /// Resultado de intentar renovar el access token con el refresh guardado.
 sealed class RefreshAccessResult {
   const RefreshAccessResult();
@@ -17,4 +19,9 @@ final class RefreshAccessSessionEnded extends RefreshAccessResult {
 /// Red, timeout o respuesta inesperada: no se cierra sesión local.
 final class RefreshAccessTransientFailure extends RefreshAccessResult {
   const RefreshAccessTransientFailure();
+}
+
+final class RefreshAccessUpdateRequired extends RefreshAccessResult {
+  const RefreshAccessUpdateRequired(this.policy);
+  final DeliveryAppVersionPolicy policy;
 }

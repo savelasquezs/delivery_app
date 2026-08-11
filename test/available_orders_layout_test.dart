@@ -79,7 +79,8 @@ void main() {
       expect(g.keys.single, 'Sin barrio');
     });
 
-    test('con compare por ancla de urgencia: más urgente arriba en el grupo', () {
+    test('con compare por ancla de urgencia: más urgente arriba en el grupo',
+        () {
       final anchorOld = DateTime.utc(2026, 1, 1, 7, 0);
       final anchorNew = DateTime.utc(2026, 1, 1, 11, 0);
       final oLessUrgent = _order(

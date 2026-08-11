@@ -1,10 +1,12 @@
 import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:dio/dio.dart';
 import '../../../core/api/dio_client.dart';
 import '../../../core/api/api_constants.dart';
 import '../../../core/api/api_exception.dart';
 import '../../../core/storage/secure_storage.dart';
+import '../../../core/version/delivery_app_version.dart';
 import 'auth_models.dart';
 
 class AuthRepository {
@@ -12,6 +14,14 @@ class AuthRepository {
   final SecureStorage _storage;
 
   const AuthRepository(this._client, this._storage);
+
+  Future<DeliveryAppVersionPolicy> checkDeliveryAppVersion() =>
+      _client.get<DeliveryAppVersionPolicy>(
+        ApiConstants.deliveryAppVersion,
+        fromJson: (data) => DeliveryAppVersionPolicy.fromJson(
+          Map<String, dynamic>.from(data as Map),
+        ),
+      );
 
   Future<AuthUser> login(LoginRequest request) async {
     try {
@@ -44,6 +54,11 @@ class AuthRepository {
       return loginResponse.user;
     } on ApiException {
       rethrow;
+    } on DioException catch (error) {
+      final update = deliveryAppUpdateFromError(error);
+      if (update != null) throw update;
+      if (error.error is ApiException) throw error.error! as ApiException;
+      throw ApiException('Error al iniciar sesión: ${error.message}');
     } catch (e) {
       throw ApiException('Error al iniciar sesión: ${e.toString()}');
     }

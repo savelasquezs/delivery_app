@@ -38,7 +38,8 @@ class HistoryState {
     String? error,
     String? fromDate,
     String? toDate,
-  }) => HistoryState(
+  }) =>
+      HistoryState(
         orders: orders ?? this.orders,
         branchSummaries: branchSummaries ?? this.branchSummaries,
         totalCount: totalCount ?? this.totalCount,

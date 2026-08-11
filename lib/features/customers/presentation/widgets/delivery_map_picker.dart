@@ -77,14 +77,16 @@ class _DeliveryMapPickerState extends State<DeliveryMapPicker> {
       decoded = Uri.decodeFull(url);
     } catch (_) {}
     // Pin: !3d<lat>!4d<lng>
-    final pinMatch = RegExp(r'!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)').firstMatch(decoded);
+    final pinMatch =
+        RegExp(r'!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)').firstMatch(decoded);
     if (pinMatch != null) {
       final lat = double.tryParse(pinMatch.group(1)!);
       final lng = double.tryParse(pinMatch.group(2)!);
       if (lat != null && lng != null) return MapPickedLocation(lat, lng);
     }
     // Centro de vista: @lat,lng
-    final atMatch = RegExp(r'@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)').firstMatch(decoded);
+    final atMatch =
+        RegExp(r'@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)').firstMatch(decoded);
     if (atMatch != null) {
       final lat = double.tryParse(atMatch.group(1)!);
       final lng = double.tryParse(atMatch.group(2)!);
@@ -104,7 +106,8 @@ class _DeliveryMapPickerState extends State<DeliveryMapPicker> {
     }
     final loc = _parseGoogleMapsUrl(text);
     if (loc == null || !_validCoords(loc.lat, loc.lng)) {
-      setState(() => _urlError = 'No se encontraron coordenadas válidas. Copia la URL completa del navegador.');
+      setState(() => _urlError =
+          'No se encontraron coordenadas válidas. Copia la URL completa del navegador.');
       return;
     }
     setState(() {
@@ -135,7 +138,8 @@ class _DeliveryMapPickerState extends State<DeliveryMapPicker> {
       });
       _mapCtrl.move(_pin!, 17);
     } catch (e) {
-      setState(() => _gpsError = 'No se pudo obtener la ubicación: ${e.toString()}');
+      setState(
+          () => _gpsError = 'No se pudo obtener la ubicación: ${e.toString()}');
     } finally {
       setState(() => _gpsLoading = false);
     }
@@ -144,7 +148,8 @@ class _DeliveryMapPickerState extends State<DeliveryMapPicker> {
   void _confirm() {
     if (_pin == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Toca el mapa para seleccionar una ubicación.')),
+        const SnackBar(
+            content: Text('Toca el mapa para seleccionar una ubicación.')),
       );
       return;
     }
@@ -168,9 +173,11 @@ class _DeliveryMapPickerState extends State<DeliveryMapPicker> {
           TextButton(
             onPressed: pinConfirmed ? _confirm : null,
             style: TextButton.styleFrom(
-              foregroundColor: pinConfirmed ? AppColors.primaryLight : AppColors.hint,
+              foregroundColor:
+                  pinConfirmed ? AppColors.primaryLight : AppColors.hint,
             ),
-            child: const Text('Confirmar', style: TextStyle(fontWeight: FontWeight.w700)),
+            child: const Text('Confirmar',
+                style: TextStyle(fontWeight: FontWeight.w700)),
           ),
           const SizedBox(width: 8),
         ],
@@ -184,12 +191,14 @@ class _DeliveryMapPickerState extends State<DeliveryMapPicker> {
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: Row(
                 children: [
-                  const Icon(Icons.home_outlined, size: 16, color: AppColors.primaryLight),
+                  const Icon(Icons.home_outlined,
+                      size: 16, color: AppColors.primaryLight),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
                       widget.addressHint!,
-                      style: const TextStyle(color: AppColors.primaryLight, fontSize: 13),
+                      style: const TextStyle(
+                          color: AppColors.primaryLight, fontSize: 13),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -213,7 +222,8 @@ class _DeliveryMapPickerState extends State<DeliveryMapPicker> {
                   ),
                   children: [
                     TileLayer(
-                      urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                      urlTemplate:
+                          'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                       userAgentPackageName: 'com.senorarroz.delivery_app',
                     ),
                     if (_pin != null)
@@ -233,13 +243,15 @@ class _DeliveryMapPickerState extends State<DeliveryMapPicker> {
                                     shape: BoxShape.circle,
                                     boxShadow: [
                                       BoxShadow(
-                                        color: AppColors.primary.withValues(alpha: 0.5),
+                                        color: AppColors.primary
+                                            .withValues(alpha: 0.5),
                                         blurRadius: 12,
                                         spreadRadius: 2,
                                       ),
                                     ],
                                   ),
-                                  child: const Icon(Icons.my_location, color: Colors.white, size: 16),
+                                  child: const Icon(Icons.my_location,
+                                      color: Colors.white, size: 16),
                                 ),
                                 CustomPaint(
                                   size: const Size(12, 8),
@@ -260,19 +272,23 @@ class _DeliveryMapPickerState extends State<DeliveryMapPicker> {
                     left: 16,
                     right: 16,
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 8),
                       decoration: BoxDecoration(
                         color: AppColors.surface.withValues(alpha: 0.95),
                         borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-                        border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+                        border: Border.all(
+                            color: AppColors.primary.withValues(alpha: 0.3)),
                       ),
                       child: const Row(
                         children: [
-                          Icon(Icons.touch_app, size: 16, color: AppColors.primaryLight),
+                          Icon(Icons.touch_app,
+                              size: 16, color: AppColors.primaryLight),
                           SizedBox(width: 6),
                           Text(
                             'Toca el mapa para colocar el marcador',
-                            style: TextStyle(color: AppColors.onSurface, fontSize: 12),
+                            style: TextStyle(
+                                color: AppColors.onSurface, fontSize: 12),
                           ),
                         ],
                       ),
@@ -292,7 +308,8 @@ class _DeliveryMapPickerState extends State<DeliveryMapPicker> {
                       borderRadius: BorderRadius.circular(AppTheme.radiusMd),
                       onTap: _gpsLoading ? null : _getGps,
                       child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 10),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
@@ -306,12 +323,15 @@ class _DeliveryMapPickerState extends State<DeliveryMapPicker> {
                                 ),
                               )
                             else
-                              const Icon(Icons.gps_fixed, color: AppColors.primaryLight, size: 22),
+                              const Icon(Icons.gps_fixed,
+                                  color: AppColors.primaryLight, size: 22),
                             const SizedBox(width: 8),
                             Text(
                               'Usar ubicación actual',
                               style: TextStyle(
-                                color: _gpsLoading ? AppColors.hint : AppColors.primaryLight,
+                                color: _gpsLoading
+                                    ? AppColors.hint
+                                    : AppColors.primaryLight,
                                 fontWeight: FontWeight.w600,
                                 fontSize: 13,
                               ),
@@ -329,7 +349,8 @@ class _DeliveryMapPickerState extends State<DeliveryMapPicker> {
                     bottom: 12,
                     left: 12,
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 6),
                       decoration: BoxDecoration(
                         color: AppColors.surface.withValues(alpha: 0.95),
                         borderRadius: BorderRadius.circular(AppTheme.radiusSm),
@@ -361,7 +382,8 @@ class _DeliveryMapPickerState extends State<DeliveryMapPicker> {
                     padding: const EdgeInsets.only(bottom: 8),
                     child: Text(
                       _gpsError!,
-                      style: const TextStyle(color: AppColors.error, fontSize: 12),
+                      style:
+                          const TextStyle(color: AppColors.error, fontSize: 12),
                     ),
                   ),
                 Row(
@@ -369,28 +391,38 @@ class _DeliveryMapPickerState extends State<DeliveryMapPicker> {
                     Expanded(
                       child: TextField(
                         controller: _urlCtrl,
-                        style: const TextStyle(color: AppColors.onSurface, fontSize: 13),
+                        style: const TextStyle(
+                            color: AppColors.onSurface, fontSize: 13),
                         decoration: InputDecoration(
                           hintText: 'Pegar enlace de Google Maps…',
                           prefixIcon: const Icon(Icons.link, size: 18),
                           errorText: _urlError,
                           isDense: true,
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 10),
                           border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-                            borderSide: const BorderSide(color: AppColors.divider),
+                            borderRadius:
+                                BorderRadius.circular(AppTheme.radiusMd),
+                            borderSide:
+                                const BorderSide(color: AppColors.divider),
                           ),
                           enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-                            borderSide: const BorderSide(color: AppColors.divider),
+                            borderRadius:
+                                BorderRadius.circular(AppTheme.radiusMd),
+                            borderSide:
+                                const BorderSide(color: AppColors.divider),
                           ),
                           focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-                            borderSide: const BorderSide(color: AppColors.primary, width: 2),
+                            borderRadius:
+                                BorderRadius.circular(AppTheme.radiusMd),
+                            borderSide: const BorderSide(
+                                color: AppColors.primary, width: 2),
                           ),
                         ),
                         onChanged: (_) {
-                          if (_urlError != null) setState(() => _urlError = null);
+                          if (_urlError != null) {
+                            setState(() => _urlError = null);
+                          }
                         },
                         onSubmitted: (_) => _applyUrl(),
                       ),
@@ -399,10 +431,12 @@ class _DeliveryMapPickerState extends State<DeliveryMapPicker> {
                     OutlinedButton(
                       onPressed: _applyUrl,
                       style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 10),
                         side: const BorderSide(color: AppColors.primary),
                         shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+                          borderRadius:
+                              BorderRadius.circular(AppTheme.radiusMd),
                         ),
                       ),
                       child: const Text('Usar', style: TextStyle(fontSize: 13)),

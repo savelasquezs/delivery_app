@@ -5,15 +5,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/api/api_exception.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_theme.dart';
-import '../../../core/updates/app_update_prefs.dart';
-import '../../../core/updates/app_update_provider.dart';
-import '../../../core/updates/app_update_widgets.dart';
-import '../../../core/updates/delivery_app_release_manifest.dart';
 import '../../auth/data/auth_models.dart';
 import '../../auth/presentation/auth_notifier.dart';
 import '../data/profile_image_url.dart';
@@ -38,7 +33,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   bool _saving = false;
   bool _savingPass = false;
   bool _uploading = false;
-  int? _dismissedRemoteBuild;
 
   @override
   void initState() {
@@ -48,9 +42,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       _emailCtrl.text = u.email;
       _phoneCtrl.text = u.phone ?? '';
     }
-    getDismissedUpdateRemoteBuild().then((value) {
-      if (mounted) setState(() => _dismissedRemoteBuild = value);
-    });
     WidgetsBinding.instance.addPostFrameCallback((_) => _refreshFromApi());
   }
 
@@ -206,48 +197,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     } finally {
       if (mounted) setState(() => _savingPass = false);
     }
-  }
-
-  Future<void> _openUpdate(Uri uri) async {
-    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
-    if (!mounted || ok) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('No se pudo abrir el enlace')),
-    );
-  }
-
-  Future<void> _dismissUpdate(AppUpdateCheckResult result) async {
-    await setDismissedUpdateRemoteBuild(result.manifest.buildNumber);
-    if (mounted) {
-      setState(() => _dismissedRemoteBuild = result.manifest.buildNumber);
-    }
-  }
-
-  Widget _buildUpdateSection() {
-    final async = ref.watch(appUpdateCheckProvider);
-    return async.when(
-      data: (result) {
-        if (result == null) return const SizedBox.shrink();
-        final canDismiss = _dismissedRemoteBuild != result.manifest.buildNumber;
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              'Aplicacion',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: AppTheme.spacingMd),
-            AppUpdateCard(
-              result: result,
-              onDownload: () => _openUpdate(result.updateUri),
-              onDismiss: canDismiss ? () => _dismissUpdate(result) : null,
-            ),
-          ],
-        );
-      },
-      loading: () => const SizedBox.shrink(),
-      error: (_, __) => const SizedBox.shrink(),
-    );
   }
 
   @override
@@ -467,7 +416,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                       : const Text('Cambiar contraseña'),
                 ),
                 const SizedBox(height: AppTheme.spacingXl),
-                _buildUpdateSection(),
                 const SizedBox(height: AppTheme.spacingXl),
               ],
             ),

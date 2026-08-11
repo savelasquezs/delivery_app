@@ -200,7 +200,8 @@ abstract class AppTheme {
         unselectedItemColor: AppColors.hint,
         type: BottomNavigationBarType.fixed,
         elevation: 0,
-        selectedLabelStyle: TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+        selectedLabelStyle:
+            TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
         unselectedLabelStyle: TextStyle(fontSize: 11),
       ),
 

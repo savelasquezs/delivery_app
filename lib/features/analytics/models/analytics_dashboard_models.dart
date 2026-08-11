@@ -58,7 +58,8 @@ class RouteDashboardMetrics {
         .map((e) => (e as num).toInt())
         .toList();
     return RouteDashboardMetrics(
-      completedRoutesCount: (json['completedRoutesCount'] as num?)?.toInt() ?? 0,
+      completedRoutesCount:
+          (json['completedRoutesCount'] as num?)?.toInt() ?? 0,
       periodOnTimePercent:
           (json['periodOnTimePercent'] as num?)?.toDouble() ?? 0,
       evolutionRoutesCompleted: evoR,
@@ -87,9 +88,9 @@ class PayrollExpenseLineItem {
       PayrollExpenseLineItem(
         detailId: (json['detailId'] as num?)?.toInt() ?? 0,
         headerId: (json['headerId'] as num?)?.toInt() ?? 0,
-        headerCreatedAt: DateTime.tryParse(
-                json['headerCreatedAt']?.toString() ?? '') ??
-            DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+        headerCreatedAt:
+            DateTime.tryParse(json['headerCreatedAt']?.toString() ?? '') ??
+                DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
         lineTotal: (json['lineTotal'] as num?)?.toDouble() ?? 0,
         notes: json['notes'] as String? ?? '',
       );
@@ -125,13 +126,11 @@ class PayrollPeriod {
       deliveredOrdersCount:
           (json['deliveredOrdersCount'] as num?)?.toInt() ?? 0,
       sumDeliveryFee: (json['sumDeliveryFee'] as num?)?.toDouble() ?? 0,
-      payableDeliveryFee:
-          (json['payableDeliveryFee'] as num?)?.toDouble() ?? 0,
-      expenseLinesTotal:
-          (json['expenseLinesTotal'] as num?)?.toDouble() ?? 0,
+      payableDeliveryFee: (json['payableDeliveryFee'] as num?)?.toDouble() ?? 0,
+      expenseLinesTotal: (json['expenseLinesTotal'] as num?)?.toDouble() ?? 0,
       expenseLines: linesRaw
-          .map((e) => PayrollExpenseLineItem.fromJson(
-              e as Map<String, dynamic>))
+          .map(
+              (e) => PayrollExpenseLineItem.fromJson(e as Map<String, dynamic>))
           .toList(),
     );
   }
@@ -180,8 +179,7 @@ class UserPayrollInsights {
       deliveryFeePayRate: rate,
       period: PayrollPeriod.fromJson(json['period'] as Map<String, dynamic>?),
       series: seriesRaw
-          .map((e) =>
-              PayrollSeriesPoint.fromJson(e as Map<String, dynamic>))
+          .map((e) => PayrollSeriesPoint.fromJson(e as Map<String, dynamic>))
           .toList(),
     );
   }

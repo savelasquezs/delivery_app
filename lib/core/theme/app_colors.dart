@@ -2,10 +2,11 @@ import 'package:flutter/material.dart';
 
 abstract class AppColors {
   // ── Acento primario: Morado ──────────────────────────────────────
-  static const Color primary = Color(0xFF8B5CF6);        // Violet-500
-  static const Color primaryDark = Color(0xFF7C3AED);    // Violet-600
-  static const Color primaryLight = Color(0xFFA78BFA);   // Violet-400
-  static const Color primaryContainer = Color(0xFF1E1040); // Fondo morado oscuro
+  static const Color primary = Color(0xFF8B5CF6); // Violet-500
+  static const Color primaryDark = Color(0xFF7C3AED); // Violet-600
+  static const Color primaryLight = Color(0xFFA78BFA); // Violet-400
+  static const Color primaryContainer =
+      Color(0xFF1E1040); // Fondo morado oscuro
 
   // ── Acento secundario: Verde (delivery / success) ────────────────
   static const Color accent = Color(0xFF2ECC71);
@@ -40,8 +41,8 @@ abstract class AppColors {
   // ── Estados de pedido ─────────────────────────────────────────────
   static const Color statusTaken = Color(0xFF40C4FF);
   static const Color statusPreparation = Color(0xFFFFC107);
-  static const Color statusReady = Color(0xFFCE93D8);     // lila suave
-  static const Color statusOnTheWay = Color(0xFF2ECC71);  // verde
+  static const Color statusReady = Color(0xFFCE93D8); // lila suave
+  static const Color statusOnTheWay = Color(0xFF2ECC71); // verde
   static const Color statusDelivered = Color(0xFF27AE60);
   static const Color statusCancelled = Color(0xFFFF5370);
 }

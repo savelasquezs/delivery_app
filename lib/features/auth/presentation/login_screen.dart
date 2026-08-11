@@ -108,8 +108,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                           style: const TextStyle(color: AppColors.onBackground),
                           decoration: InputDecoration(
                             labelText: 'Contraseña',
-                            labelStyle:
-                                const TextStyle(color: AppColors.hint),
+                            labelStyle: const TextStyle(color: AppColors.hint),
                             prefixIcon: const Icon(Icons.lock_outline,
                                 color: AppColors.hint),
                             suffixIcon: IconButton(
@@ -133,8 +132,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         Align(
                           alignment: Alignment.centerRight,
                           child: TextButton(
-                            onPressed: () =>
-                                context.push(routeForgotPassword),
+                            onPressed: () => context.push(routeForgotPassword),
                             style: TextButton.styleFrom(
                               foregroundColor: AppColors.primaryLight,
                               padding: EdgeInsets.zero,
@@ -156,7 +154,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                               borderRadius:
                                   BorderRadius.circular(AppTheme.radiusMd),
                               border: Border.all(
-                                  color: AppColors.error.withValues(alpha: 0.3)),
+                                  color:
+                                      AppColors.error.withValues(alpha: 0.3)),
                             ),
                             child: Row(
                               children: [

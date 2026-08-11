@@ -1,67 +1,51 @@
-# delivery_app — domiciliarios (Señor Arroz)
+# delivery_app — domiciliarios de Señor Arroz
 
-## Build para Google Play
+## Distribución de producción
 
-La distribución actual es **interna**: sube el AAB únicamente al track
-**Internal testing** de Google Play Console y agrega allí los correos de los
-domiciliarios autorizados. No publiques la versión en Open testing, Production
-ni Pre-registration.
+La aplicación se distribuye exclusivamente mediante Google Play con el paquete
+`com.senorarroz.delivery_app`. El track actual es `internal`.
 
-Los usuarios deben aceptar la invitación con una cuenta de Google para poder
-instalar la aplicación desde Play Store. El paquete de la aplicación es
-`com.senorarroz.delivery_app`.
+Cada push a `main` ejecuta `.github/workflows/publish-play-internal.yml`. El
+workflow consulta los códigos ya publicados, elige el siguiente `versionCode`,
+genera un App Bundle firmado y lo publica en Google Play Internal. Los celulares
+reciben las actualizaciones desde Google Play.
 
-La distribución Play usa Google Play App Signing y requiere el keystore de carga
-local. `android/key.properties` y `android/upload-keystore.jks` nunca deben
-subirse al repositorio.
+El `versionName` se controla manualmente en `pubspec.yaml`. El valor después de
+`+` es una base local; CI decide el build efectivo y no requiere cambios
+manuales por commit.
 
-```bash
-flutter clean
-flutter pub get
-flutter build appbundle --release --dart-define=DELIVERY_PLAY_DISTRIBUTION=true
+La distribución mediante binarios externos está retirada y bloqueada. No se
+generan APK release, no se copian artefactos Android al frontend y no existe un
+JSON alterno de releases.
+
+## Publicar cambios
+
+Para un cambio normal, hacer commit y push a `main`. CI administra el build.
+
+Para una nueva versión visible, por ejemplo `1.2.5` a `1.2.6`, cambiar:
+
+```yaml
+version: 1.2.6+11
 ```
 
-Artefacto: `build/app/outputs/bundle/release/app-release.aab`.
+Cuando esa versión deba ser obligatoria, actualizar también en Railway:
 
-Para una variante APK externa se puede compilar con
-`--dart-define=DELIVERY_PLAY_DISTRIBUTION=false`; esa variante conserva el
-actualizador APK de Railway.
-
-**Versión actual:** ver `pubspec.yaml` (`version: x.y.z+build`). Historial y notas de cada release: [`CHANGELOG.md`](CHANGELOG.md).
-
-## Generar el APK para `senorArrozFront/public`
-
-El front ya sirve el manifiesto `public/delivery-app-release.json` y el archivo `public/senor-arroz-domiciliarios.apk`. Solo hace falta compilar y copiar el APK.
-
-**Opción A — script (desde la raíz del repo):**
-
-```bash
-bash Scripts/build_delivery_app_apk.sh
+```text
+DeliveryAppVersion__RequiredVersionName=1.2.6
 ```
 
-**Opción B — manual:**
-
-```bash
-cd delivery_app
-flutter pub get
-flutter build apk --release --dart-define=DELIVERY_PLAY_DISTRIBUTION=false
-```
-
-Luego copia `delivery_app/build/app/outputs/flutter-apk/app-release.apk` a  
-`senorArrozFront/public/senor-arroz-domiciliarios.apk` (sobrescribe el anterior).
-
-Antes de desplegar el front, alinea **versión** en `delivery_app/pubspec.yaml` (`x.y.z+build`) con `versionName` / `buildNumber` en `senorArrozFront/public/delivery-app-release.json`.
-
-**Firma:** con `android/key.properties` y keystore para release; sin eso, el APK release usa firma debug (solo pruebas).
+Para exigir un hotfix sin cambiar la versión visible, aumentar
+`DeliveryAppVersion__MinimumBuildNumber` al menor build permitido.
 
 ## Desarrollo
 
 ```bash
-cd delivery_app
 flutter pub get
 flutter run
 ```
 
-Configura `.env` según `.env.example` (`API_BASE_URL`, `SIGNALR_HUB_URL`, etc.).
+Configura `.env` con `API_BASE_URL` y `SIGNALR_HUB_URL`. La compilación de
+producción autorizada es el App Bundle ejecutado por CI. El guard
+`scripts/verify_play_only_distribution.sh` evita reintroducir el canal externo.
 
-**Aviso de actualización APK:** por defecto la app consulta `https://senorarroz.up.railway.app/delivery-app-release.json` (mismo JSON que `senorArrozFront/public/`). Para otro entorno (local, staging), define `DELIVERY_APP_UPDATE_MANIFEST_URL` en `.env`.
+Historial: [CHANGELOG.md](CHANGELOG.md).

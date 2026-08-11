@@ -10,10 +10,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../core/auth/session_replacement.dart';
+import '../../core/version/delivery_app_version.dart';
 import 'location_tracking_policy.dart';
 
 const _kAuthToken = 'sa_loc_auth_token';
 const _kBaseUrl = 'sa_loc_base_url';
+const _kVersionName = 'sa_delivery_app_version';
+const _kBuildNumber = 'sa_delivery_app_build';
+const _kPackageName = 'sa_delivery_app_package';
 const _kOfflineQueue = 'sa_loc_offline_queue';
 const _kDeviceEventQueue = 'sa_device_event_queue';
 const _kWorkSessionId = 'sa_loc_work_session_id';
@@ -65,9 +69,18 @@ Future<void> _recordDeviceEvent(
   }
 
   try {
-    await _trackingDio(baseUrl, token)
+    await _trackingDio(baseUrl, token, await _trackingVersionHeaders())
         .post('/deliverymen/device-event', data: payload);
   } on DioException catch (error) {
+    final updatePolicy = _updateRequiredPolicy(error);
+    if (updatePolicy != null) {
+      _notifyMainOfRequiredUpdate(updatePolicy);
+      await LocationTrackingService._stopTracking(
+        recordEvent: false,
+        discardPending: true,
+      );
+      return;
+    }
     if (isSessionReplacedResponse(
       error.response?.statusCode,
       error.response?.data,
@@ -102,12 +115,25 @@ Future<void> _flushDeviceEvents(String token, String baseUrl) async {
   if (encoded == null) return;
   final queue = jsonDecode(encoded) as List<dynamic>;
   final remaining = <Map<String, dynamic>>[];
-  final dio = _trackingDio(baseUrl, token);
+  final dio = _trackingDio(
+    baseUrl,
+    token,
+    await _trackingVersionHeaders(),
+  );
   for (final item in queue) {
     final payload = Map<String, dynamic>.from(item as Map);
     try {
       await dio.post('/deliverymen/device-event', data: payload);
     } on DioException catch (error) {
+      final updatePolicy = _updateRequiredPolicy(error);
+      if (updatePolicy != null) {
+        _notifyMainOfRequiredUpdate(updatePolicy);
+        await LocationTrackingService._stopTracking(
+          recordEvent: false,
+          discardPending: true,
+        );
+        return;
+      }
       if (isSessionReplacedResponse(
         error.response?.statusCode,
         error.response?.data,
@@ -179,7 +205,12 @@ bool _isPermanentClientErrorStatus(int? status) {
   return status != 401 && status != 408 && status != 429;
 }
 
-Dio _trackingDio(String baseUrl, String token) => Dio(
+Dio _trackingDio(
+  String baseUrl,
+  String token,
+  Map<String, String> versionHeaders,
+) =>
+    Dio(
       BaseOptions(
         baseUrl: baseUrl,
         connectTimeout: const Duration(seconds: 10),
@@ -187,9 +218,35 @@ Dio _trackingDio(String baseUrl, String token) => Dio(
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token',
+          ...versionHeaders,
         },
       ),
     );
+
+Future<Map<String, String>> _trackingVersionHeaders() async => {
+      deliveryAppVersionHeader:
+          await FlutterForegroundTask.getData<String>(key: _kVersionName) ?? '',
+      deliveryAppBuildHeader:
+          await FlutterForegroundTask.getData<String>(key: _kBuildNumber) ?? '',
+      deliveryAppPackageHeader:
+          await FlutterForegroundTask.getData<String>(key: _kPackageName) ?? '',
+    };
+
+DeliveryAppVersionPolicy? _updateRequiredPolicy(DioException error) =>
+    deliveryAppUpdatePolicyFromResponse(
+      error.response?.statusCode,
+      error.response?.data,
+    );
+
+void _notifyMainOfRequiredUpdate(DeliveryAppVersionPolicy policy) {
+  FlutterForegroundTask.sendDataToMain({
+    'type': deliveryAppUpdateRequiredCode,
+    'requiredVersion': policy.requiredVersion,
+    'minimumBuild': policy.minimumBuild,
+    'playStoreUrl': policy.playStoreUrl,
+    'updateRequired': true,
+  });
+}
 
 @pragma('vm:entry-point')
 void locationTaskCallback() {
@@ -315,7 +372,7 @@ class LocationTaskHandler extends TaskHandler {
     int syncedOfflineCount,
   ) async {
     try {
-      final response = await _buildDio(baseUrl, token)
+      final response = await (await _buildDio(baseUrl, token))
           .post('/deliverymen/location', data: payload);
       await _applyTrackingResult(response.data);
       final recoveryReported = await _recordBooleanTransition(
@@ -337,6 +394,15 @@ class LocationTaskHandler extends TaskHandler {
       }
     } on DioException catch (error) {
       final status = error.response?.statusCode;
+      final updatePolicy = _updateRequiredPolicy(error);
+      if (updatePolicy != null) {
+        _notifyMainOfRequiredUpdate(updatePolicy);
+        await LocationTrackingService._stopTracking(
+          recordEvent: false,
+          discardPending: true,
+        );
+        return;
+      }
       if (isSessionReplacedResponse(status, error.response?.data)) {
         await LocationTrackingService._stopTracking(
           recordEvent: false,
@@ -384,7 +450,7 @@ class LocationTaskHandler extends TaskHandler {
     final queue = jsonDecode(queueJson) as List<dynamic>;
     if (queue.isEmpty) return 0;
 
-    final dio = _buildDio(baseUrl, token);
+    final dio = await _buildDio(baseUrl, token);
     final remaining = <Map<String, dynamic>>[];
     var syncedCount = 0;
     for (final item in queue) {
@@ -395,6 +461,15 @@ class LocationTaskHandler extends TaskHandler {
         syncedCount++;
       } on DioException catch (error) {
         final status = error.response?.statusCode;
+        final updatePolicy = _updateRequiredPolicy(error);
+        if (updatePolicy != null) {
+          _notifyMainOfRequiredUpdate(updatePolicy);
+          await LocationTrackingService._stopTracking(
+            recordEvent: false,
+            discardPending: true,
+          );
+          return syncedCount;
+        }
         if (isSessionReplacedResponse(status, error.response?.data)) {
           await LocationTrackingService._stopTracking(
             recordEvent: false,
@@ -459,7 +534,7 @@ class LocationTaskHandler extends TaskHandler {
     }
   }
 
-  Dio _buildDio(String baseUrl, String token) => Dio(
+  Future<Dio> _buildDio(String baseUrl, String token) async => Dio(
         BaseOptions(
           baseUrl: baseUrl,
           connectTimeout: const Duration(seconds: 10),
@@ -467,6 +542,7 @@ class LocationTaskHandler extends TaskHandler {
           headers: {
             'Content-Type': 'application/json',
             'Authorization': 'Bearer $token',
+            ...await _trackingVersionHeaders(),
           },
         ),
       );
@@ -564,6 +640,9 @@ class LocationTrackingService {
     required DateTime autoCloseAtUtc,
     required int lightIntervalSeconds,
     required int activeIntervalSeconds,
+    required String versionName,
+    required String buildNumber,
+    required String packageName,
   }) =>
       _enqueue(
         () => _startTracking(
@@ -573,6 +652,9 @@ class LocationTrackingService {
           autoCloseAtUtc: autoCloseAtUtc,
           lightIntervalSeconds: lightIntervalSeconds,
           activeIntervalSeconds: activeIntervalSeconds,
+          versionName: versionName,
+          buildNumber: buildNumber,
+          packageName: packageName,
         ),
       );
 
@@ -583,6 +665,9 @@ class LocationTrackingService {
     required DateTime autoCloseAtUtc,
     required int lightIntervalSeconds,
     required int activeIntervalSeconds,
+    required String versionName,
+    required String buildNumber,
+    required String packageName,
   }) async {
     if (!_initialized) initialize();
 
@@ -616,6 +701,18 @@ class LocationTrackingService {
 
     await FlutterForegroundTask.saveData(key: _kAuthToken, value: authToken);
     await FlutterForegroundTask.saveData(key: _kBaseUrl, value: baseUrl);
+    await FlutterForegroundTask.saveData(
+      key: _kVersionName,
+      value: versionName,
+    );
+    await FlutterForegroundTask.saveData(
+      key: _kBuildNumber,
+      value: buildNumber,
+    );
+    await FlutterForegroundTask.saveData(
+      key: _kPackageName,
+      value: packageName,
+    );
     await FlutterForegroundTask.saveData(
         key: _kWorkSessionId, value: workSessionId);
     await FlutterForegroundTask.saveData(
@@ -779,6 +876,9 @@ class LocationTrackingService {
 
     await FlutterForegroundTask.removeData(key: _kAuthToken);
     await FlutterForegroundTask.removeData(key: _kBaseUrl);
+    await FlutterForegroundTask.removeData(key: _kVersionName);
+    await FlutterForegroundTask.removeData(key: _kBuildNumber);
+    await FlutterForegroundTask.removeData(key: _kPackageName);
     await FlutterForegroundTask.removeData(key: _kWorkSessionId);
     await FlutterForegroundTask.removeData(key: _kAutoCloseAt);
     await FlutterForegroundTask.removeData(key: _kLightIntervalSeconds);

@@ -10,6 +10,18 @@ plugins {
     id("com.google.gms.google-services")
 }
 
+val releasePackageRequested = gradle.startParameter.taskNames.any {
+    val taskName = it.substringAfterLast(':')
+    taskName.startsWith("assemble", ignoreCase = true) &&
+        taskName.endsWith("Release", ignoreCase = true)
+}
+if (releasePackageRequested) {
+    throw GradleException(
+        "La distribución APK release está deshabilitada. " +
+            "Señor Arroz se distribuye exclusivamente mediante Google Play / AAB."
+    )
+}
+
 val keystoreProperties = Properties()
 val keystorePropertiesFile = rootProject.file("key.properties")
 if (keystorePropertiesFile.exists()) {

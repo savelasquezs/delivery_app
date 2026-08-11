@@ -5,13 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:go_router/go_router.dart';
-import 'package:url_launcher/url_launcher.dart';
 import '../../core/router/app_router.dart';
-import '../../core/api/api_constants.dart';
-import '../../core/updates/app_update_prefs.dart';
-import '../../core/updates/app_update_provider.dart';
-import '../../core/updates/delivery_app_release_manifest.dart';
-import '../../core/updates/app_update_widgets.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/whatsapp/open_whatsapp.dart';
@@ -39,8 +33,6 @@ class HomeScreen extends ConsumerStatefulWidget {
 class _HomeScreenState extends ConsumerState<HomeScreen>
     with WidgetsBindingObserver {
   int _currentIndex = 0;
-  int? _dismissedRemoteBuild;
-  int? _shownUpdatePromptBuild;
   HubConnectionStatus _hubStatus = HubConnectionStatus.disconnected;
   OrderHubService? _hubService;
   bool _signalRListenersAttached = false;
@@ -75,10 +67,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      final d = await getDismissedUpdateRemoteBuild();
-      if (mounted) setState(() => _dismissedRemoteBuild = d);
-      if (!mounted) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
       // Un frame más para que el árbol y `ref` queden listos antes de SignalR.
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _connectSignalR();
@@ -89,7 +78,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      ref.invalidate(appUpdateCheckProvider);
       unawaited(_onResumed());
     }
   }
@@ -185,6 +173,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     if (_signalRListenersAttached && _hubService != null) {
       _hubService!.removeStatusListener(_onHubStatusChange);
       _hubService!.removeEventListener(_onHubEvent);
+      unawaited(_hubService!.disconnect());
       _signalRListenersAttached = false;
     }
     super.dispose();
@@ -280,156 +269,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 
   String get _currentTitle => _tabs[_currentIndex].label;
 
-  Future<void> _openUpdate(Uri uri) async {
-    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
-    if (!mounted || ok) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('No se pudo abrir el enlace')),
-    );
-  }
-
-  Future<void> _onDismissUpdate(AppUpdateCheckResult result) async {
-    await setDismissedUpdateRemoteBuild(result.manifest.buildNumber);
-    if (mounted) {
-      setState(() => _dismissedRemoteBuild = result.manifest.buildNumber);
-    }
-  }
-
-  bool _shouldShowUpdatePrompt(AppUpdateCheckResult? result) {
-    if (result == null) return false;
-    final remoteBuild = result.manifest.buildNumber;
-    if (_shownUpdatePromptBuild == remoteBuild) return false;
-    return _dismissedRemoteBuild != remoteBuild;
-  }
-
-  Future<void> _showUpdatePrompt(AppUpdateCheckResult result) async {
-    setState(() => _shownUpdatePromptBuild = result.manifest.buildNumber);
-    await showAppUpdateDialog(
-      context: context,
-      result: result,
-      onDownload: () => _openUpdate(result.updateUri),
-      onDismiss: () => _onDismissUpdate(result),
-    );
-  }
-
-  Widget _buildUpdateBanner() {
-    final async = ref.watch(appUpdateCheckProvider);
-    return async.when(
-      data: (result) {
-        if (result == null) return const SizedBox.shrink();
-        final dismissed = _dismissedRemoteBuild;
-        if (dismissed != null && dismissed == result.manifest.buildNumber) {
-          return const SizedBox.shrink();
-        }
-        final forced = result.kind == AppUpdateKind.forced;
-        final msg = result.manifest.message?.trim();
-        return Material(
-          color: forced
-              ? AppColors.error.withValues(alpha: 0.12)
-              : AppColors.primaryContainer,
-          child: Container(
-            width: double.infinity,
-            decoration: BoxDecoration(
-              border: Border(
-                bottom: BorderSide(
-                  color: forced ? AppColors.warning : AppColors.divider,
-                  width: 1,
-                ),
-              ),
-            ),
-            padding: const EdgeInsets.fromLTRB(
-              AppTheme.spacingMd,
-              AppTheme.spacingSm,
-              AppTheme.spacingMd,
-              AppTheme.spacingSm,
-            ),
-            child: SafeArea(
-              top: false,
-              bottom: false,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Icon(
-                        forced
-                            ? Icons.warning_amber_rounded
-                            : Icons.system_update,
-                        size: 22,
-                        color:
-                            forced ? AppColors.warning : AppColors.primaryLight,
-                      ),
-                      const SizedBox(width: AppTheme.spacingSm),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              forced
-                                  ? 'Actualización necesaria'
-                                  : 'Hay una nueva versión',
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .titleSmall
-                                  ?.copyWith(
-                                    color: AppColors.onBackground,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                            ),
-                            if (msg != null && msg.isNotEmpty) ...[
-                              const SizedBox(height: 4),
-                              Text(
-                                msg,
-                                maxLines: 3,
-                                overflow: TextOverflow.ellipsis,
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .bodySmall
-                                    ?.copyWith(
-                                      color: AppColors.onSurface,
-                                    ),
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: AppTheme.spacingSm),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      TextButton(
-                        onPressed: () => _onDismissUpdate(result),
-                        child: const Text('Más tarde'),
-                      ),
-                      const SizedBox(width: AppTheme.spacingXs),
-                      FilledButton(
-                        onPressed: () => _openUpdate(result.updateUri),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: AppColors.primary,
-                          foregroundColor: AppColors.onPrimary,
-                        ),
-                        child: Text(
-                          kPlayDistribution
-                              ? 'Actualizar en Play Store'
-                              : 'Descargar',
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-      loading: () => const SizedBox.shrink(),
-      error: (_, __) => const SizedBox.shrink(),
-    );
-  }
-
   Future<void> _openBranchWhatsApp(AuthUser? user) async {
     final raw = user?.branchWhatsAppTarget;
     if (raw == null) return;
@@ -471,19 +310,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   @override
   Widget build(BuildContext context) {
     final authState = ref.watch(authNotifierProvider);
-    ref.listen<AsyncValue<AppUpdateCheckResult?>>(
-      appUpdateCheckProvider,
-      (_, next) {
-        next.whenData((result) {
-          if (!mounted || !_shouldShowUpdatePrompt(result)) return;
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (!mounted || !_shouldShowUpdatePrompt(result)) return;
-            unawaited(_showUpdatePrompt(result!));
-          });
-        });
-      },
-    );
-
     ref.listen<AuthState>(
       authNotifierProvider,
       (prev, next) {
@@ -521,7 +347,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _buildUpdateBanner(),
           _TrackingStatusBanner(
             authState: authState,
             onOpenSettings: () =>

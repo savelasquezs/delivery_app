@@ -1,16 +1,7 @@
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
-/// Front producción (Vite `public/`: [delivery-app-release.json]).
-const String kDefaultDeliveryAppUpdateManifestUrl =
-    'https://senorarroz.up.railway.app/delivery-app-release.json';
-
-const String kPlayStoreUrl =
+const String kDeliveryAppPlayStoreUrl =
     'https://play.google.com/store/apps/details?id=com.senorarroz.delivery_app';
-
-const bool kPlayDistribution = bool.fromEnvironment(
-  'DELIVERY_PLAY_DISTRIBUTION',
-  defaultValue: true,
-);
 
 abstract class ApiConstants {
   static String get baseUrl =>
@@ -20,20 +11,13 @@ abstract class ApiConstants {
       dotenv.env['SIGNALR_HUB_URL'] ??
       'https://senorarrozapi.up.railway.app/hubs/orders';
 
-  /// Mismo JSON que [senorArrozFront/public/delivery-app-release.json] en producción.
-  /// Override: `DELIVERY_APP_UPDATE_MANIFEST_URL` en `.env` (p. ej. front en local).
-  static String get deliveryAppUpdateManifestUrl {
-    final u = dotenv.env['DELIVERY_APP_UPDATE_MANIFEST_URL']?.trim();
-    if (u != null && u.isNotEmpty) return u;
-    return kDefaultDeliveryAppUpdateManifestUrl;
-  }
-
   /// Red móvil / API en frío (p. ej. Railway): más holgura que el front web (10s).
   static const Duration connectTimeout = Duration(seconds: 30);
   static const Duration receiveTimeout = Duration(seconds: 30);
 
   // Auth
   static const String login = '/auth/login';
+  static const String deliveryAppVersion = '/auth/delivery-app-version';
   static const String refresh = '/auth/refresh';
   static const String logout = '/auth/logout';
   static const String forgotPassword = '/auth/forgot-password';

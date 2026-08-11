@@ -8,7 +8,8 @@ class ConfirmPasswordDialog extends StatefulWidget {
   final String title;
   final String? subtitle;
   final String? initialPassword;
-  final Future<void> Function(String password, bool remember)? onPersistPassword;
+  final Future<void> Function(String password, bool remember)?
+      onPersistPassword;
   final Future<void> Function(String password) onConfirm;
 
   const ConfirmPasswordDialog({
@@ -124,8 +125,7 @@ class _ConfirmPasswordDialogState extends State<ConfirmPasswordDialog> {
             decoration: InputDecoration(
               labelText: 'Contraseña',
               labelStyle: const TextStyle(color: AppColors.hint),
-              prefixIcon:
-                  const Icon(Icons.lock_outline, color: AppColors.hint),
+              prefixIcon: const Icon(Icons.lock_outline, color: AppColors.hint),
               suffixIcon: IconButton(
                 icon: Icon(
                   _obscure

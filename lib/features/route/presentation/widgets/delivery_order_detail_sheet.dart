@@ -15,7 +15,8 @@ import '../../../customers/presentation/widgets/delivery_map_picker.dart';
 import '../../../orders/data/order_repository.dart';
 import '../../../orders/models/order_models.dart';
 
-final _money = NumberFormat.currency(locale: 'es_CO', symbol: '\$', decimalDigits: 0);
+final _money =
+    NumberFormat.currency(locale: 'es_CO', symbol: '\$', decimalDigits: 0);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Payload de salida cuando se actualiza la dirección
@@ -57,7 +58,8 @@ Future<void> showDeliveryOrderDetailSheet({
     backgroundColor: AppColors.surface,
     useSafeArea: true,
     shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(AppTheme.radiusXl)),
+      borderRadius:
+          BorderRadius.vertical(top: Radius.circular(AppTheme.radiusXl)),
     ),
     builder: (ctx) => _DeliveryOrderDetailBody(
       initialOrder: initialOrder,
@@ -233,7 +235,8 @@ class _DeliveryOrderDetailBodyState
     setState(() {
       _order = _order.copyWithAddressFields(
         addressDescription: result.address,
-        addressAdditionalInfo: result.additionalInfo.isEmpty ? null : result.additionalInfo,
+        addressAdditionalInfo:
+            result.additionalInfo.isEmpty ? null : result.additionalInfo,
         latitude: result.latitude,
         longitude: result.longitude,
         neighborhoodId: result.neighborhoodId,
@@ -406,14 +409,17 @@ class _DeliveryOrderDetailBodyState
                             iconColor: AppColors.primaryLight,
                             children: [
                               Text(
-                                _order.displayAddressLine ?? 'Sin dirección registrada',
+                                _order.displayAddressLine ??
+                                    'Sin dirección registrada',
                                 style: const TextStyle(
                                   fontWeight: FontWeight.w600,
                                   fontSize: 14,
                                 ),
                               ),
                               if (_order.addressAdditionalInfo != null &&
-                                  _order.addressAdditionalInfo!.trim().isNotEmpty)
+                                  _order.addressAdditionalInfo!
+                                      .trim()
+                                      .isNotEmpty)
                                 Text(
                                   _order.addressAdditionalInfo!,
                                   style: const TextStyle(
@@ -464,7 +470,8 @@ class _DeliveryOrderDetailBodyState
                   _InfoCard(
                     child: Column(
                       children: [
-                        if (_order.deliveryFee != null && _order.deliveryFee != 0)
+                        if (_order.deliveryFee != null &&
+                            _order.deliveryFee != 0)
                           _TotalRow(
                             label: 'Domicilio',
                             value: _money.format(_order.deliveryFee),
@@ -489,7 +496,8 @@ class _DeliveryOrderDetailBodyState
                                 borderRadius:
                                     BorderRadius.circular(AppTheme.radiusMd),
                                 border: Border.all(
-                                  color: AppColors.accent.withValues(alpha: 0.45),
+                                  color:
+                                      AppColors.accent.withValues(alpha: 0.45),
                                   width: 1.5,
                                 ),
                               ),
@@ -534,7 +542,8 @@ class _DeliveryOrderDetailBodyState
                   ),
 
                   // ── Notas ──────────────────────────────────────
-                  if (_order.notes != null && _order.notes!.trim().isNotEmpty) ...[
+                  if (_order.notes != null &&
+                      _order.notes!.trim().isNotEmpty) ...[
                     const SizedBox(height: 12),
                     _SectionHeader('NOTAS'),
                     _InfoCard(
@@ -565,7 +574,8 @@ class _DeliveryOrderDetailBodyState
                             ? const SizedBox(
                                 width: 20,
                                 height: 20,
-                                child: CircularProgressIndicator(strokeWidth: 2),
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 2),
                               )
                             : const Icon(Icons.print_outlined, size: 20),
                         label: Text(
@@ -660,8 +670,8 @@ class _EditAddressPageState extends ConsumerState<_EditAddressPage> {
   @override
   void initState() {
     super.initState();
-    _addressCtrl = TextEditingController(
-        text: widget.order.displayAddressLine ?? '');
+    _addressCtrl =
+        TextEditingController(text: widget.order.displayAddressLine ?? '');
     _infoCtrl =
         TextEditingController(text: widget.order.addressAdditionalInfo ?? '');
     _neighborhoodId = widget.order.neighborhoodId;
@@ -679,7 +689,8 @@ class _EditAddressPageState extends ConsumerState<_EditAddressPage> {
 
   Future<void> _loadNeighborhoods() async {
     try {
-      final list = await ref.read(customerRepositoryProvider).getNeighborhoods();
+      final list =
+          await ref.read(customerRepositoryProvider).getNeighborhoods();
       if (!mounted) return;
       setState(() {
         _neighborhoods = list;
@@ -786,8 +797,8 @@ class _EditAddressPageState extends ConsumerState<_EditAddressPage> {
     if (_latitude == null || _longitude == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-            content: Text(
-                'Selecciona la ubicación en el mapa antes de guardar.')),
+            content:
+                Text('Selecciona la ubicación en el mapa antes de guardar.')),
       );
       return;
     }
@@ -795,20 +806,19 @@ class _EditAddressPageState extends ConsumerState<_EditAddressPage> {
     setState(() => _saving = true);
     try {
       await ref.read(customerRepositoryProvider).updateCustomerAddress(
-            customerId: widget.customerId,
-            addressId: widget.addressId,
-            body: {
-              'neighborhoodId': nid,
-              'address': _addressCtrl.text.trim(),
-              'additionalInfo': _infoCtrl.text.trim().isEmpty
-                  ? null
-                  : _infoCtrl.text.trim(),
-              'latitude': _latitude,
-              'longitude': _longitude,
-              'isPrimary': false,
-              'deliveryFee': widget.order.deliveryFee?.round() ?? 0,
-            },
-          );
+        customerId: widget.customerId,
+        addressId: widget.addressId,
+        body: {
+          'neighborhoodId': nid,
+          'address': _addressCtrl.text.trim(),
+          'additionalInfo':
+              _infoCtrl.text.trim().isEmpty ? null : _infoCtrl.text.trim(),
+          'latitude': _latitude,
+          'longitude': _longitude,
+          'isPrimary': false,
+          'deliveryFee': widget.order.deliveryFee?.round() ?? 0,
+        },
+      );
       if (!mounted) return;
       Navigator.pop(
         context,
@@ -869,8 +879,7 @@ class _EditAddressPageState extends ConsumerState<_EditAddressPage> {
               child: ListView(
                 padding: const EdgeInsets.all(20),
                 children: [
-                  if (_loadError != null)
-                    _ErrorBox(message: _loadError!),
+                  if (_loadError != null) _ErrorBox(message: _loadError!),
 
                   // ── Barrio ──────────────────────────────────────
                   _FieldLabel('Barrio'),
@@ -921,8 +930,7 @@ class _EditAddressPageState extends ConsumerState<_EditAddressPage> {
                         color: AppColors.onBackground, fontSize: 14),
                     decoration: const InputDecoration(
                       hintText: 'Ej: Apto 202, Torre A, Frente al parque',
-                      prefixIcon:
-                          Icon(Icons.info_outline, size: 20),
+                      prefixIcon: Icon(Icons.info_outline, size: 20),
                       counterText: '',
                     ),
                   ),
@@ -940,9 +948,10 @@ class _EditAddressPageState extends ConsumerState<_EditAddressPage> {
                   SizedBox(
                     width: double.infinity,
                     child: OutlinedButton.icon(
-                      onPressed: (_saving || _loadingNeighborhoods || _gpsLoading)
-                          ? null
-                          : _useCurrentLocation,
+                      onPressed:
+                          (_saving || _loadingNeighborhoods || _gpsLoading)
+                              ? null
+                              : _useCurrentLocation,
                       icon: _gpsLoading
                           ? const SizedBox(
                               width: 18,
@@ -954,7 +963,9 @@ class _EditAddressPageState extends ConsumerState<_EditAddressPage> {
                             )
                           : const Icon(Icons.my_location, size: 20),
                       label: Text(
-                        _gpsLoading ? 'Obteniendo ubicación…' : 'Usar ubicación actual',
+                        _gpsLoading
+                            ? 'Obteniendo ubicación…'
+                            : 'Usar ubicación actual',
                         style: const TextStyle(
                           fontWeight: FontWeight.w600,
                           fontSize: 14,
@@ -980,16 +991,18 @@ class _EditAddressPageState extends ConsumerState<_EditAddressPage> {
                   SizedBox(
                     width: double.infinity,
                     child: FilledButton.icon(
-                      onPressed: (_saving || _loadingNeighborhoods || !hasCoords)
-                          ? null
-                          : _save,
+                      onPressed:
+                          (_saving || _loadingNeighborhoods || !hasCoords)
+                              ? null
+                              : _save,
                       style: FilledButton.styleFrom(
                         backgroundColor: AppColors.primary,
                         disabledBackgroundColor:
                             AppColors.primary.withValues(alpha: 0.3),
                         padding: const EdgeInsets.symmetric(vertical: 14),
                         shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+                          borderRadius:
+                              BorderRadius.circular(AppTheme.radiusMd),
                         ),
                         textStyle: const TextStyle(
                             fontSize: 15, fontWeight: FontWeight.w700),
@@ -1038,7 +1051,6 @@ class _SectionHeader extends StatelessWidget {
         ),
       );
 }
-
 
 class _InfoCard extends StatelessWidget {
   final Widget child;
@@ -1294,8 +1306,7 @@ class _TotalRow extends StatelessWidget {
               style: TextStyle(
                 color: subtle ? AppColors.hint : AppColors.onSurface,
                 fontSize: highlight ? 15 : 13,
-                fontWeight:
-                    highlight ? FontWeight.w700 : FontWeight.normal,
+                fontWeight: highlight ? FontWeight.w700 : FontWeight.normal,
               ),
             ),
             Text(
@@ -1350,8 +1361,8 @@ class _WarningCard extends StatelessWidget {
           const SizedBox(height: 6),
           ...lines.map(
             (l) => Text('• $l',
-                style: const TextStyle(
-                    color: AppColors.onSurface, fontSize: 12)),
+                style:
+                    const TextStyle(color: AppColors.onSurface, fontSize: 12)),
           ),
         ],
       ),
@@ -1391,13 +1402,11 @@ class _ErrorBox extends StatelessWidget {
         ),
         child: Row(
           children: [
-            const Icon(Icons.error_outline,
-                color: AppColors.error, size: 18),
+            const Icon(Icons.error_outline, color: AppColors.error, size: 18),
             const SizedBox(width: 8),
             Expanded(
               child: Text(message,
-                  style: const TextStyle(
-                      color: AppColors.error, fontSize: 13)),
+                  style: const TextStyle(color: AppColors.error, fontSize: 13)),
             ),
           ],
         ),
@@ -1441,8 +1450,7 @@ class _NeighborhoodDropdown extends StatelessWidget {
       style: const TextStyle(color: AppColors.onBackground, fontSize: 14),
       icon: const Icon(Icons.expand_more, color: AppColors.hint, size: 20),
       decoration: InputDecoration(
-        prefixIcon:
-            const Icon(Icons.location_city_outlined, size: 20),
+        prefixIcon: const Icon(Icons.location_city_outlined, size: 20),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(AppTheme.radiusMd),
           borderSide: const BorderSide(color: AppColors.divider),
@@ -1457,8 +1465,7 @@ class _NeighborhoodDropdown extends StatelessWidget {
         ),
         filled: true,
         fillColor: AppColors.inputFill,
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
       ),
       items: neighborhoods
           .map(
@@ -1492,9 +1499,7 @@ class _CoordCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: hasCoords
-            ? AppColors.primaryContainer
-            : AppColors.card,
+        color: hasCoords ? AppColors.primaryContainer : AppColors.card,
         borderRadius: BorderRadius.circular(AppTheme.radiusMd),
         border: Border.all(
           color: hasCoords
@@ -1552,8 +1557,7 @@ class _CoordCard extends StatelessWidget {
           OutlinedButton(
             onPressed: onTapMap,
             style: OutlinedButton.styleFrom(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               side: BorderSide(
                 color: hasCoords ? AppColors.primary : AppColors.divider,
               ),
@@ -1678,9 +1682,7 @@ class _ContactBtn extends StatelessWidget {
               const SizedBox(width: 4),
               Text(label,
                   style: TextStyle(
-                      color: color,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600)),
+                      color: color, fontSize: 12, fontWeight: FontWeight.w600)),
             ],
           ),
         ),

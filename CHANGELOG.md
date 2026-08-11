@@ -1,46 +1,30 @@
-# Historial de cambios — app domiciliarios
+# Historial de cambios — app de domiciliarios
 
-El número de build (`+N` en `pubspec.yaml`) debe coincidir con `buildNumber` en `senorArrozFront/public/delivery-app-release.json` al publicar un APK.
+## [1.2.5] — build base 11 — 2026-08-10
 
-## [1.2.5] — build 10 — 2026-08-06
-
-- Avisos informativos al domiciliario cuando se genera una revisión grave de seguimiento por GPS apagado, permiso de ubicación retirado o permanencia no autorizada.
-- Modal obligatorio de lectura, con cola local y deduplicación de avisos.
+- Distribución exclusiva mediante Google Play Internal y App Bundle firmado.
+- Control obligatorio de versión y build definido por el backend.
+- Identificación central de versión, build y package en HTTP, SignalR y tracking.
+- Pantalla no descartable para actualizaciones obligatorias desde Google Play.
+- Limpieza del canal externo de distribución y sus componentes de actualización.
+- Avisos al domiciliario por revisiones graves de seguimiento.
 
 ## [1.2.4] — build 8 — 2026-07-23
 
-- El inicio de sesión más reciente reemplaza la sesión de domiciliario de otro dispositivo.
-- El celular reemplazado detiene el seguimiento GPS y muestra el motivo al volver a la app.
-- El login y la jornada quedan vinculados al identificador seguro de instalación.
-- La reimpresión confirma que la solicitud fue recibida por la sucursal y evita POST simultáneos duplicados.
-- En **En ruta**, la siguiente entrega se muestra primero y se marca dentro de su única tarjeta, sin repetir el pedido completo.
+- El inicio de sesión más reciente reemplaza la sesión de otro dispositivo.
+- La sesión y la jornada quedan vinculadas al identificador de instalación.
+- Mejoras en ruta, reimpresión y orden de entregas.
 
 ## [1.2.1] — build 5 — 2026-04-27
 
-### Añadido
-
-- **Actualizaciones APK:** URL del manifiesto por defecto `https://senorarroz.up.railway.app/delivery-app-release.json` (override opcional con `DELIVERY_APP_UPDATE_MANIFEST_URL` en `.env`).
-
-### Cambiado
-
-- **Disponibles / En preparación:** la pestaña En preparación incluye domicilios en **Tomado** y **En preparación**; agrupación por barrio; orden por **ancla de urgencia** (alineada al semáforo), más urgentes arriba.
+- La pestaña En preparación incluye domicilios tomados y en preparación.
+- Agrupación por barrio y orden por urgencia.
 
 ## [1.1.0] — 2026-04-13
 
-### Añadido
-
-- Script `Scripts/build_delivery_app_apk.sh` para generar el APK release y copiarlo a `senorArrozFront/public/senor-arroz-domiciliarios.apk`.
-- Esta guía (`CHANGELOG.md`) y sección de versiones en `README.md`.
-
-### Cambiado
-
-- **SignalR / tiempo real:** reconexión al volver la app al primer plano (`AppLifecycleState.resumed`); segundo `postFrameCallback` tras el arranque para cuando la sesión aún no está lista; `ref.listen` sobre el estado de auth para conectar cuando aparece el usuario; registro único de listeners del hub; `OrderHubService.connect` usa el estado real del transporte (`HubConnectionState`) en lugar de confiar solo en el enum interno.
-- **Mapa (elegir ubicación):** control con texto «Usar ubicación actual» además del icono GPS.
-
-### Notas de publicación
-
-- Tras subir de versión, ejecutar el script de APK (o build manual), desplegar el front y verificar que `delivery-app-release.json` expone el mismo `versionName` y `buildNumber`.
+- Reconexión de SignalR al volver a primer plano.
+- Mejoras en la selección de ubicación del mapa.
 
 ## [1.0.1] — build 2
 
-- Cobro en efectivo y «Ya pagó» en historial y detalle; reimprimir desde la ruta; mejoras en edición de dirección / ubicación.
+- Mejoras en cobro, historial, reimpresión y edición de direcciones.

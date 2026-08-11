@@ -4,16 +4,40 @@ import 'package:go_router/go_router.dart';
 import '../../features/auth/presentation/auth_notifier.dart';
 import '../../features/auth/presentation/forgot_password_screen.dart';
 import '../../features/auth/presentation/login_screen.dart';
+import '../../features/auth/presentation/delivery_app_update_required_screen.dart';
 import '../../features/home/home_screen.dart';
 import '../../features/profile/presentation/profile_screen.dart';
 import '../../features/documents/presentation/business_documents_screen.dart';
 
 const _routeLogin = '/login';
+const _routeStarting = '/starting';
+const routeUpdateRequired = '/update-required';
 const _routeHome = '/';
 const routeForgotPassword = '/forgot-password';
 const routeProfile = '/profile';
 const routeBusinessDocuments = '/documents';
 final rootNavigatorKey = GlobalKey<NavigatorState>();
+
+String? deliveryAuthRedirect(AuthStatus status, String location) {
+  final isAuthenticated = status == AuthStatus.authenticated;
+  final isLoading =
+      status == AuthStatus.initial || status == AuthStatus.loading;
+  final isLoginRoute = location == _routeLogin;
+  final isStartingRoute = location == _routeStarting;
+  final isUpdateRoute = location == routeUpdateRequired;
+  final isPublicAuthRoute = isLoginRoute || location == routeForgotPassword;
+
+  if (isLoading) return isStartingRoute ? null : _routeStarting;
+  if (status == AuthStatus.updateRequired) {
+    return isUpdateRoute ? null : routeUpdateRequired;
+  }
+  if (isUpdateRoute || isStartingRoute) {
+    return isAuthenticated ? _routeHome : _routeLogin;
+  }
+  if (!isAuthenticated && !isPublicAuthRoute) return _routeLogin;
+  if (isAuthenticated && isLoginRoute) return _routeHome;
+  return null;
+}
 
 /// Evita recrear [GoRouter] en cada `AuthStatus.loading` (p. ej. al pulsar login):
 /// una nueva instancia con `initialLocation: /` montaba Home y disparaba APIs sin token.
@@ -38,22 +62,26 @@ final appRouterProvider = Provider<GoRouter>((ref) {
   return GoRouter(
     navigatorKey: rootNavigatorKey,
     refreshListenable: refresh,
-    initialLocation: _routeHome,
+    initialLocation: _routeStarting,
     redirect: (context, state) {
       final authState = ref.read(authNotifierProvider);
-      final isAuthenticated = authState.status == AuthStatus.authenticated;
-      final isLoading = authState.status == AuthStatus.initial ||
-          authState.status == AuthStatus.loading;
-      final isLoginRoute = state.matchedLocation == _routeLogin;
-      final isPublicAuthRoute =
-          isLoginRoute || state.matchedLocation == routeForgotPassword;
-
-      if (isLoading) return null;
-      if (!isAuthenticated && !isPublicAuthRoute) return _routeLogin;
-      if (isAuthenticated && isLoginRoute) return _routeHome;
-      return null;
+      return deliveryAuthRedirect(
+        authState.status,
+        state.matchedLocation,
+      );
     },
     routes: [
+      GoRoute(
+        path: _routeStarting,
+        builder: (_, __) => const Scaffold(
+          backgroundColor: Color(0xFF121212),
+          body: Center(child: CircularProgressIndicator()),
+        ),
+      ),
+      GoRoute(
+        path: routeUpdateRequired,
+        builder: (_, __) => const DeliveryAppUpdateRequiredScreen(),
+      ),
       GoRoute(
         path: _routeHome,
         builder: (_, __) => const HomeScreen(),

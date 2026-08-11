@@ -55,8 +55,8 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
     final initial = DateTimeRange(
       start: DateTime(int.parse(fromParts[0]), int.parse(fromParts[1]),
           int.parse(fromParts[2])),
-      end: DateTime(int.parse(toParts[0]), int.parse(toParts[1]),
-          int.parse(toParts[2])),
+      end: DateTime(
+          int.parse(toParts[0]), int.parse(toParts[1]), int.parse(toParts[2])),
     );
 
     final picked = await showDateRangePicker(
@@ -171,8 +171,8 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
                   child: Padding(
                     padding: EdgeInsets.all(AppTheme.spacingMd),
                     child: Center(
-                      child: CircularProgressIndicator(
-                          color: AppColors.primary),
+                      child:
+                          CircularProgressIndicator(color: AppColors.primary),
                     ),
                   ),
                 ),
@@ -285,16 +285,14 @@ class _BranchSummarySection extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   Text(
-                      '$totalCount pedido${totalCount != 1 ? 's' : ''}',
-                      style: const TextStyle(
-                          color: AppColors.hint, fontSize: 12),
+                    '$totalCount pedido${totalCount != 1 ? 's' : ''}',
+                    style: const TextStyle(color: AppColors.hint, fontSize: 12),
                   ),
                   const SizedBox(height: 4),
                   Text(
                     _currencyFormat.format(total),
                     style: const TextStyle(
-                        color: AppColors.primary,
-                        fontWeight: FontWeight.bold),
+                        color: AppColors.primary, fontWeight: FontWeight.bold),
                   ),
                 ],
               ),

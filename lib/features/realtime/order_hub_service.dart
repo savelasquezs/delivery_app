@@ -1,7 +1,9 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:signalr_netcore/signalr_client.dart';
+import 'package:signalr_netcore/ihub_protocol.dart';
 import '../../core/api/api_constants.dart';
 import '../../core/storage/secure_storage.dart';
+import '../../core/version/delivery_app_version.dart';
 
 enum HubConnectionStatus { disconnected, connecting, connected, error }
 
@@ -9,12 +11,13 @@ class OrderHubService {
   HubConnection? _connection;
   HubConnectionStatus _status = HubConnectionStatus.disconnected;
   final SecureStorage _storage;
+  final DeliveryAppVersionInfoLoader _versionInfo;
 
   final List<void Function(HubConnectionStatus)> _statusListeners = [];
   final List<void Function(String event, List<Object?>? args)> _eventListeners =
       [];
 
-  OrderHubService(this._storage);
+  OrderHubService(this._storage, this._versionInfo);
 
   HubConnectionStatus get status => _status;
 
@@ -84,6 +87,8 @@ class OrderHubService {
 
   Future<bool> _tryConnect({required HttpTransportType transport}) async {
     try {
+      final headers = MessageHeaders();
+      (await _versionInfo.headers()).forEach(headers.setHeaderValue);
       _connection = HubConnectionBuilder()
           .withUrl(
             ApiConstants.signalrHubUrl,
@@ -92,6 +97,7 @@ class OrderHubService {
               skipNegotiation: transport == HttpTransportType.WebSockets,
               accessTokenFactory: () async =>
                   (await _storage.getAuthToken()) ?? '',
+              headers: headers,
             ),
           )
           .withAutomaticReconnect()
@@ -149,5 +155,8 @@ class OrderHubService {
 
 final orderHubServiceProvider = Provider<OrderHubService>((ref) {
   final storage = ref.watch(secureStorageProvider);
-  return OrderHubService(storage);
+  return OrderHubService(
+    storage,
+    ref.watch(deliveryAppVersionInfoProvider),
+  );
 });

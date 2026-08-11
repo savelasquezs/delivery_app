@@ -55,7 +55,8 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
         backgroundColor: AppColors.background,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new, color: AppColors.onBackground),
+          icon: const Icon(Icons.arrow_back_ios_new,
+              color: AppColors.onBackground),
           onPressed: () => context.pop(),
         ),
         title: const Text(
@@ -125,8 +126,7 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
                 decoration: const InputDecoration(
                   labelText: 'Correo electrónico',
                   labelStyle: TextStyle(color: AppColors.hint),
-                  prefixIcon:
-                      Icon(Icons.email_outlined, color: AppColors.hint),
+                  prefixIcon: Icon(Icons.email_outlined, color: AppColors.hint),
                 ),
                 validator: (value) {
                   if (value == null || value.trim().isEmpty) {
@@ -142,8 +142,7 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
                   padding: const EdgeInsets.all(AppTheme.spacingMd),
                   decoration: BoxDecoration(
                     color: AppColors.error.withValues(alpha: 0.1),
-                    borderRadius:
-                        BorderRadius.circular(AppTheme.radiusMd),
+                    borderRadius: BorderRadius.circular(AppTheme.radiusMd),
                     border: Border.all(
                         color: AppColors.error.withValues(alpha: 0.3)),
                   ),

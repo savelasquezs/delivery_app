@@ -11,7 +11,8 @@ String _jwtWithExp(int expSec) {
 
 void main() {
   test('readExpSecondsUtc devuelve exp', () {
-    expect(JwtExpiration.readExpSecondsUtc(_jwtWithExp(2000000000)), 2000000000);
+    expect(
+        JwtExpiration.readExpSecondsUtc(_jwtWithExp(2000000000)), 2000000000);
   });
 
   test('shouldProactivelyRefresh es true sin jwt', () {

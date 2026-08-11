@@ -8,6 +8,7 @@ import '../auth/auth_session_bridge.dart';
 import '../auth/session_replacement.dart';
 import '../../features/tracking/location_tracking_service.dart';
 import '../storage/secure_storage.dart';
+import '../version/delivery_app_version.dart';
 import 'api_constants.dart';
 import 'api_exception.dart';
 import 'refresh_access_result.dart';
@@ -15,14 +16,19 @@ import 'refresh_access_result.dart';
 class DioClient {
   final Dio _dio;
   final SecureStorage _storage;
+  final DeliveryAppVersionInfoLoader _versionInfo;
   final void Function(String? reason)? onSessionInvalidated;
+  final Future<void> Function()? onUpdateRequiredCleanup;
+  DeliveryAppVersionPolicy? _updatePolicy;
 
   /// Una sola renovación a la vez (el backend rota el refresh token al usarlo).
   Completer<RefreshAccessResult>? _refreshCompleter;
 
   DioClient(
-    this._storage, {
+    this._storage,
+    this._versionInfo, {
     this.onSessionInvalidated,
+    this.onUpdateRequiredCleanup,
   }) : _dio = Dio() {
     _dio.options = BaseOptions(
       baseUrl: ApiConstants.baseUrl,
@@ -34,6 +40,8 @@ class DioClient {
   }
 
   Dio get dio => _dio;
+
+  Future<Map<String, String>> versionHeaders() => _versionInfo.headers();
 
   void _setupInterceptors() {
     _dio.interceptors.add(
@@ -49,6 +57,7 @@ class DioClient {
     RequestOptions options,
     RequestInterceptorHandler handler,
   ) async {
+    options.headers.addAll(await _versionInfo.headers());
     final token = await _storage.getAuthToken();
     final hasBearer = token != null && token.isNotEmpty;
     if (hasBearer) {
@@ -70,6 +79,22 @@ class DioClient {
     DioException err,
     ErrorInterceptorHandler handler,
   ) async {
+    final updatePolicy = deliveryAppUpdatePolicyFromResponse(
+      err.response?.statusCode,
+      err.response?.data,
+    );
+    if (updatePolicy != null) {
+      await _activateUpdateRequired(updatePolicy);
+      return handler.next(
+        DioException(
+          requestOptions: err.requestOptions,
+          response: err.response,
+          type: DioExceptionType.badResponse,
+          error: DeliveryAppUpdateRequiredException(updatePolicy),
+        ),
+      );
+    }
+
     if (isSessionReplacedResponse(
       err.response?.statusCode,
       err.response?.data,
@@ -108,6 +133,16 @@ class DioClient {
           ..extra['_retry'] = true;
         final retryResponse = await _dio.fetch(retryOptions);
         return handler.resolve(retryResponse);
+      }
+      if (result is RefreshAccessUpdateRequired) {
+        return handler.next(
+          DioException(
+            requestOptions: err.requestOptions,
+            response: err.response,
+            type: DioExceptionType.badResponse,
+            error: DeliveryAppUpdateRequiredException(result.policy),
+          ),
+        );
       }
       if (result is RefreshAccessSessionEnded) {
         return handler.next(
@@ -209,6 +244,9 @@ class DioClient {
   /// El API exige `Authorization: Bearer` con el access token (aunque esté
   /// expirado) además del `refreshToken` en el body. El refresh rota el refresh.
   Future<RefreshAccessResult> _refreshAccessToken() {
+    if (_updatePolicy != null) {
+      return Future.value(RefreshAccessUpdateRequired(_updatePolicy!));
+    }
     if (_refreshCompleter != null) {
       return _refreshCompleter!.future;
     }
@@ -235,6 +273,7 @@ class DioClient {
             receiveTimeout: ApiConstants.receiveTimeout,
           ),
         );
+        final versionHeaders = await _versionInfo.headers();
         final response = await refreshDio.post<dynamic>(
           ApiConstants.refresh,
           data: {'refreshToken': refreshToken},
@@ -242,6 +281,7 @@ class DioClient {
             headers: {
               'Authorization': 'Bearer $accessToken',
               'Content-Type': 'application/json',
+              ...versionHeaders,
             },
           ),
         );
@@ -263,6 +303,15 @@ class DioClient {
         await LocationTrackingService.updateToken(newToken);
         completer.complete(RefreshAccessSuccess(newToken));
       } on DioException catch (e) {
+        final updatePolicy = deliveryAppUpdatePolicyFromResponse(
+          e.response?.statusCode,
+          e.response?.data,
+        );
+        if (updatePolicy != null) {
+          await _activateUpdateRequired(updatePolicy);
+          completer.complete(RefreshAccessUpdateRequired(updatePolicy));
+          return;
+        }
         if (kDebugMode) {
           debugPrint(
             '[DioClient] refresh falló: ${e.response?.statusCode} '
@@ -291,6 +340,25 @@ class DioClient {
 
     run();
     return completer.future;
+  }
+
+  Future<void> _activateUpdateRequired(
+    DeliveryAppVersionPolicy policy,
+  ) async {
+    if (_updatePolicy != null) return;
+    _updatePolicy = policy;
+    try {
+      if (onUpdateRequiredCleanup != null) {
+        await onUpdateRequiredCleanup!();
+      } else {
+        await LocationTrackingService.stopTracking(
+          recordEvent: false,
+          discardPending: true,
+        );
+      }
+    } catch (_) {}
+    await _storage.clearAll();
+    notifyDeliveryAppUpdateRequired(policy);
   }
 
   ApiException _mapDioError(DioException err) {
@@ -376,6 +444,7 @@ final dioClientProvider = Provider<DioClient>((ref) {
   final storage = ref.watch(secureStorageProvider);
   return DioClient(
     storage,
+    ref.watch(deliveryAppVersionInfoProvider),
     onSessionInvalidated: notifyAuthSessionInvalidatedByApi,
   );
 });

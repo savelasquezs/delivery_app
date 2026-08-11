@@ -10,6 +10,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'core/router/app_router.dart';
+import 'core/auth/auth_session_bridge.dart';
+import 'core/version/delivery_app_version.dart';
 import 'core/theme/app_theme.dart';
 import 'features/auth/presentation/auth_notifier.dart';
 import 'features/notifications/fcm_service.dart';
@@ -77,8 +79,13 @@ class _DeliveryAppState extends ConsumerState<DeliveryApp>
       } else if (next.status == AuthStatus.unauthenticated) {
         _pendingReviewNotices.clear();
         _queuedReviewAlertIds.clear();
+      } else if (next.status == AuthStatus.updateRequired) {
+        _pendingReviewNotices.clear();
+        _queuedReviewAlertIds.clear();
+        if (_reviewDialogOpen) rootNavigatorKey.currentState?.pop();
       }
     });
+    FlutterForegroundTask.addTaskDataCallback(_onTrackingTaskData);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(FcmService.emitPendingTrackingReviewNotices());
     });
@@ -88,7 +95,17 @@ class _DeliveryAppState extends ConsumerState<DeliveryApp>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _reviewSubscription?.cancel();
+    FlutterForegroundTask.removeTaskDataCallback(_onTrackingTaskData);
     super.dispose();
+  }
+
+  void _onTrackingTaskData(Object data) {
+    if (data is! Map) return;
+    final json = Map<String, dynamic>.from(data);
+    if (json['type'] != deliveryAppUpdateRequiredCode) return;
+    notifyDeliveryAppUpdateRequired(
+      DeliveryAppVersionPolicy.fromJson(json),
+    );
   }
 
   @override

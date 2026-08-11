@@ -8,6 +8,7 @@ import '../../../core/api/dio_client.dart';
 import '../../../core/api/refresh_access_result.dart';
 import '../../../core/auth/auth_session_bridge.dart';
 import '../../../core/auth/jwt_expiration.dart';
+import '../../../core/version/delivery_app_version.dart';
 import '../../notifications/fcm_service.dart';
 import '../../tracking/location_tracking_policy.dart';
 import '../../tracking/location_tracking_service.dart';
@@ -16,7 +17,14 @@ import '../../tracking/work_session_repository.dart';
 import '../data/auth_models.dart';
 import '../data/auth_repository.dart';
 
-enum AuthStatus { initial, loading, authenticated, unauthenticated, error }
+enum AuthStatus {
+  initial,
+  loading,
+  authenticated,
+  unauthenticated,
+  updateRequired,
+  error,
+}
 
 class AuthState {
   final AuthStatus status;
@@ -25,6 +33,7 @@ class AuthState {
   final bool trackingActive;
   final String? trackingIssue;
   final String? errorMessage;
+  final DeliveryAppVersionPolicy? updatePolicy;
 
   const AuthState({
     this.status = AuthStatus.initial,
@@ -33,6 +42,7 @@ class AuthState {
     this.trackingActive = false,
     this.trackingIssue,
     this.errorMessage,
+    this.updatePolicy,
   });
 
   AuthState copyWith({
@@ -43,6 +53,7 @@ class AuthState {
     String? trackingIssue,
     bool clearTrackingIssue = false,
     String? errorMessage,
+    DeliveryAppVersionPolicy? updatePolicy,
   }) =>
       AuthState(
         status: status ?? this.status,
@@ -52,6 +63,7 @@ class AuthState {
         trackingIssue:
             clearTrackingIssue ? null : trackingIssue ?? this.trackingIssue,
         errorMessage: errorMessage,
+        updatePolicy: updatePolicy ?? this.updatePolicy,
       );
 }
 
@@ -69,11 +81,18 @@ class AuthNotifier extends StateNotifier<AuthState> {
   final AuthRepository _repository;
   final WorkSessionRepository _workSessions;
   final DioClient _client;
+  final Future<void> Function()? _onUpdateRequiredCleanup;
   Future<void>? _resumeInFlight;
 
-  AuthNotifier(this._repository, this._workSessions, this._client)
-      : super(const AuthState()) {
+  AuthNotifier(
+    this._repository,
+    this._workSessions,
+    this._client, {
+    Future<void> Function()? onUpdateRequiredCleanup,
+  })  : _onUpdateRequiredCleanup = onUpdateRequiredCleanup,
+        super(const AuthState()) {
     setAuthSessionInvalidatedHandler(onSessionInvalidatedByApi);
+    setDeliveryAppUpdateRequiredHandler(onDeliveryAppUpdateRequired);
     setWorkSessionChangedByPushHandler(onWorkSessionChangedByPush);
     unawaited(_checkSession());
   }
@@ -81,12 +100,17 @@ class AuthNotifier extends StateNotifier<AuthState> {
   @override
   void dispose() {
     setAuthSessionInvalidatedHandler(null);
+    setDeliveryAppUpdateRequiredHandler(null);
     setWorkSessionChangedByPushHandler(null);
     super.dispose();
   }
 
   void onSessionInvalidatedByApi(String? reason) {
     unawaited(_endLocalSession(errorMessage: reason));
+  }
+
+  void onDeliveryAppUpdateRequired(DeliveryAppVersionPolicy policy) {
+    unawaited(_activateUpdateRequired(policy));
   }
 
   void onWorkSessionChangedByPush() {
@@ -110,11 +134,29 @@ class AuthNotifier extends StateNotifier<AuthState> {
 
   Future<void> _refreshSessionInternal() async {
     try {
+      final policy = await _repository.checkDeliveryAppVersion();
+      if (policy.updateRequired) {
+        await _activateUpdateRequired(policy);
+        return;
+      }
+    } catch (error) {
+      final update = deliveryAppUpdateFromError(error);
+      if (update != null) {
+        await _activateUpdateRequired(update.policy);
+        return;
+      }
+    }
+
+    try {
       final accessToken = await _repository.getStoredAccessToken();
       if (JwtExpiration.shouldProactivelyRefresh(accessToken)) {
         final outcome = await _client.silentRefreshAccessToken();
         if (outcome is RefreshAccessSessionEnded) {
           await _endLocalSession();
+          return;
+        }
+        if (outcome is RefreshAccessUpdateRequired) {
+          await _activateUpdateRequired(outcome.policy);
           return;
         }
       }
@@ -133,12 +175,31 @@ class AuthNotifier extends StateNotifier<AuthState> {
       );
       await _registerFcmTokenSafely();
     } catch (e) {
+      final update = deliveryAppUpdateFromError(e);
+      if (update != null) {
+        await _activateUpdateRequired(update.policy);
+        return;
+      }
       await _endLocalSession(errorMessage: e.toString());
     }
   }
 
   Future<void> _checkSession() async {
     state = state.copyWith(status: AuthStatus.loading);
+    try {
+      final policy = await _repository.checkDeliveryAppVersion();
+      if (policy.updateRequired) {
+        await _activateUpdateRequired(policy);
+        return;
+      }
+    } catch (error) {
+      final update = deliveryAppUpdateFromError(error);
+      if (update != null) {
+        await _activateUpdateRequired(update.policy);
+        return;
+      }
+    }
+
     try {
       final hasSession = await _repository.hasValidSession();
       if (!hasSession) {
@@ -150,6 +211,10 @@ class AuthNotifier extends StateNotifier<AuthState> {
         final outcome = await _client.silentRefreshAccessToken();
         if (outcome is RefreshAccessSessionEnded) {
           state = const AuthState(status: AuthStatus.unauthenticated);
+          return;
+        }
+        if (outcome is RefreshAccessUpdateRequired) {
+          await _activateUpdateRequired(outcome.policy);
           return;
         }
       }
@@ -174,6 +239,11 @@ class AuthNotifier extends StateNotifier<AuthState> {
       );
       await _registerFcmTokenSafely();
     } catch (e) {
+      final update = deliveryAppUpdateFromError(e);
+      if (update != null) {
+        await _activateUpdateRequired(update.policy);
+        return;
+      }
       await _endLocalSession(errorMessage: e.toString());
     }
   }
@@ -212,6 +282,11 @@ class AuthNotifier extends StateNotifier<AuthState> {
         trackingActive: await LocationTrackingService.isRunning,
       );
     } catch (e) {
+      final update = deliveryAppUpdateFromError(e);
+      if (update != null) {
+        await _activateUpdateRequired(update.policy);
+        return;
+      }
       await _endLocalSession(errorMessage: e.toString());
     }
   }
@@ -253,6 +328,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
     }
 
     try {
+      final versionHeaders = await _client.versionHeaders();
       await LocationTrackingService.startTracking(
         authToken: token,
         baseUrl: ApiConstants.baseUrl,
@@ -260,6 +336,9 @@ class AuthNotifier extends StateNotifier<AuthState> {
         autoCloseAtUtc: session.autoCloseAt,
         lightIntervalSeconds: session.tracking.lightIntervalSeconds,
         activeIntervalSeconds: session.tracking.activeIntervalSeconds,
+        versionName: versionHeaders[deliveryAppVersionHeader]!,
+        buildNumber: versionHeaders[deliveryAppBuildHeader]!,
+        packageName: versionHeaders[deliveryAppPackageHeader]!,
       );
     } on TrackingServiceException catch (error) {
       if (preserveExistingSessionOnIssue) {
@@ -305,6 +384,32 @@ class AuthNotifier extends StateNotifier<AuthState> {
       status:
           errorMessage == null ? AuthStatus.unauthenticated : AuthStatus.error,
       errorMessage: errorMessage,
+    );
+  }
+
+  Future<void> _activateUpdateRequired(
+    DeliveryAppVersionPolicy policy,
+  ) async {
+    if (_onUpdateRequiredCleanup != null) {
+      await _onUpdateRequiredCleanup!();
+    } else {
+      try {
+        await LocationTrackingService.stopTracking(
+          recordEvent: false,
+          discardPending: true,
+        );
+      } catch (_) {}
+      try {
+        await FcmService.clearTrackingReviewNotices();
+      } catch (_) {}
+    }
+    try {
+      await _workSessions.clearLocal();
+    } catch (_) {}
+    await _repository.clearLocalSession();
+    state = AuthState(
+      status: AuthStatus.updateRequired,
+      updatePolicy: policy,
     );
   }
 
