@@ -125,4 +125,33 @@ void main() {
     expect(removed, RouteOrderChange.removed);
     expect(notifier.state.orders, isEmpty);
   });
+
+  test('autoentrega realtime retira solo el pedido y resincroniza tracking',
+      () async {
+    final trackingSnapshots = <List<int>>[];
+    final notifier = RouteNotifier.withLoader(
+      deliverymanId: 7,
+      loadOrders: () async => _page(const []),
+      syncTracking: (orders) async {
+        trackingSnapshots.add(orders.map((order) => order.id).toList());
+      },
+    );
+    await notifier.applyRealtimeOrder(_order(id: 1, deliveryManId: 7));
+    await notifier.applyRealtimeOrder(_order(id: 2, deliveryManId: 7));
+
+    final firstRemoval = await notifier.applyRealtimeOrder(
+      _order(id: 1, deliveryManId: 7, status: OrderStatus.delivered),
+    );
+
+    expect(firstRemoval, RouteOrderChange.removed);
+    expect(notifier.state.orders.map((order) => order.id), [2]);
+    expect(trackingSnapshots.last, [2]);
+
+    await notifier.applyRealtimeOrder(
+      _order(id: 2, deliveryManId: 7, status: OrderStatus.delivered),
+    );
+
+    expect(notifier.state.orders, isEmpty);
+    expect(trackingSnapshots.last, isEmpty);
+  });
 }

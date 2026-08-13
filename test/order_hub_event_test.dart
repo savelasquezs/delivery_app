@@ -77,6 +77,21 @@ void main() {
       expect(order?.deliveryManId, 8);
     });
 
+    test('extrae una autoentrega como OrderModified entregado', () {
+      final order = orderFromHubEvent(
+        orderModifiedHubEvent,
+        [
+          {
+            'order': _orderJson(status: 'Delivered'),
+            'modificationKind': 'status',
+          },
+        ],
+      );
+
+      expect(order?.status, OrderStatus.delivered);
+      expect(order?.deliveryManId, 8);
+    });
+
     test('ignora payloads inválidos y eventos sin pedido', () {
       expect(orderFromHubEvent(orderModifiedHubEvent, const []), isNull);
       expect(
