@@ -20,6 +20,9 @@ const _kBuildNumber = 'sa_delivery_app_build';
 const _kPackageName = 'sa_delivery_app_package';
 const _kOfflineQueue = 'sa_loc_offline_queue';
 const _kDeviceEventQueue = 'sa_device_event_queue';
+const _kNativeDeviceEventQueue = 'sa_native_device_event_queue';
+const _kNativeDeviceEventPrefix = 'sa_native_device_event_';
+const _kNativeTrackingActive = 'sa_native_tracking_active';
 const _kWorkSessionId = 'sa_loc_work_session_id';
 const _kAutoCloseAt = 'sa_loc_auto_close_at';
 const _kLightIntervalSeconds = 'sa_loc_light_interval_seconds';
@@ -40,11 +43,16 @@ const _uuid = Uuid();
 
 Future<void> _recordDeviceEvent(
   String eventType, {
+  String? clientEventId,
   int? batteryLevel,
   bool? internetAvailable,
   bool? gpsEnabled,
   bool? locationPermissionGranted,
   String? details,
+  int? offlineLocationCount,
+  DateTime? offlineStartedAt,
+  DateTime? offlineEndedAt,
+  DateTime? recordedAt,
 }) async {
   final token = await FlutterForegroundTask.getData<String>(key: _kAuthToken);
   final baseUrl = await FlutterForegroundTask.getData<String>(key: _kBaseUrl);
@@ -53,7 +61,7 @@ Future<void> _recordDeviceEvent(
   if (workSessionId == null) return;
 
   final payload = <String, dynamic>{
-    'clientEventId': _uuid.v4(),
+    'clientEventId': clientEventId ?? _uuid.v4(),
     'workSessionId': workSessionId,
     'eventType': eventType,
     'batteryLevelPercent': batteryLevel,
@@ -61,7 +69,10 @@ Future<void> _recordDeviceEvent(
     'gpsEnabled': gpsEnabled,
     'locationPermissionGranted': locationPermissionGranted,
     'details': details,
-    'recordedAt': DateTime.now().toUtc().toIso8601String(),
+    'offlineLocationCount': offlineLocationCount,
+    'offlineStartedAt': offlineStartedAt?.toUtc().toIso8601String(),
+    'offlineEndedAt': offlineEndedAt?.toUtc().toIso8601String(),
+    'recordedAt': (recordedAt ?? DateTime.now()).toUtc().toIso8601String(),
   };
   if (token == null || baseUrl == null) {
     await _enqueueDeviceEvent(payload);
@@ -97,6 +108,50 @@ Future<void> _recordDeviceEvent(
   } catch (_) {
     await _enqueueDeviceEvent(payload);
   }
+}
+
+Future<void> _drainNativeDeviceEvents() async {
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.reload();
+  final pendingKeys = prefs
+      .getKeys()
+      .where((key) => key.startsWith(_kNativeDeviceEventPrefix))
+      .toList()
+    ..sort();
+  for (final key in pendingKeys) {
+    final encoded = prefs.getString(key);
+    if (encoded == null) continue;
+    final event = Map<String, dynamic>.from(jsonDecode(encoded) as Map);
+    await _recordDeviceEvent(
+      event['eventType']?.toString() ?? '',
+      clientEventId: event['clientEventId']?.toString(),
+      details: event['details']?.toString(),
+      recordedAt: DateTime.tryParse(event['recordedAt']?.toString() ?? ''),
+    );
+    await prefs.remove(key);
+  }
+
+  final legacyEncoded = prefs.getString(_kNativeDeviceEventQueue);
+  if (legacyEncoded == null) return;
+  final legacyQueue = jsonDecode(legacyEncoded) as List<dynamic>;
+  await prefs.remove(_kNativeDeviceEventQueue);
+  for (final item in legacyQueue) {
+    final event = Map<String, dynamic>.from(item as Map);
+    await _recordDeviceEvent(
+      event['eventType']?.toString() ?? '',
+      clientEventId: event['clientEventId']?.toString(),
+      details: event['details']?.toString(),
+      recordedAt: DateTime.tryParse(event['recordedAt']?.toString() ?? ''),
+    );
+  }
+}
+
+class _OfflineSyncResult {
+  final int count;
+  final DateTime? startedAt;
+  final DateTime? endedAt;
+
+  const _OfflineSyncResult(this.count, this.startedAt, this.endedAt);
 }
 
 Future<void> _enqueueDeviceEvent(Map<String, dynamic> payload) async {
@@ -167,6 +222,9 @@ Future<bool> _recordBooleanTransition({
   bool gpsState = false,
   bool permissionState = false,
   String? details,
+  int? offlineLocationCount,
+  DateTime? offlineStartedAt,
+  DateTime? offlineEndedAt,
 }) async {
   final previous = await FlutterForegroundTask.getData<bool>(key: storageKey);
   await FlutterForegroundTask.saveData(key: storageKey, value: current);
@@ -177,6 +235,9 @@ Future<bool> _recordBooleanTransition({
     gpsEnabled: gpsState ? current : null,
     locationPermissionGranted: permissionState ? current : null,
     details: details,
+    offlineLocationCount: offlineLocationCount,
+    offlineStartedAt: offlineStartedAt,
+    offlineEndedAt: offlineEndedAt,
   );
   return true;
 }
@@ -301,6 +362,8 @@ class LocationTaskHandler extends TaskHandler {
           key: _kTrackingExpectedActive,
           value: false,
         );
+        final nativePrefs = await SharedPreferences.getInstance();
+        await nativePrefs.setBool(_kNativeTrackingActive, false);
         await FlutterForegroundTask.stopService();
         return;
       }
@@ -355,9 +418,10 @@ class LocationTaskHandler extends TaskHandler {
         'recordedAt': position.timestamp.toUtc().toIso8601String(),
       };
 
+      await _drainNativeDeviceEvents();
       await _flushDeviceEvents(token, baseUrl);
-      final syncedOfflineCount = await _flushOfflineQueue(token, baseUrl);
-      await _postLocation(token, baseUrl, payload, syncedOfflineCount);
+      final offlineSync = await _flushOfflineQueue(token, baseUrl);
+      await _postLocation(token, baseUrl, payload, offlineSync);
     } catch (e) {
       debugPrint('LocationTaskHandler: error sending location: $e');
     } finally {
@@ -369,7 +433,7 @@ class LocationTaskHandler extends TaskHandler {
     String token,
     String baseUrl,
     Map<String, dynamic> payload,
-    int syncedOfflineCount,
+    _OfflineSyncResult offlineSync,
   ) async {
     try {
       final response = await (await _buildDio(baseUrl, token))
@@ -381,15 +445,21 @@ class LocationTaskHandler extends TaskHandler {
         negativeEvent: 'internet_lost',
         positiveEvent: 'internet_recovered',
         internetState: true,
-        details: syncedOfflineCount > 0
-            ? 'queued_location_count=$syncedOfflineCount'
+        details: offlineSync.count > 0
+            ? 'queued_location_count=${offlineSync.count}'
             : null,
+        offlineLocationCount: offlineSync.count > 0 ? offlineSync.count : null,
+        offlineStartedAt: offlineSync.startedAt,
+        offlineEndedAt: offlineSync.endedAt,
       );
-      if (syncedOfflineCount > 0 && !recoveryReported) {
+      if (offlineSync.count > 0 && !recoveryReported) {
         await _recordDeviceEvent(
           'internet_recovered',
           internetAvailable: true,
-          details: 'queued_location_count=$syncedOfflineCount',
+          details: 'queued_location_count=${offlineSync.count}',
+          offlineLocationCount: offlineSync.count,
+          offlineStartedAt: offlineSync.startedAt,
+          offlineEndedAt: offlineSync.endedAt,
         );
       }
     } on DioException catch (error) {
@@ -442,23 +512,36 @@ class LocationTaskHandler extends TaskHandler {
     }
   }
 
-  Future<int> _flushOfflineQueue(String token, String baseUrl) async {
+  Future<_OfflineSyncResult> _flushOfflineQueue(
+      String token, String baseUrl) async {
     final prefs = await SharedPreferences.getInstance();
     final queueJson = prefs.getString(_kOfflineQueue);
-    if (queueJson == null) return 0;
+    if (queueJson == null) return const _OfflineSyncResult(0, null, null);
 
     final queue = jsonDecode(queueJson) as List<dynamic>;
-    if (queue.isEmpty) return 0;
+    if (queue.isEmpty) return const _OfflineSyncResult(0, null, null);
 
     final dio = await _buildDio(baseUrl, token);
     final remaining = <Map<String, dynamic>>[];
     var syncedCount = 0;
+    DateTime? syncedStartedAt;
+    DateTime? syncedEndedAt;
     for (final item in queue) {
       final payload = Map<String, dynamic>.from(item as Map);
       try {
         final response = await dio.post('/deliverymen/location', data: payload);
         await _applyTrackingResult(response.data);
         syncedCount++;
+        final recordedAt =
+            DateTime.tryParse(payload['recordedAt']?.toString() ?? '')?.toUtc();
+        if (recordedAt != null) {
+          if (syncedStartedAt == null || recordedAt.isBefore(syncedStartedAt)) {
+            syncedStartedAt = recordedAt;
+          }
+          if (syncedEndedAt == null || recordedAt.isAfter(syncedEndedAt)) {
+            syncedEndedAt = recordedAt;
+          }
+        }
       } on DioException catch (error) {
         final status = error.response?.statusCode;
         final updatePolicy = _updateRequiredPolicy(error);
@@ -468,14 +551,16 @@ class LocationTaskHandler extends TaskHandler {
             recordEvent: false,
             discardPending: true,
           );
-          return syncedCount;
+          return _OfflineSyncResult(
+              syncedCount, syncedStartedAt, syncedEndedAt);
         }
         if (isSessionReplacedResponse(status, error.response?.data)) {
           await LocationTrackingService._stopTracking(
             recordEvent: false,
             discardPending: false,
           );
-          return syncedCount;
+          return _OfflineSyncResult(
+              syncedCount, syncedStartedAt, syncedEndedAt);
         }
         if (locationFailureDisposition(status) ==
             LocationFailureDisposition.retryPoint) {
@@ -491,7 +576,7 @@ class LocationTaskHandler extends TaskHandler {
     } else {
       await prefs.setString(_kOfflineQueue, jsonEncode(remaining));
     }
-    return syncedCount;
+    return _OfflineSyncResult(syncedCount, syncedStartedAt, syncedEndedAt);
   }
 
   Future<void> _applyTrackingResult(dynamic data) async {
@@ -727,7 +812,10 @@ class LocationTrackingService {
       key: _kActiveIntervalSeconds,
       value: activeIntervalSeconds,
     );
+    await _drainNativeDeviceEvents();
     await _flushDeviceEvents(authToken, baseUrl);
+    final nativePrefs = await SharedPreferences.getInstance();
+    await nativePrefs.setBool(_kNativeTrackingActive, true);
 
     if (wasRunning) {
       await FlutterForegroundTask.saveData(
@@ -864,6 +952,8 @@ class LocationTrackingService {
       key: _kTrackingExpectedActive,
       value: false,
     );
+    final nativePrefs = await SharedPreferences.getInstance();
+    await nativePrefs.setBool(_kNativeTrackingActive, false);
 
     if (await FlutterForegroundTask.isRunningService) {
       final result = await FlutterForegroundTask.stopService();
