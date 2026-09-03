@@ -104,7 +104,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         .refreshSessionIfNeededAfterResume();
     if (!mounted) return;
     final auth = ref.read(authNotifierProvider);
-    if (auth.status != AuthStatus.authenticated || auth.user == null) return;
+    if (!shouldConnectOrderHub(
+      authenticated: auth.status == AuthStatus.authenticated,
+      workSession: auth.workSession,
+    )) {
+      await _disconnectSignalR();
+      return;
+    }
     await _connectSignalR();
     if (!mounted) return;
     switch (homeResumeRefreshForTab(_currentIndex)) {
@@ -134,8 +140,16 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   }
 
   Future<void> _connectSignalRInternal() async {
-    final user = ref.read(authNotifierProvider).user;
-    if (user == null) return;
+    final auth = ref.read(authNotifierProvider);
+    final user = auth.user;
+    if (user == null ||
+        !shouldConnectOrderHub(
+          authenticated: auth.status == AuthStatus.authenticated,
+          workSession: auth.workSession,
+        )) {
+      await _disconnectSignalR();
+      return;
+    }
 
     // Guardamos la referencia para poder usarla en dispose() sin tocar ref
     _hubService = ref.read(orderHubServiceProvider);
@@ -146,6 +160,20 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     }
     // El grupo SignalR lo define el JWT (`branch_id`); el parámetro es solo por compatibilidad.
     await _hubService!.connect(user.branchId ?? 0);
+    final latest = ref.read(authNotifierProvider);
+    if (!shouldConnectOrderHub(
+      authenticated: latest.status == AuthStatus.authenticated,
+      workSession: latest.workSession,
+    )) {
+      await _disconnectSignalR();
+    }
+  }
+
+  Future<void> _disconnectSignalR() async {
+    await _hubService?.disconnect();
+    if (mounted && _hubStatus != HubConnectionStatus.disconnected) {
+      setState(() => _hubStatus = HubConnectionStatus.disconnected);
+    }
   }
 
   void _onHubStatusChange(HubConnectionStatus status) {
@@ -387,12 +415,21 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     ref.listen<AuthState>(
       authNotifierProvider,
       (prev, next) {
-        if (!mounted || next.user == null) return;
-        final prevUserMissing = prev == null || prev.user == null;
-        final becameAuthenticated = next.status == AuthStatus.authenticated &&
-            (prev == null || prev.status != AuthStatus.authenticated);
-        if (!prevUserMissing && !becameAuthenticated) return;
-        _connectSignalR();
+        if (!mounted) return;
+        final shouldConnect = shouldConnectOrderHub(
+          authenticated: next.status == AuthStatus.authenticated,
+          workSession: next.workSession,
+        );
+        if (!shouldConnect) {
+          unawaited(_disconnectSignalR());
+          return;
+        }
+        final wasConnectedEligible = prev != null &&
+            shouldConnectOrderHub(
+              authenticated: prev.status == AuthStatus.authenticated,
+              workSession: prev.workSession,
+            );
+        if (!wasConnectedEligible) _connectSignalR();
       },
     );
 
