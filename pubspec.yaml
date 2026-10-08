@@ -1,9 +1,9 @@
 name: delivery_app
 description: App móvil para domiciliarios de Señor Arroz
 publish_to: "none"
-# El versionName se cambia manualmente al aprobar una versión funcional.
-# El workflow de Google Play calcula el versionCode real; +11 es solo la base local.
-version: 1.2.5+11
+# El versionName se cambia al aprobar una versión funcional.
+# El workflow de Google Play calcula el versionCode real; +23 es la base local.
+version: 1.2.6+23
 
 environment:
   sdk: ">=3.0.0 <4.0.0"
@@ -66,6 +66,8 @@ dependencies:
 
 dev_dependencies:
   flutter_test:
+    sdk: flutter
+  integration_test:
     sdk: flutter
   flutter_lints: ^5.0.0
   sqflite_common_ffi: ^2.3.6

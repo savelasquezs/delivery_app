@@ -1,0 +1,96 @@
+name: Prepare reviewed SQLite hotfix
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  prepare:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'hotfix/android-sqlite-startup'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Apply exact source corrections
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+          expected = {
+              'lib/core/auth/session_mutex.dart': '2ae6c123becc49545e3872e8a650087e66412a43',
+              'lib/features/tracking/tracking_outbox.dart': '69e8c4af0c27d60b793f3124b9968dae4ee9390d',
+              'lib/features/auth/presentation/auth_notifier.dart': '301bd734fbfa028ef2d189a28b51b3f35018aada',
+              'lib/core/errors/user_facing_error.dart': '1c70027dc270ab534731710a925e91c1af7fbecb',
+          }
+          for name, sha in expected.items():
+              actual = subprocess.check_output(['git', 'hash-object', name]).decode().strip()
+              assert actual == sha, (name, actual)
+          for name in list(expected)[:2]:
+              p = Path(name); s = p.read_text()
+              old = "await db.execute('PRAGMA busy_timeout = 1000');"
+              assert s.count(old) == 1
+              p.write_text(s.replace(old, "// This PRAGMA returns a row; Android rejects it through execute.\n      await db.rawQuery('PRAGMA busy_timeout = 1000');"))
+          p = Path('lib/core/errors/user_facing_error.dart'); s = p.read_text()
+          s = "import 'package:sqflite/sqflite.dart';\n" + s
+          s = s.replace("const defaultUserErrorMessage =", "const localStorageErrorMessage =\n    'No pudimos acceder a los datos locales de la aplicación. Vuelve a abrirla sin borrar sus datos.';\n\nconst defaultUserErrorMessage =")
+          old = '  if (error == null) return fallback;'
+          assert s.count(old) == 1
+          s = s.replace(old, old + '\n  if (error is DatabaseException) return localStorageErrorMessage;')
+          s = s.replace("if (lower.contains('dioexception') ||", "if (lower.contains('databaseexception') ||\n      lower.contains('sqliteexception') ||\n      lower.contains('sqlite_') ||\n      lower.contains('dioexception') ||")
+          p.write_text(s)
+          p = Path('lib/features/auth/presentation/auth_notifier.dart'); s = p.read_text()
+          a = s.index('  Future<void> _endLocalSession({String? errorMessage}) async {')
+          b = s.index('  Future<void> _activateUpdateRequired(', a)
+          s = s[:a] + '''  Future<void> _endLocalSession({String? errorMessage}) async {
+            String? cleanupError;
+            // Failure in one local plugin must not skip credential cleanup or
+            // leave login stuck in AuthStatus.loading. Pending GPS data remains.
+            for (final cleanup in <Future<void> Function()>[
+              () => LocationTrackingService.stopTracking(
+                    recordEvent: false, discardPending: false),
+              FcmService.clearTrackingReviewNotices,
+              _workSessions.clearLocal,
+              _repository.clearLocalSession,
+            ]) {
+              try {
+                await cleanup();
+              } catch (_) {
+                cleanupError ??= localStorageErrorMessage;
+              }
+            }
+            if (!mounted) return;
+            final message = errorMessage ?? cleanupError;
+            state = AuthState(
+              status: message == null ? AuthStatus.unauthenticated : AuthStatus.error,
+              errorMessage: message,
+            );
+          }
+
+          ''' + s[b:]
+          p.write_text(s)
+          Path('.github/workflows/prepare-sqlite-hotfix.yml').unlink()
+          PY
+      - name: Install pinned Flutter and resolve dev-only integration support
+        run: |
+          git clone --depth=1 --branch 3.41.6 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/flutter/bin/flutter" pub get
+          "$RUNNER_TEMP/flutter/bin/dart" format lib/core/auth/session_mutex.dart lib/features/tracking/tracking_outbox.dart lib/features/auth/presentation/auth_notifier.dart lib/core/errors/user_facing_error.dart test/sqlite_login_failure_test.dart integration_test/android_sqlite_startup_test.dart
+      - name: Commit reviewed implementation only to hotfix branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git add lib test integration_test pubspec.lock
+          git add -u .github/workflows/prepare-sqlite-hotfix.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(android): initialize SQLite with rawQuery and settle failed login cleanup'
+          AUTH="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          echo "::add-mask::$AUTH"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH" push origin HEAD:refs/heads/hotfix/android-sqlite-startup
