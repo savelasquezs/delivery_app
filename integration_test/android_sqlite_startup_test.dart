@@ -12,7 +12,8 @@ import 'package:sqflite/sqflite.dart';
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('Android reproduces the old execute failure and accepts rawQuery', (tester) async {
+  testWidgets('Android reproduces the old execute failure and accepts rawQuery',
+      (tester) async {
     final path = '${await getDatabasesPath()}/hotfix_pragma_probe.db';
     final db = await openDatabase(path, singleInstance: false);
     try {
@@ -26,14 +27,17 @@ void main() {
     }
   });
 
-  testWidgets('session initialization and encrypted credential restore work on Android', (tester) async {
+  testWidgets(
+      'session initialization and encrypted credential restore work on Android',
+      (tester) async {
     final path = '${await getDatabasesPath()}/hotfix_auth_probe.db';
     Database db = await openDatabase(path, singleInstance: false);
     var storage = SecureStorage(mutex: SessionMutex(open: () async => db));
     try {
       await storage.clearAll();
       expect(await storage.readSession(), isNull);
-      await storage.saveTokens(authToken: 'test-only-access', refreshToken: 'test-only-refresh');
+      await storage.saveTokens(
+          authToken: 'test-only-access', refreshToken: 'test-only-refresh');
       final original = (await storage.readSession())!;
       expect(original.accessToken, 'test-only-access');
       await db.close();
@@ -53,18 +57,25 @@ void main() {
     }
   });
 
-  testWidgets('outbox upgrade preserves committed points and migration receipts on Android', (tester) async {
+  testWidgets(
+      'outbox upgrade preserves committed points and migration receipts on Android',
+      (tester) async {
     final path = '${await getDatabasesPath()}/hotfix_outbox_probe.db';
     Database db = await openDatabase(path, singleInstance: false);
     final at = DateTime.now().toUtc();
     final context = TrackingContext(
-      authSessionId: 'test-only-session', ownerKey: 'test-only-owner', workSessionId: 1,
+      authSessionId: 'test-only-session',
+      ownerKey: 'test-only-owner',
+      workSessionId: 1,
       startedAt: at.subtract(const Duration(hours: 1)),
       autoCloseAt: at.add(const Duration(hours: 1)),
     );
     final payload = <String, dynamic>{
-      'clientPointId': 'retained-point', 'workSessionId': 1,
-      'latitude': 6.25, 'longitude': -75.56, 'recordedAt': at.toIso8601String(),
+      'clientPointId': 'retained-point',
+      'workSessionId': 1,
+      'latitude': 6.25,
+      'longitude': -75.56,
+      'recordedAt': at.toIso8601String(),
     };
     final legacy = jsonEncode([payload]);
     try {

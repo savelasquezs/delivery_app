@@ -1,6 +1,10 @@
+import 'package:sqflite/sqflite.dart';
 import 'package:dio/dio.dart';
 
 import '../api/api_exception.dart';
+
+const localStorageErrorMessage =
+    'No pudimos acceder a los datos locales de la aplicación. Vuelve a abrirla sin borrar sus datos.';
 
 const defaultUserErrorMessage =
     'No pudimos completar la acción. Inténtalo de nuevo.';
@@ -15,6 +19,7 @@ String userFacingErrorMessage(
 
 String _extractMessage(Object? error, String fallback) {
   if (error == null) return fallback;
+  if (error is DatabaseException) return localStorageErrorMessage;
   if (error is ApiException) return error.message;
   if (error is DioException) {
     final nested = error.error;
@@ -95,7 +100,10 @@ String _sanitizeMessage(String value, String fallback) {
   if (message.isEmpty) return fallback;
 
   final lower = message.toLowerCase();
-  if (lower.contains('dioexception') ||
+  if (lower.contains('databaseexception') ||
+      lower.contains('sqliteexception') ||
+      lower.contains('sqlite_') ||
+      lower.contains('dioexception') ||
       lower.contains('socketexception') ||
       lower.contains('formatexception') ||
       lower.contains('clientexception') ||

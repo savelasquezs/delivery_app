@@ -28,8 +28,10 @@ class _FailedLoginRepository extends AuthRepository {
   @override
   Future<DeliveryAppVersionPolicy> checkDeliveryAppVersion() async =>
       const DeliveryAppVersionPolicy(
-        requiredVersion: '1.2.5', minimumBuild: 11,
-        playStoreUrl: 'https://play.google.com/store/apps/details?id=com.senorarroz.delivery_app',
+        requiredVersion: '1.2.5',
+        minimumBuild: 11,
+        playStoreUrl:
+            'https://play.google.com/store/apps/details?id=com.senorarroz.delivery_app',
         updateRequired: false,
       );
 
@@ -37,7 +39,8 @@ class _FailedLoginRepository extends AuthRepository {
   Future<bool> hasValidSession() async => false;
 
   @override
-  Future<AuthUser> login(LoginRequest request) async => throw _AndroidPragmaError();
+  Future<AuthUser> login(LoginRequest request) async =>
+      throw _AndroidPragmaError();
 
   @override
   Future<void> clearLocalSession() async {
@@ -68,20 +71,27 @@ void main() {
   test('native SQLite errors never expose SQL in the login message', () {
     final error = _AndroidPragmaError();
     expect(userFacingErrorMessage(error), localStorageErrorMessage);
-    expect(userFacingErrorMessage(DioException(
-      requestOptions: RequestOptions(path: '/login'), error: error,
-    )), localStorageErrorMessage);
-    expect(userFacingErrorMessage(error.toString(), fallback: 'Reintenta.'), 'Reintenta.');
+    expect(
+        userFacingErrorMessage(DioException(
+          requestOptions: RequestOptions(path: '/login'),
+          error: error,
+        )),
+        localStorageErrorMessage);
+    expect(userFacingErrorMessage(error.toString(), fallback: 'Reintenta.'),
+        'Reintenta.');
   });
 
-  test('failed login reaches an error state even when cleanup also fails', () async {
+  test('failed login reaches an error state even when cleanup also fails',
+      () async {
     final storage = SecureStorage();
     final client = DioClient(storage);
     final repository = _FailedLoginRepository(client, storage);
     final sessions = _FailedCleanupWorkSessions(client, storage);
     final notifier = AuthNotifier(repository, sessions, client);
     addTearDown(notifier.dispose);
-    for (var i = 0; i < 20 && notifier.state.status == AuthStatus.loading; i++) {
+    for (var i = 0;
+        i < 20 && notifier.state.status == AuthStatus.loading;
+        i++) {
       await Future<void>.delayed(Duration.zero);
     }
     expect(notifier.state.status, AuthStatus.unauthenticated);

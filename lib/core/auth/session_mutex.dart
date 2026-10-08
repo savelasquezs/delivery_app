@@ -16,9 +16,11 @@ Future<T> retrySqliteBusy<T>(Future<T> Function() operation,
       final code = error.getResultCode();
       final primaryCode = code == null ? null : code & 0xff;
       final message = error.toString().toLowerCase();
-      final busy = primaryCode == 5 || primaryCode == 6 ||
-          (code == null && (message.contains('database is locked') ||
-              message.contains('database is busy')));
+      final busy = primaryCode == 5 ||
+          primaryCode == 6 ||
+          (code == null &&
+              (message.contains('database is locked') ||
+                  message.contains('database is busy')));
       if (!busy || watch.elapsed >= timeout) rethrow;
       await Future<void>.delayed(const Duration(milliseconds: 25));
     }
@@ -62,13 +64,15 @@ class SessionMutex {
   Future<Database> _initialize() async {
     final db = await open();
     try {
-      await db.execute('PRAGMA busy_timeout = 1000');
+      // This PRAGMA returns a row; Android rejects it through execute.
+      await db.rawQuery('PRAGMA busy_timeout = 1000');
       await retrySqliteBusy(() => db.execute(
           'CREATE TABLE IF NOT EXISTS session_mutex ('
           'name TEXT PRIMARY KEY, owner TEXT, expires_at INTEGER NOT NULL)'));
       await retrySqliteBusy(() => db.rawInsert(
           'INSERT OR IGNORE INTO session_mutex '
-          '(name, owner, expires_at) VALUES (?, NULL, 0)', ['auth']));
+          '(name, owner, expires_at) VALUES (?, NULL, 0)',
+          ['auth']));
       return db;
     } catch (_) {
       await db.close();
@@ -109,8 +113,9 @@ class SessionMutex {
       // Expiry recovers the lock if the database becomes unavailable here.
       try {
         await retrySqliteBusy(() => db.rawUpdate(
-          'UPDATE session_mutex SET owner = NULL, expires_at = 0 '
-          'WHERE name = ? AND owner = ?', ['auth', owner]));
+            'UPDATE session_mutex SET owner = NULL, expires_at = 0 '
+            'WHERE name = ? AND owner = ?',
+            ['auth', owner]));
       } on DatabaseException catch (_) {}
     }
   }
@@ -129,8 +134,11 @@ class SessionLease {
   Future<void> ensureOwned() async {
     if (_closed || _lost) throw StateError('Session lease lost');
     final rows = await retrySqliteBusy(() => _db.rawQuery(
-      'SELECT owner, expires_at FROM session_mutex WHERE name = ?', ['auth']));
-    if (_closed || _lost || rows.isEmpty ||
+        'SELECT owner, expires_at FROM session_mutex WHERE name = ?',
+        ['auth']));
+    if (_closed ||
+        _lost ||
+        rows.isEmpty ||
         rows.single['owner'] != _owner ||
         (rows.single['expires_at'] as int) <=
             DateTime.now().millisecondsSinceEpoch) {
