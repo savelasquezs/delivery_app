@@ -8,4 +8,8 @@ Error-path correction: failure while cleaning up a failed login must still attem
 
 Validation: host suite plus integration_test/android_sqlite_startup_test.dart on a disposable Android API 35 emulator, using the actual sqflite and encrypted-storage plugins. This explicitly reproduces the old execute exception, verifies fixed session restore, and verifies persisted outbox points and import/ACK idempotence. No production APIs are contacted. Do not run this integration test on a driver's phone: it uses test credentials in the app's debug sandbox.
 
-Release 1.2.6; actual Google Play versionCode is allocated by the existing publisher. No backend change, server migration, cadence or alert-policy change. Update in place through Google Play internal; do not uninstall or clear app storage.
+## Release compatibility
+
+Keep versionName 1.2.5 and increment only the build (local floor +23; actual versionCode allocated by the publisher). The deployed API's DeliveryAppVersionPolicy at 11e06c78 uses exact version-name equality, not a semver minimum. Publishing 1.2.6 without a coordinated backend change would trigger HTTP 426; this hotfix deliberately makes no such policy change.
+
+No backend change, server migration, cadence or alert-policy change. Update in place through Google Play internal; do not uninstall or clear app storage. Verify the published build number rather than relying on the unchanged 1.2.5 display name.
