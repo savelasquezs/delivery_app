@@ -102,6 +102,36 @@ void main() {
     expect((await store.current())!.authSessionId, 'new-login');
   });
 
+  test('legacy migration checkpoints batches without losing pending history',
+      () async {
+    final raw = jsonEncode(List.generate(8,
+        (index) => point('legacy-$index', minute: index)));
+    // Keep the preference untouched until all items have a durable receipt.
+    expect(await store.importLegacyBatch('previous', raw, 'location',
+        context(), batchSize: 3), isFalse);
+    expect((await db.query('tracking_import_cursor')).single['next_index'], 3);
+    expect((await store.pending(context())), hasLength(3));
+    final acknowledged = (await store.pending(context())).first;
+    await store.acknowledge(acknowledged, started);
+    await store.enqueue(context(), 'location', point('current', minute: 10));
+
+    // A new service isolate/restart continues from the SQL cursor.
+    final resumed = TrackingOutbox(open: () async => db);
+    expect(await resumed.importLegacyBatch('previous', raw, 'location',
+        context(), batchSize: 3), isFalse);
+    expect((await db.query('tracking_import_cursor')).single['next_index'], 6);
+    expect(await resumed.importLegacyBatch('previous', raw, 'location',
+        context(), batchSize: 3), isTrue);
+    expect(await resumed.importLegacyBatch('previous', raw, 'location',
+        context(), batchSize: 3), isTrue);
+    expect(await db.query('tracking_import_cursor'), isEmpty);
+    expect(await db.query('tracking_import'), hasLength(1));
+    final all = await db.query('tracking_outbox');
+    expect(all.map((row) => row['id']).toSet(), hasLength(8));
+    expect(all.any((row) => row['id'] == 'current'), isTrue);
+    expect(all.any((row) => row['id'] == acknowledged.id), isFalse);
+  });
+
   test('migration receipt survives ACK before old preferences are removed',
       () async {
     final raw = jsonEncode([point('a')]);
