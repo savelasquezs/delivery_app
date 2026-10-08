@@ -39,7 +39,8 @@ const _kTrackingMode = 'sa_loc_tracking_mode';
 const _kDeliveryRouteId = 'sa_loc_delivery_route_id';
 const _kGpsEnabled = 'sa_loc_gps_enabled';
 const _kLocationPermissionGranted = 'sa_loc_permission_granted';
-const _kInternetAvailable = 'sa_loc_internet_available';
+const _kInternetAvailable =
+    'sa_loc_internet_available'; // Legacy preference, cleanup only.
 const _kBatteryLowReported = 'sa_loc_battery_low_reported';
 const _kTrackingExpectedActive = 'sa_loc_expected_active';
 const _kUnexpectedStopReportedSession = 'sa_loc_stop_reported_session';
@@ -163,35 +164,6 @@ Future<bool> _isCurrent(TrackingContext context) async {
   return current != null &&
       current.matches(context) &&
       current.activeAt(DateTime.now());
-}
-
-Future<bool> _recordBooleanTransition({
-  required String storageKey,
-  required bool current,
-  required String negativeEvent,
-  required String positiveEvent,
-  bool internetState = false,
-  bool gpsState = false,
-  bool permissionState = false,
-  String? details,
-  int? offlineLocationCount,
-  DateTime? offlineStartedAt,
-  DateTime? offlineEndedAt,
-}) async {
-  final previous = await FlutterForegroundTask.getData<bool>(key: storageKey);
-  await FlutterForegroundTask.saveData(key: storageKey, value: current);
-  if (previous == current || (previous == null && current)) return false;
-  await _recordDeviceEvent(
-    current ? positiveEvent : negativeEvent,
-    internetAvailable: internetState ? current : null,
-    gpsEnabled: gpsState ? current : null,
-    locationPermissionGranted: permissionState ? current : null,
-    details: details,
-    offlineLocationCount: offlineLocationCount,
-    offlineStartedAt: offlineStartedAt,
-    offlineEndedAt: offlineEndedAt,
-  );
-  return true;
 }
 
 Future<void> _recordBatteryLowTransition(int? batteryLevel) async {
@@ -319,19 +291,15 @@ class LocationTaskHandler extends TaskHandler {
     if (context == null) return;
     try {
       final permissions = await readLocationPermissionState();
-      await _recordBooleanTransition(
-          storageKey: _kGpsEnabled,
-          current: permissions.serviceEnabled,
-          negativeEvent: 'gps_disabled',
-          positiveEvent: 'gps_enabled',
-          gpsState: true);
-      await _recordBooleanTransition(
-          storageKey: _kLocationPermissionGranted,
-          current: permissions.canTrackInBackground,
-          negativeEvent: 'location_permission_revoked',
-          positiveEvent: 'location_permission_recovered',
-          permissionState: true,
-          details: permissions.eventDetails);
+      // Android's native state observer emits the versioned evidence. A GPS
+      // timeout/read failure must never masquerade as revoked permission.
+      if (!permissions.readFailed) {
+        await FlutterForegroundTask.saveData(
+            key: _kGpsEnabled, value: permissions.serviceEnabled);
+        await FlutterForegroundTask.saveData(
+            key: _kLocationPermissionGranted,
+            value: permissions.permissionUsable);
+      }
       if (!permissions.canTrackInBackground) {
         await _outbox.note(context,
             setCaptureIssue: true, captureIssue: permissions.issueMessage);
@@ -367,8 +335,7 @@ class LocationTaskHandler extends TaskHandler {
         'accuracyMeters': validAccuracyMeters(position.accuracy),
         'headingDegrees': validHeadingDegrees(position.heading),
         'batteryLevelPercent': battery,
-        'internetAvailable':
-            await FlutterForegroundTask.getData<bool>(key: _kInternetAvailable),
+        'internetAvailable': null, // Server reachability is not Internet state.
         'gpsEnabled': true,
         'trackingMode': mode,
         'recordedAt': position.timestamp.toUtc().toIso8601String(),
@@ -415,7 +382,9 @@ class LocationTaskHandler extends TaskHandler {
             data: payload);
         // Even after logout, acknowledge only this original owned row. Never
         // replace a queue snapshot or attach an old reply to the new workday.
-        await _outbox.acknowledge(record, DateTime.now().toUtc());
+        final acceptedAt = DateTime.now().toUtc();
+        await _outbox.acknowledge(record, acceptedAt);
+        await _outbox.recoverCommunication(context, acceptedAt);
         if (_destroyed || !await _isCurrent(context)) break;
         await _outbox.note(context, setUploadIssue: true);
         if (record.kind == 'location' &&
@@ -427,12 +396,6 @@ class LocationTaskHandler extends TaskHandler {
               !recordedAt.isBefore(snapshot.capturedAt!)) {
             await _applyTrackingResult(response.data, context);
           }
-          await _recordBooleanTransition(
-              storageKey: _kInternetAvailable,
-              current: true,
-              negativeEvent: 'internet_lost',
-              positiveEvent: 'internet_recovered',
-              internetState: true);
         }
       } on DioException catch (error) {
         final update = _updateRequiredPolicy(error);
@@ -451,6 +414,7 @@ class LocationTaskHandler extends TaskHandler {
         final status = error.response?.statusCode;
         if (status == 400 || status == 422) {
           await _outbox.reject(record, 'http_$status');
+          await _outbox.recoverCommunication(context, DateTime.now().toUtc());
           continue;
         }
         final issue = status == 401 || error.error is SessionRefreshUnavailable
@@ -465,12 +429,7 @@ class LocationTaskHandler extends TaskHandler {
         if (issue != null)
           await _outbox.note(context, setUploadIssue: true, uploadIssue: issue);
         if (isLocationTransportFailure(error)) {
-          await _recordBooleanTransition(
-              storageKey: _kInternetAvailable,
-              current: false,
-              negativeEvent: 'internet_lost',
-              positiveEvent: 'internet_recovered',
-              internetState: true);
+          await _outbox.beginCommunicationGap(context, DateTime.now().toUtc());
         }
         break;
       }
@@ -567,11 +526,14 @@ class LocationTrackingService {
     }
 
     final prefs = await SharedPreferences.getInstance();
-    if (prefs.getInt(_kUnexpectedStopReportedSession) == workSessionId) return;
+    await prefs.reload();
+    if (prefs.getInt('sa_native_exit_reported_session') == workSessionId ||
+        prefs.getInt(_kUnexpectedStopReportedSession) == workSessionId) return;
     await prefs.setInt(_kUnexpectedStopReportedSession, workSessionId);
     await _recordDeviceEvent(
       'app_stopped',
-      details: 'detected_on_next_launch',
+      details:
+          'evidence_version=2;source=next_launch;cause=unknown;detected_on_next_launch=true',
     );
   }
 
