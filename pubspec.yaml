@@ -2,8 +2,8 @@ name: delivery_app
 description: App móvil para domiciliarios de Señor Arroz
 publish_to: "none"
 # La API exige versionName 1.2.5; este hotfix incrementa solo la compilación.
-# El workflow de Google Play calcula el versionCode real; +23 es la base local.
-version: 1.2.5+23
+# El workflow de Google Play calcula el versionCode real; +24 es la base local.
+version: 1.2.5+24
 
 environment:
   sdk: ">=3.0.0 <4.0.0"
