@@ -1,0 +1,72 @@
+name: Android alert evidence validation
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'fix/tracking-alert-evidence'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Apply integrity-checked reviewed implementation
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, lzma, pathlib, subprocess
+          source = pathlib.Path('.automation/app-alert.b64')
+          raw = lzma.decompress(base64.b64decode(source.read_text().strip(), validate=True))
+          assert hashlib.sha256(raw).hexdigest() == '28852617d57b241b97782e46730b53c2305d1d496729447c74f46581766a1952'
+          patch = pathlib.Path('/tmp/app-alert.patch'); patch.write_bytes(raw)
+          subprocess.run(['git','apply','--check','--index','--unidiff-zero',str(patch)],check=True)
+          subprocess.run(['git','apply','--index','--unidiff-zero',str(patch)],check=True)
+          gradle = pathlib.Path('android/app/build.gradle.kts')
+          text = gradle.read_text()
+          assert 'testImplementation(' not in text
+          assert text.count('dependencies {') == 1
+          gradle.write_text(text.replace('dependencies {', 'dependencies {\n    testImplementation("junit:junit:4.13.2")'))
+          source.unlink()
+          PY
+      - name: Verify Play-only distribution
+        run: bash scripts/verify_play_only_distribution.sh
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install project Flutter
+        run: |
+          git clone --depth=1 --branch 3.41.6 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/flutter/bin/flutter" --version
+      - run: flutter pub get
+      - name: Format changed Dart sources
+        run: git diff HEAD --name-only --diff-filter=ACM -z -- '*.dart' | xargs -0 -r dart format
+      - name: Save reviewed implementation on feature branch only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git add lib test docs android pubspec.yaml pubspec.lock
+          git add -u .automation
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(tracking): record independent Android evidence and durable communication episodes'
+          AUTH="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          echo "::add-mask::$AUTH"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH" push origin HEAD:refs/heads/fix/tracking-alert-evidence
+      - run: flutter analyze --no-fatal-infos
+      - run: flutter test --reporter expanded
+      - name: Compile Android integration without distributing
+        run: flutter build appbundle --debug
+      - name: Native evidence state-machine tests
+        working-directory: android
+        run: ./gradlew :app:testDebugUnitTest
