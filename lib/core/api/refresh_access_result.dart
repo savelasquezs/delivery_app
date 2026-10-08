@@ -5,7 +5,7 @@ sealed class RefreshAccessResult {
   const RefreshAccessResult();
 }
 
-/// Renovación correcta; los tokens ya están persistidos en [DioClient].
+/// Credenciales válidas y persistidas en el almacenamiento de sesión.
 final class RefreshAccessSuccess extends RefreshAccessResult {
   const RefreshAccessSuccess(this.token);
   final String token;
@@ -24,4 +24,9 @@ final class RefreshAccessTransientFailure extends RefreshAccessResult {
 final class RefreshAccessUpdateRequired extends RefreshAccessResult {
   const RefreshAccessUpdateRequired(this.policy);
   final DeliveryAppVersionPolicy policy;
+}
+
+/// The caller belongs to an older login. Do not clear the newer session.
+final class RefreshAccessSessionChanged extends RefreshAccessResult {
+  const RefreshAccessSessionChanged();
 }

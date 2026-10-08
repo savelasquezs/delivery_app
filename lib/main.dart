@@ -11,6 +11,7 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'core/router/app_router.dart';
 import 'core/auth/auth_session_bridge.dart';
+import 'core/storage/secure_storage.dart';
 import 'core/version/delivery_app_version.dart';
 import 'core/theme/app_theme.dart';
 import 'features/auth/presentation/auth_notifier.dart';
@@ -102,10 +103,25 @@ class _DeliveryAppState extends ConsumerState<DeliveryApp>
   void _onTrackingTaskData(Object data) {
     if (data is! Map) return;
     final json = Map<String, dynamic>.from(data);
+    if (json['type'] == 'tracking_session_ended') {
+      unawaited(_onTrackingSessionEnded(json['sessionId']?.toString()));
+      return;
+    }
     if (json['type'] != deliveryAppUpdateRequiredCode) return;
     notifyDeliveryAppUpdateRequired(
       DeliveryAppVersionPolicy.fromJson(json),
     );
+  }
+
+  Future<void> _onTrackingSessionEnded(String? oldSessionId) async {
+    try {
+      final current = await SecureStorage().readSession();
+      if (!mounted || (current != null && current.id != oldSessionId)) return;
+      notifyAuthSessionInvalidatedByApi(
+          'Tu sesión requiere autenticación. Inicia sesión nuevamente.');
+    } catch (_) {
+      // Do not sign out a newer session because a storage read failed.
+    }
   }
 
   @override

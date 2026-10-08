@@ -1,10 +1,7 @@
-import 'dart:async';
-import 'dart:convert';
-
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../auth/auth_session_bridge.dart';
+import '../auth/session_refresh.dart';
 import '../auth/session_replacement.dart';
 import '../../features/tracking/location_tracking_service.dart';
 import '../storage/secure_storage.dart';
@@ -20,9 +17,6 @@ class DioClient {
   final void Function(String? reason)? onSessionInvalidated;
   final Future<void> Function()? onUpdateRequiredCleanup;
   DeliveryAppVersionPolicy? _updatePolicy;
-
-  /// Una sola renovación a la vez (el backend rota el refresh token al usarlo).
-  Completer<RefreshAccessResult>? _refreshCompleter;
 
   DioClient(
     this._storage,
@@ -57,13 +51,29 @@ class DioClient {
     RequestOptions options,
     RequestInterceptorHandler handler,
   ) async {
-    options.headers.addAll(await _versionInfo.headers());
-    final token = await _storage.getAuthToken();
-    final hasBearer = token != null && token.isNotEmpty;
-    if (hasBearer) {
-      options.headers['Authorization'] = 'Bearer $token';
+    try {
+      options.headers.addAll(await _versionInfo.headers());
+      final session = await _storage.readSession();
+      final requestSessionId = options.extra['_sessionId'];
+      if (_isRetry(options) && requestSessionId != session?.id) {
+        handler.reject(DioException(
+            requestOptions: options,
+            type: DioExceptionType.cancel,
+            error: const ApiException(
+                'La sesión cambió. Reintenta la operación.')));
+        return;
+      }
+      options.extra['_sessionId'] = session?.id;
+      if (session != null && session.accessToken.isNotEmpty) {
+        options.headers['Authorization'] = 'Bearer ${session.accessToken}';
+      } else {
+        options.headers.remove('Authorization');
+      }
+      handler.next(options);
+    } catch (_) {
+      handler.reject(DioException(
+          requestOptions: options, error: const SessionRefreshUnavailable()));
     }
-    handler.next(options);
   }
 
   void _onResponse(Response response, ResponseInterceptorHandler handler) {
@@ -101,7 +111,20 @@ class DioClient {
     )) {
       final reason = sessionReplacementMessage(err.response?.data) ??
           sessionReplacedMessage;
-      await _storage.clearAll();
+      final invalidated = await _storage.withSessionLock((locked) async {
+        final current = await locked.readSession();
+        if (current == null ||
+            current.id != err.requestOptions.extra['_sessionId']) return false;
+        await locked.clearAll();
+        return true;
+      });
+      if (!invalidated) {
+        return handler.next(DioException(
+            requestOptions: err.requestOptions,
+            type: DioExceptionType.cancel,
+            error: const ApiException(
+                'La sesión cambió. Reintenta la operación.')));
+      }
       onSessionInvalidated?.call(reason);
       return handler.next(
         DioException(
@@ -125,14 +148,23 @@ class DioClient {
       );
     }
     if (err.response?.statusCode == 401 && !_isRetry(err.requestOptions)) {
-      final result = await _refreshAccessToken();
+      final result = await _refreshAccessToken(
+        rejectedToken: err.requestOptions.headers['Authorization']
+            ?.toString()
+            .replaceFirst('Bearer ', ''),
+        expectedSessionId: err.requestOptions.extra['_sessionId'] as String?,
+      );
       if (result is RefreshAccessSuccess) {
         final newToken = result.token;
         final retryOptions = err.requestOptions
           ..headers['Authorization'] = 'Bearer $newToken'
           ..extra['_retry'] = true;
-        final retryResponse = await _dio.fetch(retryOptions);
-        return handler.resolve(retryResponse);
+        try {
+          final retryResponse = await _dio.fetch(retryOptions);
+          return handler.resolve(retryResponse);
+        } on DioException catch (retryError) {
+          return handler.next(retryError);
+        }
       }
       if (result is RefreshAccessUpdateRequired) {
         return handler.next(
@@ -150,7 +182,7 @@ class DioClient {
             requestOptions: err.requestOptions,
             response: err.response,
             type: DioExceptionType.badResponse,
-            error: const ApiException('Sesión expirada', statusCode: 401),
+            error: const SessionEndedException(),
           ),
         );
       }
@@ -159,7 +191,9 @@ class DioClient {
           requestOptions: err.requestOptions,
           response: err.response,
           type: err.type,
-          error: _transientRefreshApiError(err),
+          error: result is RefreshAccessSessionChanged
+              ? const ApiException('La sesión cambió. Reintenta la operación.')
+              : const SessionRefreshUnavailable(),
         ),
       );
     }
@@ -175,171 +209,43 @@ class DioClient {
     );
   }
 
-  ApiException _transientRefreshApiError(DioException original) {
-    final mapped = _mapDioError(original);
-    if (mapped.message ==
-            'No pudimos conectarnos. Revisa tu conexión a internet e inténtalo de nuevo.' ||
-        mapped.message == 'Tiempo de espera agotado. Verifica tu conexión' ||
-        mapped.message == 'Sin conexión a internet') {
-      return mapped;
-    }
-    return const ApiException(
-      'No se pudo renovar la sesión. Verifica tu conexión e inténtalo de nuevo.',
-    );
-  }
-
   bool _isRetry(RequestOptions options) => options.extra['_retry'] == true;
 
-  static Map<String, dynamic>? _tryParseJsonObject(dynamic data) {
-    if (data == null) return null;
-    if (data is Map<String, dynamic>) return data;
-    if (data is Map) return Map<String, dynamic>.from(data);
-    if (data is String) {
-      try {
-        final decoded = jsonDecode(data);
-        if (decoded is Map) return Map<String, dynamic>.from(decoded);
-      } catch (_) {}
-    }
-    return null;
-  }
-
-  /// Acepta camelCase o PascalCase (según serialización del API).
-  static String? _readStringKey(Map<String, dynamic> map, String camelKey) {
-    final pascal = camelKey.isEmpty
-        ? camelKey
-        : '${camelKey[0].toUpperCase()}${camelKey.substring(1)}';
-    final v = map[camelKey] ?? map[pascal];
-    if (v is String && v.isNotEmpty) return v;
-    return null;
-  }
-
-  static String _extractErrorMessage(dynamic data) {
-    final map = _tryParseJsonObject(data);
-    if (map != null) {
-      final m =
-          map['message'] ?? map['Message'] ?? map['title'] ?? map['Title'];
-      if (m is String) return m;
-    }
-    if (data is String) return data;
-    return '';
-  }
-
-  /// Solo cerrar sesión local cuando el refresh indica tokens inválidos, no por
-  /// errores de red ni 400 genéricos (p. ej. bug de cabeceras).
-  static bool _refreshFailureShouldLogout(DioException e) {
-    final code = e.response?.statusCode;
-    if (code == 401) return true;
-    if (code == 400) {
-      final msg = _extractErrorMessage(e.response?.data).toLowerCase();
-      if (msg.contains('inválido') || msg.contains('invalid')) return true;
-      if (msg.contains('no encontrado')) return true;
-    }
-    return false;
-  }
-
-  /// Para arranque / resume: mismo flujo que el interceptor, sin depender de un 401.
   Future<RefreshAccessResult> silentRefreshAccessToken() =>
       _refreshAccessToken();
 
-  /// El API exige `Authorization: Bearer` con el access token (aunque esté
-  /// expirado) además del `refreshToken` en el body. El refresh rota el refresh.
-  Future<RefreshAccessResult> _refreshAccessToken() {
-    if (_updatePolicy != null) {
-      return Future.value(RefreshAccessUpdateRequired(_updatePolicy!));
-    }
-    if (_refreshCompleter != null) {
-      return _refreshCompleter!.future;
-    }
-    final completer = Completer<RefreshAccessResult>();
-    _refreshCompleter = completer;
-
-    Future<void> run() async {
-      try {
-        final refreshToken = await _storage.getRefreshToken();
-        final accessToken = await _storage.getAuthToken();
-        if (refreshToken == null ||
-            refreshToken.isEmpty ||
-            accessToken == null ||
-            accessToken.isEmpty) {
-          await _storage.clearAll();
-          onSessionInvalidated?.call(null);
-          completer.complete(const RefreshAccessSessionEnded());
-          return;
+  Future<RefreshAccessResult> _refreshAccessToken({
+    String? rejectedToken,
+    String? expectedSessionId,
+  }) async {
+    if (_updatePolicy != null)
+      return RefreshAccessUpdateRequired(_updatePolicy!);
+    try {
+      final contextId = expectedSessionId ?? (await _storage.readSession())?.id;
+      final result = await SessionRefresher(
+        storage: _storage,
+        baseUrl: ApiConstants.baseUrl,
+        versionHeaders: _versionInfo.headers,
+      ).ensureAccess(
+          rejectedToken: rejectedToken, expectedSessionId: contextId);
+      if (result is RefreshAccessSuccess) {
+        final current = await _storage.readSession();
+        if (current == null || current.id != contextId) {
+          return const RefreshAccessSessionChanged();
         }
-        final refreshDio = Dio(
-          BaseOptions(
-            baseUrl: ApiConstants.baseUrl,
-            connectTimeout: ApiConstants.connectTimeout,
-            receiveTimeout: ApiConstants.receiveTimeout,
-          ),
-        );
-        final versionHeaders = await _versionInfo.headers();
-        final response = await refreshDio.post<dynamic>(
-          ApiConstants.refresh,
-          data: {'refreshToken': refreshToken},
-          options: Options(
-            headers: {
-              'Authorization': 'Bearer $accessToken',
-              'Content-Type': 'application/json',
-              ...versionHeaders,
-            },
-          ),
-        );
-        final map = _tryParseJsonObject(response.data);
-        if (map == null) {
-          completer.complete(const RefreshAccessTransientFailure());
-          return;
-        }
-        final newToken = _readStringKey(map, 'token');
-        final newRefresh = _readStringKey(map, 'refreshToken') ?? refreshToken;
-        if (newToken == null || newToken.isEmpty) {
-          completer.complete(const RefreshAccessTransientFailure());
-          return;
-        }
-        await _storage.saveTokens(
-          authToken: newToken,
-          refreshToken: newRefresh,
-        );
-        await LocationTrackingService.updateToken(newToken);
-        completer.complete(RefreshAccessSuccess(newToken));
-      } on DioException catch (e) {
-        final updatePolicy = deliveryAppUpdatePolicyFromResponse(
-          e.response?.statusCode,
-          e.response?.data,
-        );
-        if (updatePolicy != null) {
-          await _activateUpdateRequired(updatePolicy);
-          completer.complete(RefreshAccessUpdateRequired(updatePolicy));
-          return;
-        }
-        if (kDebugMode) {
-          debugPrint(
-            '[DioClient] refresh falló: ${e.response?.statusCode} '
-            '${_extractErrorMessage(e.response?.data)}',
-          );
-        }
-        if (_refreshFailureShouldLogout(e)) {
-          final replacementReason = isSessionReplacedResponse(
-            e.response?.statusCode,
-            e.response?.data,
-          )
-              ? sessionReplacementMessage(e.response?.data)
-              : null;
-          await _storage.clearAll();
-          onSessionInvalidated?.call(replacementReason);
-          completer.complete(const RefreshAccessSessionEnded());
-        } else {
-          completer.complete(const RefreshAccessTransientFailure());
-        }
-      } catch (_) {
-        completer.complete(const RefreshAccessTransientFailure());
-      } finally {
-        _refreshCompleter = null;
+        await LocationTrackingService.updateToken(current.accessToken);
+        return RefreshAccessSuccess(current.accessToken);
+      } else if (result is RefreshAccessSessionEnded) {
+        if (await _storage.readSession() != null)
+          return const RefreshAccessSessionChanged();
+        onSessionInvalidated?.call(null);
+      } else if (result is RefreshAccessUpdateRequired) {
+        await _activateUpdateRequired(result.policy);
       }
+      return result;
+    } catch (_) {
+      return const RefreshAccessTransientFailure();
     }
-
-    run();
-    return completer.future;
   }
 
   Future<void> _activateUpdateRequired(
@@ -353,7 +259,7 @@ class DioClient {
       } else {
         await LocationTrackingService.stopTracking(
           recordEvent: false,
-          discardPending: true,
+          discardPending: false,
         );
       }
     } catch (_) {}
