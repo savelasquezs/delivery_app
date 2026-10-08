@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/foundation.dart';
 import 'package:dio/dio.dart';
 import 'package:geolocator/geolocator.dart';
 
@@ -81,19 +82,46 @@ class _TrackingReconciliation {
   });
 }
 
+typedef TrackingStartRunner = Future<void> Function({
+  required String authToken,
+  required String baseUrl,
+  required DeliveryWorkSession workSession,
+  required String versionName,
+  required String buildNumber,
+  required String packageName,
+});
+
 class AuthNotifier extends StateNotifier<AuthState> {
   final AuthRepository _repository;
   final WorkSessionRepository _workSessions;
   final DioClient _client;
   final Future<void> Function()? _onUpdateRequiredCleanup;
+  final TrackingStartRunner _trackingStarter;
+  final Future<bool> Function() _isTrackingRunning;
+  final Future<LocationPermissionState> Function() _permissionReader;
+  final Future<void> Function()? _registerFcm;
   Future<void>? _resumeInFlight;
+  Future<void>? _trackingStartInFlight;
+  DeliveryWorkSession? _queuedTrackingSession;
+  int? _startingTrackingSessionId;
+  int? _startingTrackingGeneration;
+  int _authGeneration = 0;
+  Timer? _trackingRetryTimer;
 
   AuthNotifier(
     this._repository,
     this._workSessions,
     this._client, {
     Future<void> Function()? onUpdateRequiredCleanup,
+    TrackingStartRunner? trackingStarter,
+    Future<bool> Function()? isTrackingRunning,
+    Future<LocationPermissionState> Function()? permissionReader,
+    Future<void> Function()? registerFcm,
   })  : _onUpdateRequiredCleanup = onUpdateRequiredCleanup,
+        _trackingStarter = trackingStarter ?? LocationTrackingService.startTracking,
+        _isTrackingRunning = isTrackingRunning ?? (() => LocationTrackingService.isRunning),
+        _permissionReader = permissionReader ?? readLocationPermissionState,
+        _registerFcm = registerFcm,
         super(const AuthState()) {
     setAuthSessionInvalidatedHandler(onSessionInvalidatedByApi);
     setDeliveryAppUpdateRequiredHandler(onDeliveryAppUpdateRequired);
@@ -103,6 +131,8 @@ class AuthNotifier extends StateNotifier<AuthState> {
 
   @override
   void dispose() {
+    _authGeneration++;
+    _trackingRetryTimer?.cancel();
     setAuthSessionInvalidatedHandler(null);
     setDeliveryAppUpdateRequiredHandler(null);
     setWorkSessionChangedByPushHandler(null);
@@ -133,6 +163,111 @@ class AuthNotifier extends StateNotifier<AuthState> {
       await refresh;
     } finally {
       if (identical(_resumeInFlight, refresh)) _resumeInFlight = null;
+    }
+  }
+
+  bool _sameTrackingSession(int generation, DeliveryWorkSession session) =>
+      mounted &&
+      _authGeneration == generation &&
+      state.status == AuthStatus.authenticated &&
+      state.workSession?.id == session.id &&
+      state.user?.id == session.deliverymanId;
+
+  /// The verified work session opens the UI immediately. The Android service
+  /// may still be importing old data, starting an isolate, or waiting for a
+  /// native plugin. None of those operations may hold the login spinner.
+  void _scheduleTrackingStart(DeliveryWorkSession session) {
+    if (!mounted || state.status != AuthStatus.authenticated ||
+        state.workSession?.id != session.id) return;
+    if (_trackingStartInFlight != null) {
+      if (_startingTrackingSessionId != session.id ||
+          _startingTrackingGeneration != _authGeneration) {
+        _queuedTrackingSession = session;
+      }
+      return;
+    }
+    _trackingRetryTimer?.cancel();
+    final generation = _authGeneration;
+    _startingTrackingGeneration = generation;
+    _startingTrackingSessionId = session.id;
+    final operation = _runTrackingStart(session, generation);
+    _trackingStartInFlight = operation;
+    unawaited(operation.whenComplete(() {
+      if (!identical(_trackingStartInFlight, operation)) return;
+      _trackingStartInFlight = null;
+      _startingTrackingSessionId = null;
+      _startingTrackingGeneration = null;
+      final pending = _queuedTrackingSession;
+      _queuedTrackingSession = null;
+      if (pending != null && mounted) _scheduleTrackingStart(pending);
+    }));
+  }
+
+  void _retryTracking(DeliveryWorkSession session, int generation) {
+    if (!_sameTrackingSession(generation, session)) return;
+    _trackingRetryTimer?.cancel();
+    _trackingRetryTimer = Timer(const Duration(seconds: 30), () {
+      if (_sameTrackingSession(generation, session)) {
+        _scheduleTrackingStart(session);
+      }
+    });
+  }
+
+  Future<void> _runTrackingStart(
+      DeliveryWorkSession session, int generation) async {
+    final watch = Stopwatch()..start();
+    var complete = false;
+    final watchdog = Timer(const Duration(seconds: 12), () {
+      if (!complete && _sameTrackingSession(generation, session)) {
+        state = state.copyWith(
+          trackingActive: false,
+          trackingIssue: 'El seguimiento tarda en iniciarse. Puedes consultar '
+              'pedidos, pero no iniciar entregas hasta que quede activo.',
+        );
+      }
+    });
+    try {
+      debugPrint('TrackingStartup: begin workSession=${session.id}');
+      final token = await _repository.getStoredAccessToken();
+      if (token == null) throw const SessionEndedException();
+      final headers = await _client.versionHeaders();
+      if (!_sameTrackingSession(generation, session)) return;
+      await _trackingStarter(
+        authToken: token,
+        baseUrl: ApiConstants.baseUrl,
+        workSession: session,
+        versionName: headers[deliveryAppVersionHeader]!,
+        buildNumber: headers[deliveryAppBuildHeader]!,
+        packageName: headers[deliveryAppPackageHeader]!,
+      );
+      if (!_sameTrackingSession(generation, session)) return;
+      final running = await _isTrackingRunning()
+          .timeout(const Duration(seconds: 3), onTimeout: () => false);
+      if (!_sameTrackingSession(generation, session)) return;
+      debugPrint('TrackingStartup: finished in ${watch.elapsedMilliseconds}ms; '
+          'running=$running');
+      state = state.copyWith(
+        trackingActive: running,
+        trackingIssue: running
+            ? null
+            : 'El servicio de ubicación aún no está activo. Reintentando.',
+        clearTrackingIssue: running,
+      );
+      if (!running) _retryTracking(session, generation);
+    } catch (error) {
+      debugPrint('TrackingStartup: failed after ${watch.elapsedMilliseconds}ms: '
+          '${error.runtimeType}');
+      if (_sameTrackingSession(generation, session)) {
+        state = state.copyWith(
+          trackingActive: false,
+          trackingIssue: userFacingErrorMessage(error,
+              fallback: 'No pudimos iniciar el seguimiento. Reintentando.'),
+        );
+        _retryTracking(session, generation);
+      }
+    } finally {
+      complete = true;
+      watchdog.cancel();
     }
   }
 
@@ -169,15 +304,21 @@ class AuthNotifier extends StateNotifier<AuthState> {
         requestPermission: false,
         preserveExistingSessionOnIssue: true,
       );
+      final session = reconciliation.session ?? state.workSession;
+      final ready = state.trackingActive &&
+          state.workSession?.id == session?.id &&
+          reconciliation.issue == null;
       state = state.copyWith(
-        workSession: reconciliation.session ?? state.workSession,
-        trackingActive: reconciliation.session != null &&
-            reconciliation.issue == null &&
-            await LocationTrackingService.isRunning,
-        trackingIssue: reconciliation.issue,
-        clearTrackingIssue: reconciliation.issue == null,
+        workSession: session,
+        trackingActive: ready,
+        trackingIssue: reconciliation.issue ??
+            (ready ? null : 'Iniciando seguimiento de ubicación...'),
+        clearTrackingIssue: ready,
       );
-      await _registerFcmTokenSafely();
+      if (session != null && reconciliation.issue == null && !ready) {
+        _scheduleTrackingStart(session);
+      }
+      unawaited(_registerFcmTokenSafely());
     } catch (e) {
       final update = deliveryAppUpdateFromError(e);
       if (update != null) {
@@ -236,12 +377,16 @@ class AuthNotifier extends StateNotifier<AuthState> {
         status: AuthStatus.authenticated,
         user: user,
         workSession: reconciliation.session,
-        trackingActive: reconciliation.session != null &&
-            reconciliation.issue == null &&
-            await LocationTrackingService.isRunning,
-        trackingIssue: reconciliation.issue,
+        trackingActive: false,
+        trackingIssue: reconciliation.issue ??
+            (reconciliation.session == null
+                ? 'No hay una jornada activa.'
+                : 'Iniciando seguimiento de ubicación...'),
       );
-      await _registerFcmTokenSafely();
+      if (reconciliation.session != null && reconciliation.issue == null) {
+        _scheduleTrackingStart(reconciliation.session!);
+      }
+      unawaited(_registerFcmTokenSafely());
     } catch (e) {
       final update = deliveryAppUpdateFromError(e);
       if (update != null) {
@@ -290,6 +435,8 @@ class AuthNotifier extends StateNotifier<AuthState> {
   }
 
   Future<void> login(String email, String password) async {
+    _authGeneration++;
+    _trackingRetryTimer?.cancel();
     state = const AuthState(status: AuthStatus.loading);
     try {
       final user = await _repository.login(
@@ -320,8 +467,10 @@ class AuthNotifier extends StateNotifier<AuthState> {
         status: AuthStatus.authenticated,
         user: user,
         workSession: reconciliation.session,
-        trackingActive: await LocationTrackingService.isRunning,
+        trackingActive: false,
+        trackingIssue: 'Iniciando seguimiento de ubicación...',
       );
+      _scheduleTrackingStart(reconciliation.session!);
     } catch (e) {
       final update = deliveryAppUpdateFromError(e);
       if (update != null) {
@@ -343,7 +492,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
   }) async {
     final permission = requestPermission
         ? await _requestLocationPermissionState()
-        : await readLocationPermissionState();
+        : await _permissionReader();
     final stored = await _workSessions.getStored();
     final storedIsActive = stored != null &&
         stored.isActive &&
@@ -380,34 +529,48 @@ class AuthNotifier extends StateNotifier<AuthState> {
       );
     }
 
-    try {
-      final versionHeaders = await _client.versionHeaders();
-      await LocationTrackingService.startTracking(
-        authToken: token,
-        baseUrl: ApiConstants.baseUrl,
-        workSession: session,
-        versionName: versionHeaders[deliveryAppVersionHeader]!,
-        buildNumber: versionHeaders[deliveryAppBuildHeader]!,
-        packageName: versionHeaders[deliveryAppPackageHeader]!,
-      );
-    } on TrackingServiceException catch (error) {
-      if (preserveExistingSessionOnIssue) {
-        return _TrackingReconciliation(session: session, issue: error.message);
-      }
-      rethrow;
-    }
+    // Android startup and legacy outbox import are deliberately NOT awaited
+    // here: authentication checks and work-session ownership are sufficient
+    // to show the home screen; delivery actions still require tracking ready.
     return _TrackingReconciliation(session: session);
   }
 
   Future<void> _registerFcmTokenSafely() async {
     try {
-      await FcmService.registerToken(_client);
+      if (_registerFcm != null) {
+        await _registerFcm!();
+      } else {
+        await FcmService.registerToken(_client);
+      }
     } catch (_) {
       // El push es complementario: un fallo de Firebase no debe cerrar sesión.
     }
   }
 
+  /// No delivery may be started while Android tracking has not been
+  /// confirmed for the authenticated, active work session.
+  Future<bool> canBeginDelivery() async {
+    final session = state.workSession;
+    if (state.status != AuthStatus.authenticated ||
+        !state.trackingActive ||
+        state.trackingIssue != null ||
+        session == null ||
+        !session.isActive ||
+        !DateTime.now().toUtc().isBefore(session.autoCloseAt)) {
+      return false;
+    }
+    try {
+      return await _isTrackingRunning()
+          .timeout(const Duration(seconds: 2), onTimeout: () => false);
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<void> logout() async {
+    _authGeneration++;
+    _trackingRetryTimer?.cancel();
+    _queuedTrackingSession = null;
     await LocationTrackingService.stopTracking();
     await FcmService.clearTrackingReviewNotices();
     try {
@@ -423,6 +586,9 @@ class AuthNotifier extends StateNotifier<AuthState> {
   }
 
   Future<void> _endLocalSession({String? errorMessage}) async {
+    _authGeneration++;
+    _trackingRetryTimer?.cancel();
+    _queuedTrackingSession = null;
     String? cleanupError;
     // Failure in one local plugin must not skip credential cleanup or
     // leave login stuck in AuthStatus.loading. Pending GPS data remains.
@@ -450,6 +616,9 @@ class AuthNotifier extends StateNotifier<AuthState> {
   Future<void> _activateUpdateRequired(
     DeliveryAppVersionPolicy policy,
   ) async {
+    _authGeneration++;
+    _trackingRetryTimer?.cancel();
+    _queuedTrackingSession = null;
     if (_onUpdateRequiredCleanup != null) {
       await _onUpdateRequiredCleanup!();
     } else {

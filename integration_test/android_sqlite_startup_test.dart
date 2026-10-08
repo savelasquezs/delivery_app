@@ -100,4 +100,54 @@ void main() {
       await deleteDatabase(path);
     }
   });
+  testWidgets('Android resumes a bounded 120-point migration without loss',
+      (tester) async {
+    final path = '${await getDatabasesPath()}/tracking_batch_migration_probe.db';
+    Database db = await openDatabase(path, singleInstance: false);
+    final at = DateTime.now().toUtc();
+    final context = TrackingContext(
+      authSessionId: 'batch-session',
+      ownerKey: 'batch-owner',
+      workSessionId: 42,
+      startedAt: at.subtract(const Duration(minutes: 10)),
+      autoCloseAt: at.add(const Duration(hours: 2)),
+    );
+    final original = List.generate(
+        120,
+        (i) => {
+              'clientPointId': 'historic-$i',
+              'workSessionId': 42,
+              'latitude': 6.25,
+              'longitude': -75.56,
+              'recordedAt': at.add(Duration(seconds: i)).toIso8601String(),
+            });
+    final legacy = jsonEncode(original);
+    try {
+      var store = TrackingOutbox(open: () async => db);
+      await store.activate(context);
+      expect(await store.importLegacyBatch(
+          'old-history', legacy, 'location', context, batchSize: 25), false);
+      expect((await db.query('tracking_import_cursor')).single['next_index'],
+          25);
+      await db.close();
+      db = await openDatabase(path, singleInstance: false);
+      store = TrackingOutbox(open: () async => db);
+      var finished = false;
+      for (var i = 0; i < 10 && !finished; i++) {
+        finished = await store.importLegacyBatch(
+            'old-history', legacy, 'location', context, batchSize: 25);
+      }
+      expect(finished, isTrue);
+      expect((await db.query('tracking_outbox')).length, 120);
+      expect((await db.query('tracking_import_cursor')), isEmpty);
+      expect((await db.query('tracking_import')), hasLength(1));
+      expect(await store.importLegacyBatch(
+          'old-history', legacy, 'location', context, batchSize: 25), true);
+      expect((await db.query('tracking_outbox')).length, 120);
+    } finally {
+      if (db.isOpen) await db.close();
+      await deleteDatabase(path);
+    }
+  });
+
 }

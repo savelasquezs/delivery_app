@@ -39,21 +39,26 @@ class RouteNotifier extends StateNotifier<RouteState> {
   final int _deliverymanId;
   final RouteOrdersLoader? _ordersLoader;
   final RouteTrackingSync? _trackingSync;
+  final Future<bool> Function()? _canBeginDelivery;
   Future<void>? _loadInFlight;
 
-  RouteNotifier(this._repository, this._deliverymanId)
+  RouteNotifier(this._repository, this._deliverymanId,
+      {Future<bool> Function()? canBeginDelivery})
       : _ordersLoader = null,
         _trackingSync = null,
+        _canBeginDelivery = canBeginDelivery,
         super(const RouteState());
 
   RouteNotifier.withLoader({
     required int deliverymanId,
     required RouteOrdersLoader loadOrders,
     RouteTrackingSync? syncTracking,
+    Future<bool> Function()? canBeginDelivery,
   })  : _repository = null,
         _deliverymanId = deliverymanId,
         _ordersLoader = loadOrders,
         _trackingSync = syncTracking,
+        _canBeginDelivery = canBeginDelivery,
         super(const RouteState());
 
   bool containsOrder(int orderId) =>
@@ -158,6 +163,11 @@ class RouteNotifier extends StateNotifier<RouteState> {
   }
 
   Future<void> markOnTheWay(int orderId) async {
+    if (_canBeginDelivery != null && !await _canBeginDelivery!()) {
+      throw StateError(
+        'No se puede iniciar el domicilio hasta confirmar el seguimiento de ubicación.',
+      );
+    }
     await _repository!.updateOrderStatus(orderId, OrderStatus.onTheWay);
     await load();
   }
@@ -215,5 +225,7 @@ final routeNotifierProvider =
   return RouteNotifier(
     ref.watch(orderRepositoryProvider),
     deliverymanId,
+    canBeginDelivery: () =>
+        ref.read(authNotifierProvider.notifier).canBeginDelivery(),
   );
 });

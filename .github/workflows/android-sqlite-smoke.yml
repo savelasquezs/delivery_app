@@ -16,7 +16,7 @@ jobs:
   sqlite-android:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@v6
         with:
@@ -36,6 +36,17 @@ jobs:
           "$RUNNER_TEMP/flutter/bin/flutter" --version
       - run: flutter pub get
       - run: git diff --exit-code -- pubspec.lock
+      - name: Reduce Gradle resource use alongside Android emulator
+        shell: bash
+        run: |
+          # The project's 8 GiB Gradle heap exceeds a hosted runner once
+          # the Android emulator is also running. Set CI-only limits.
+          cat >> android/gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx3G -XX:MaxMetaspaceSize=768m -XX:ReservedCodeCacheSize=256m -XX:+HeapDumpOnOutOfMemoryError
+          org.gradle.workers.max=2
+          org.gradle.parallel=false
+          EOF
+
       - name: Restore Gradle wrapper for integration tests
         run: |
           if [[ ! -f android/gradlew || ! -f android/gradle/wrapper/gradle-wrapper.jar ]]; then
@@ -43,6 +54,26 @@ jobs:
             cp "$RUNNER_TEMP/smoke_wrapper/android/gradlew" android/gradlew
             cp "$RUNNER_TEMP/smoke_wrapper/android/gradle/wrapper/gradle-wrapper.jar" android/gradle/wrapper/gradle-wrapper.jar
             chmod +x android/gradlew
+          fi
+      - name: Free hosted runner disk before installing Android emulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Disk usage before cleanup:"
+          df -h /
+          # These toolchains are not used by this Flutter/Android project.
+          # Leave JDK 17 and the Android SDK untouched.
+          for path in /usr/share/dotnet /usr/local/share/powershell /usr/local/share/boost /opt/hostedtoolcache/CodeQL; do
+            if [[ -e "$path" ]]; then sudo rm -rf "$path"; fi
+          done
+          docker system prune -af --volumes >/dev/null 2>&1 || true
+          echo "Disk usage after cleanup:"
+          df -h /
+          # Android emulator + NDK + Gradle require free space simultaneously.
+          available_kb="$(df -Pk / | awk 'NR==2 {print $4}')"
+          if (( available_kb < 6291456 )); then
+            echo "::error::Insufficient free disk for Android instrumentation tests"
+            exit 1
           fi
       - name: Enable emulator hardware acceleration
         run: |

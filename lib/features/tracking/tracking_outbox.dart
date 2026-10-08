@@ -154,6 +154,8 @@ class TrackingOutbox {
                 'PRIMARY KEY(owner_key, work_session))');
             await tx.execute(
                 'CREATE TABLE IF NOT EXISTS tracking_import (fingerprint TEXT PRIMARY KEY)');
+            await tx.execute('CREATE TABLE IF NOT EXISTS tracking_import_cursor ('
+                'fingerprint TEXT PRIMARY KEY, next_index INTEGER NOT NULL)');
             await tx.execute(
                 'CREATE TABLE IF NOT EXISTS tracking_communication ('
                 'owner_key TEXT NOT NULL, work_session INTEGER NOT NULL, id TEXT NOT NULL, '
@@ -490,6 +492,79 @@ class TrackingOutbox {
               pending: count('pending'),
               rejected: count('rejected'));
         }));
+  }
+
+  /// Process old SharedPreferences queues incrementally without holding a
+  /// SQLite transaction across thousands of writes. A cursor is committed with
+  /// each small batch; the old preference remains until the final receipt.
+  Future<bool> importLegacyBatch(
+      String sourceKey, String raw, String kind, TrackingContext context,
+      {bool rejected = false, int batchSize = 80}) {
+    if (batchSize < 1) throw ArgumentError.value(batchSize, 'batchSize');
+    return _transaction((tx) async {
+      final fingerprint = const Uuid().v5(_legacyNamespace, '${sourceKey}:${raw}');
+      final completed = await tx.query('tracking_import',
+          where: 'fingerprint = ?', whereArgs: [fingerprint]);
+      if (completed.isNotEmpty) return true;
+
+      final progress = await tx.query('tracking_import_cursor',
+          columns: ['next_index'],
+          where: 'fingerprint = ?', whereArgs: [fingerprint]);
+      final start = progress.isEmpty ? 0 : progress.single['next_index'] as int;
+      List<dynamic> items;
+      try {
+        final decoded = jsonDecode(raw);
+        items = decoded is List ? decoded : [decoded];
+      } catch (_) {
+        items = [raw];
+      }
+      final end = (start + batchSize < items.length)
+          ? start + batchSize
+          : items.length;
+      for (var i = start; i < end; i++) {
+        final item = items[i];
+        final payload = item is Map
+            ? Map<String, dynamic>.from(
+                item['payload'] is Map ? item['payload'] as Map : item)
+            : <String, dynamic>{'raw': item};
+        payload[kind == 'location' ? 'clientPointId' : 'clientEventId'] ??=
+            const Uuid().v5(_legacyNamespace, '${fingerprint}:${i}');
+        final session =
+            int.tryParse(payload['workSessionId']?.toString() ?? '');
+        final bound = session != null &&
+            (session == context.workSessionId ||
+                payload['_authSessionId'] == context.authSessionId ||
+                payload['_ownerKey'] == context.ownerKey);
+        final parsedTime =
+            DateTime.tryParse(payload['recordedAt']?.toString() ?? '');
+        final validTime = parsedTime != null;
+        payload['workSessionId'] = session ?? -1;
+        payload['recordedAt'] = (parsedTime ??
+                DateTime.fromMillisecondsSinceEpoch(0, isUtc: true))
+            .toUtc()
+            .toIso8601String();
+        await _insert(tx, bound ? context.ownerKey : 'unbound', kind, payload,
+            state: rejected || !bound || !validTime ? 'rejected' : 'pending',
+            reason: !bound
+                ? 'legacy_owner_unverified'
+                : !validTime
+                    ? 'invalid_recorded_at'
+                    : rejected
+                        ? 'legacy_rejected'
+                        : null);
+      }
+      if (end == items.length) {
+        await tx.insert('tracking_import', {'fingerprint': fingerprint},
+            conflictAlgorithm: ConflictAlgorithm.ignore);
+        await tx.delete('tracking_import_cursor',
+            where: 'fingerprint = ?', whereArgs: [fingerprint]);
+        return true;
+      }
+      await tx.insert('tracking_import_cursor',
+          {'fingerprint': fingerprint, 'next_index': end},
+          conflictAlgorithm: ConflictAlgorithm.replace);
+      return false;
+    });
   }
 
   /// A commit receipt makes a crash between SQL commit and preference removal
