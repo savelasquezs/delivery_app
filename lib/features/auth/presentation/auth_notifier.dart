@@ -423,17 +423,27 @@ class AuthNotifier extends StateNotifier<AuthState> {
   }
 
   Future<void> _endLocalSession({String? errorMessage}) async {
-    await LocationTrackingService.stopTracking(
-      recordEvent: false,
-      discardPending: false,
-    );
-    await FcmService.clearTrackingReviewNotices();
-    await _workSessions.clearLocal();
-    await _repository.clearLocalSession();
+    String? cleanupError;
+    // Failure in one local plugin must not skip credential cleanup or
+    // leave login stuck in AuthStatus.loading. Pending GPS data remains.
+    for (final cleanup in <Future<void> Function()>[
+      () => LocationTrackingService.stopTracking(
+          recordEvent: false, discardPending: false),
+      FcmService.clearTrackingReviewNotices,
+      _workSessions.clearLocal,
+      _repository.clearLocalSession,
+    ]) {
+      try {
+        await cleanup();
+      } catch (_) {
+        cleanupError ??= localStorageErrorMessage;
+      }
+    }
+    if (!mounted) return;
+    final message = errorMessage ?? cleanupError;
     state = AuthState(
-      status:
-          errorMessage == null ? AuthStatus.unauthenticated : AuthStatus.error,
-      errorMessage: errorMessage,
+      status: message == null ? AuthStatus.unauthenticated : AuthStatus.error,
+      errorMessage: message,
     );
   }
 

@@ -136,7 +136,8 @@ class TrackingOutbox {
   Future<Database> _initialize() async {
     final db = await open();
     try {
-      await db.execute('PRAGMA busy_timeout = 1000');
+      // This PRAGMA returns a row; Android rejects it through execute.
+      await db.rawQuery('PRAGMA busy_timeout = 1000');
       await retrySqliteBusy(() => db.transaction((tx) async {
             await tx.execute(
                 'CREATE TABLE IF NOT EXISTS tracking_context (id INTEGER PRIMARY KEY, value TEXT NOT NULL)');
