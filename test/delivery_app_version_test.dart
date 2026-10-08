@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:delivery_app/core/auth/token_session.dart';
 import 'dart:typed_data';
 
 import 'package:delivery_app/core/api/dio_client.dart';
@@ -163,6 +164,12 @@ DeliveryAppVersionInfoLoader _versionLoader() =>
 
 class _FakeSecureStorage extends SecureStorage {
   int clearCount = 0;
+
+  @override
+  Future<TokenSession?> readSession() async => const TokenSession(
+      id: 'version-test',
+      accessToken: 'access-token',
+      refreshToken: 'refresh-token');
 
   @override
   Future<String?> getAuthToken() async => 'access-token';

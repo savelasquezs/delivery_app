@@ -6,6 +6,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:dio/dio.dart';
 
 import '../../core/api/api_constants.dart';
+import '../../core/auth/session_refresh.dart';
 import '../../core/api/dio_client.dart';
 import '../../core/storage/secure_storage.dart';
 import 'work_session_models.dart';
@@ -35,7 +36,7 @@ class WorkSessionRepository {
       return session;
     } on DioException catch (error) {
       final stored = await getStored();
-      if (error.response == null &&
+      if (isTransientSessionFailure(error) &&
           stored != null &&
           stored.isActive &&
           DateTime.now().toUtc().isBefore(stored.autoCloseAt)) {

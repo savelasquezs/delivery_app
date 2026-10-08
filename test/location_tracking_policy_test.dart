@@ -5,7 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   group('locationFailureDisposition', () {
     test('keeps retryable failures for a later upload', () {
-      for (final status in <int?>[null, 401, 408, 429, 500, 503]) {
+      for (final status in <int?>[null, 401, 403, 404, 408, 429, 500, 503]) {
         expect(
           locationFailureDisposition(status),
           LocationFailureDisposition.retryPoint,
@@ -13,11 +13,11 @@ void main() {
       }
     });
 
-    test('retains every rejected point for at-least-once delivery', () {
-      for (final status in <int>[400, 403, 404, 422]) {
+    test('quarantines invalid points without silently deleting them', () {
+      for (final status in <int>[400, 422]) {
         expect(
           locationFailureDisposition(status),
-          LocationFailureDisposition.retryPoint,
+          LocationFailureDisposition.quarantinePoint,
         );
       }
     });

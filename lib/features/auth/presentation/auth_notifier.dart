@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:dio/dio.dart';
 import 'package:geolocator/geolocator.dart';
 
 import '../../../core/api/api_constants.dart';
@@ -8,6 +9,8 @@ import '../../../core/api/dio_client.dart';
 import '../../../core/api/refresh_access_result.dart';
 import '../../../core/auth/auth_session_bridge.dart';
 import '../../../core/auth/jwt_expiration.dart';
+import '../../../core/auth/session_refresh.dart';
+import '../../../core/auth/session_replacement.dart';
 import '../../../core/errors/user_facing_error.dart';
 import '../../../core/version/delivery_app_version.dart';
 import '../../notifications/fcm_service.dart';
@@ -181,12 +184,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
         await _activateUpdateRequired(update.policy);
         return;
       }
-      await _endLocalSession(
-        errorMessage: userFacingErrorMessage(
-          e,
-          fallback: 'No pudimos recuperar tu sesión. Inicia sesión de nuevo.',
-        ),
-      );
+      await _recoverWithoutDiscardingCredentials(e);
     }
   }
 
@@ -250,12 +248,44 @@ class AuthNotifier extends StateNotifier<AuthState> {
         await _activateUpdateRequired(update.policy);
         return;
       }
-      await _endLocalSession(
-        errorMessage: userFacingErrorMessage(
-          e,
-          fallback: 'No pudimos recuperar tu sesión. Inicia sesión de nuevo.',
-        ),
+      await _recoverWithoutDiscardingCredentials(e);
+    }
+  }
+
+  Future<void> _recoverWithoutDiscardingCredentials(Object error) async {
+    final definitive = error is SessionEndedException ||
+        (error is DioException &&
+            (error.error is SessionEndedException ||
+                isSessionReplacedResponse(
+                    error.response?.statusCode, error.response?.data)));
+    if (definitive) {
+      await _endLocalSession();
+      return;
+    }
+    // A failed reconciliation does not revoke authentication. Do not create a
+    // new work session locally or extend a cached one beyond its server cutoff.
+    final message = userFacingErrorMessage(error,
+        fallback: 'No pudimos verificar la jornada. Vuelve a intentarlo.');
+    try {
+      final user = state.user ?? await _repository.getStoredUser();
+      final stored = state.workSession ?? await _workSessions.getStored();
+      final active = stored != null &&
+          stored.isActive &&
+          DateTime.now().toUtc().isBefore(stored.autoCloseAt);
+      if (!isTransientSessionFailure(error) || !active) {
+        await LocationTrackingService.stopTracking(recordEvent: false);
+      }
+      state = AuthState(
+        status: user == null ? AuthStatus.error : AuthStatus.authenticated,
+        user: user,
+        workSession: stored,
+        trackingActive: false,
+        trackingIssue: message,
+        errorMessage: user == null ? message : null,
       );
+    } catch (_) {
+      // Storage/plugin initialization can itself be transient.
+      state = state.copyWith(status: AuthStatus.error, errorMessage: message);
     }
   }
 
@@ -412,7 +442,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
       try {
         await LocationTrackingService.stopTracking(
           recordEvent: false,
-          discardPending: true,
+          discardPending: false,
         );
       } catch (_) {}
       try {

@@ -1,6 +1,6 @@
 import 'package:geolocator/geolocator.dart';
 
-enum LocationFailureDisposition { discardPoint, retryPoint }
+enum LocationFailureDisposition { quarantinePoint, retryPoint }
 
 enum LocationTrackingIssue {
   none,
@@ -99,11 +99,12 @@ class TrackingServiceException implements Exception {
   String toString() => message;
 }
 
-/// An HTTP rejection must never stop the foreground location service.
-///
-/// Every failed point is queued for a later retry. This deliberately favors
-/// at-least-once delivery over silently losing a worker location.
+/// Rejected data is quarantined with a reason, never silently deleted. Auth,
+/// throttling and server failures pause the batch rather than retry every point.
 LocationFailureDisposition locationFailureDisposition(int? statusCode) {
+  if (statusCode == 400 || statusCode == 422) {
+    return LocationFailureDisposition.quarantinePoint;
+  }
   return LocationFailureDisposition.retryPoint;
 }
 

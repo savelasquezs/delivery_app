@@ -1,0 +1,40 @@
+name: Tracking validation
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tracking-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Verify Google Play distribution policy
+        run: bash scripts/verify_play_only_distribution.sh
+      - name: Install project Flutter
+        shell: bash
+        run: |
+          git clone --depth=1 --branch 3.41.6 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/flutter/bin/flutter" --version
+      - run: flutter pub get
+      - name: Check dependency lockfile
+        run: git diff --exit-code -- pubspec.lock
+      - run: flutter analyze --no-fatal-infos
+      - run: flutter test --reporter expanded
+      - name: Repeat native concurrency regression
+        run: |
+          for attempt in 1 2 3; do
+            flutter test test/session_mutex_test.dart --reporter expanded
+          done
