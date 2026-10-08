@@ -71,6 +71,7 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
   final BranchPresenceVerifier _branchPresenceVerifier;
   final DeliveryRoutingRepository _routingRepository;
   final AuthUser? _user;
+  final Future<bool> Function()? _canBeginDelivery;
   final double? _branchLatitude;
   final double? _branchLongitude;
   final int _allowedDistanceMeters;
@@ -85,8 +86,10 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
     this._user,
     this._branchLatitude,
     this._branchLongitude,
-    this._allowedDistanceMeters,
-  ) : super(const AvailableState());
+    this._allowedDistanceMeters, {
+    Future<bool> Function()? canBeginDelivery,
+  })  : _canBeginDelivery = canBeginDelivery,
+        super(const AvailableState());
 
   Future<void> load({int? branchId, bool silently = false}) {
     final current = _availableLoadInFlight;
@@ -284,6 +287,10 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
     int? proposalId,
     int? expectedPlanVersion,
   }) async {
+    if (_canBeginDelivery != null && !await _canBeginDelivery!()) {
+      throw StateError(
+          'No puedes tomar pedidos hasta que el seguimiento de ubicación esté activo.');
+    }
     await _repository.selfAssignOrders(
       orderIds: orderIds,
       password: password,
@@ -323,5 +330,7 @@ final availableNotifierProvider =
     branchLatitude,
     branchLongitude,
     allowedDistanceMeters,
+    canBeginDelivery: () =>
+        ref.read(authNotifierProvider.notifier).canBeginDelivery(),
   );
 });
