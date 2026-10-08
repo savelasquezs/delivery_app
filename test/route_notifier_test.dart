@@ -126,6 +126,23 @@ void main() {
     expect(notifier.state.orders, isEmpty);
   });
 
+  test('no permite iniciar una entrega antes de confirmar el tracking',
+      () async {
+    var checked = 0;
+    final notifier = RouteNotifier.withLoader(
+      deliverymanId: 7,
+      loadOrders: () async => _page(const []),
+      syncTracking: (_) async {},
+      canBeginDelivery: () async {
+        checked++;
+        return false;
+      },
+    );
+    await expectLater(notifier.markOnTheWay(42),
+        throwsA(isA<StateError>()));
+    expect(checked, 1);
+  });
+
   test('autoentrega realtime retira solo el pedido y resincroniza tracking',
       () async {
     final trackingSnapshots = <List<int>>[];
