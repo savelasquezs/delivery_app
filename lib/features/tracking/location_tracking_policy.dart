@@ -30,10 +30,13 @@ class LocationPermissionState {
     this.readFailed = false,
   });
 
-  bool get canTrackInBackground =>
-      serviceEnabled &&
+  bool get permissionUsable =>
+      !readFailed &&
       permission == LocationPermission.always &&
       accuracy == LocationAccuracyStatus.precise;
+
+  bool get canTrackInBackground =>
+      !readFailed && serviceEnabled && permissionUsable;
 
   LocationTrackingIssue get issue {
     if (readFailed) return LocationTrackingIssue.unavailable;

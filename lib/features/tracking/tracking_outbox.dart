@@ -153,6 +153,11 @@ class TrackingOutbox {
                 'PRIMARY KEY(owner_key, work_session))');
             await tx.execute(
                 'CREATE TABLE IF NOT EXISTS tracking_import (fingerprint TEXT PRIMARY KEY)');
+            await tx.execute(
+                'CREATE TABLE IF NOT EXISTS tracking_communication ('
+                'owner_key TEXT NOT NULL, work_session INTEGER NOT NULL, id TEXT NOT NULL, '
+                'started_at INTEGER NOT NULL, recovered_at INTEGER, acknowledged INTEGER NOT NULL DEFAULT 0, '
+                'PRIMARY KEY(owner_key, work_session))');
           }));
       return db;
     } catch (_) {
@@ -300,9 +305,20 @@ class TrackingOutbox {
 
   Future<void> acknowledge(OutboxRecord record, DateTime now) =>
       _transaction((tx) async {
-        await tx.delete('tracking_outbox',
+        final deleted = await tx.delete('tracking_outbox',
             where: 'id = ? AND owner_key = ?',
             whereArgs: [record.id, record.ownerKey]);
+        if (deleted == 0)
+          return; // Duplicate ACK cannot inflate recovered counts.
+        if (record.kind == 'location') {
+          final recorded =
+              DateTime.parse(record.payload['recordedAt'] as String)
+                  .millisecondsSinceEpoch;
+          await tx.rawUpdate(
+              'UPDATE tracking_communication SET acknowledged = acknowledged + 1 '
+              'WHERE owner_key = ? AND work_session = ? AND (recovered_at IS NULL OR ? <= recovered_at)',
+              [record.ownerKey, record.workSessionId, recorded]);
+        }
         if (record.kind == 'location') {
           await _ensureStatus(tx, record.ownerKey, record.workSessionId);
           final recorded =
@@ -319,6 +335,100 @@ class TrackingOutbox {
               ]);
         }
       });
+
+  /// This measures inability to reach our API, not the state of Internet.
+  /// Episodes and their summary event are committed with stable identifiers.
+  Future<void> beginCommunicationGap(TrackingContext context, DateTime now) =>
+      _transaction((tx) async {
+        final rows = await tx.query('tracking_communication',
+            where: 'owner_key = ? AND work_session = ?',
+            whereArgs: [context.ownerKey, context.workSessionId]);
+        if (rows.isNotEmpty) {
+          if (rows.single['recovered_at'] == null) return;
+          // A new failure after a confirmed receipt is a new episode, even if
+          // the older backlog has not finished. Never extend across recovery.
+          await _finishCommunication(tx, context, rows.single);
+        }
+        final id = const Uuid().v4();
+        await tx.insert('tracking_communication', {
+          'owner_key': context.ownerKey,
+          'work_session': context.workSessionId,
+          'id': id,
+          'started_at': now.millisecondsSinceEpoch,
+        });
+        await _insert(tx, context.ownerKey, 'event', {
+          'clientEventId': const Uuid().v5(_legacyNamespace, '$id:lost'),
+          '_authSessionId': context.authSessionId,
+          'workSessionId': context.workSessionId,
+          'eventType':
+              'internet_lost', // Compatible wire type; source disambiguates.
+          'internetAvailable': null,
+          'details':
+              'evidence_version=2;source=api_transport;episode=$id;cause=unknown',
+          'recordedAt': now.toUtc().toIso8601String(),
+        });
+      });
+
+  Future<void> recoverCommunication(
+          TrackingContext context, DateTime acceptedAt) =>
+      _transaction((tx) async {
+        await tx.rawUpdate(
+            'UPDATE tracking_communication SET recovered_at = coalesce(recovered_at, ?) '
+            'WHERE owner_key = ? AND work_session = ?',
+            [
+              acceptedAt.millisecondsSinceEpoch,
+              context.ownerKey,
+              context.workSessionId
+            ]);
+        final rows = await tx.query('tracking_communication',
+            where: 'owner_key = ? AND work_session = ?',
+            whereArgs: [context.ownerKey, context.workSessionId]);
+        if (rows.isEmpty) return;
+        final row = rows.single;
+        final waiting = Sqflite.firstIntValue(await tx.rawQuery(
+                "SELECT count(*) FROM tracking_outbox WHERE owner_key = ? AND work_session = ? "
+                "AND kind = 'location' AND state = 'pending' AND recorded_at <= ?",
+                [
+                  context.ownerKey,
+                  context.workSessionId,
+                  row['recovered_at']
+                ])) ??
+            0;
+        if (waiting == 0) await _finishCommunication(tx, context, row);
+      });
+
+  Future<void> _finishCommunication(DatabaseExecutor tx,
+      TrackingContext context, Map<String, Object?> row) async {
+    final ended = row['recovered_at'] as int?;
+    if (ended == null) return;
+    final start = row['started_at'] as int;
+    final id = row['id'] as String;
+    final count = row['acknowledged'] as int;
+    await _insert(tx, context.ownerKey, 'event', {
+      'clientEventId': const Uuid().v5(_legacyNamespace, '$id:recovered'),
+      '_authSessionId': context.authSessionId,
+      'workSessionId': context.workSessionId,
+      'eventType': 'internet_recovered',
+      'internetAvailable': null,
+      'details':
+          'evidence_version=2;source=api_transport;episode=$id;queued_location_count=$count',
+      'offlineLocationCount': count.clamp(0, 10000),
+      'offlineStartedAt':
+          DateTime.fromMillisecondsSinceEpoch(start, isUtc: true)
+              .toIso8601String(),
+      'offlineEndedAt': DateTime.fromMillisecondsSinceEpoch(
+              ended < start ? start : ended,
+              isUtc: true)
+          .toIso8601String(),
+      'recordedAt': DateTime.fromMillisecondsSinceEpoch(
+              ended < start ? start : ended,
+              isUtc: true)
+          .toIso8601String(),
+    });
+    await tx.delete('tracking_communication',
+        where: 'owner_key = ? AND work_session = ? AND id = ?',
+        whereArgs: [context.ownerKey, context.workSessionId, id]);
+  }
 
   Future<void> reject(OutboxRecord record, String reason) =>
       _transaction((tx) async {

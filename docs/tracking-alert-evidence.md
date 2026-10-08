@@ -1,0 +1,10 @@
+# Tracking alert evidence
+
+- GPS and permission are independent OS readings. A failed query is unknown. Android location-enabled false is confirmed only after a continuous observed minute, with a monotonic clock and no observation gaps above 25 seconds. The settings observer does not request coordinates or change the 30-second/5-minute cadence.
+- Published episodes have stable identifiers and are persisted atomically with their events, scoped to the captured work-session/owner. A brief toggle or an unobserved process pause does not prove a full disabled minute. Recovery keeps the original episode.
+- Permission downgrade is reported immediately from actual fine/background grants. The message reports configuration, not intent.
+- Android exit history is checked on next process start, limited to the recorded PID, app process and authorized work window. Only Android 34+ reason 10 is classified as user-requested. Older ambiguous codes, profile stops and missing records remain unknown; crash/update/permission-change process exits are technical. No code can send immediately from a force-stopped process.
+- Native local warning says pending synchronization. Only the server-side persistent alert triggers the administrative/courier notification; neither is a read receipt.
+- Transport timeouts never set InternetAvailable=false. Compatible internet_lost/internet_recovered wire types carry source=api_transport, a durable episode, first actual receipt and ACK count. An OS-reported missing active network is separate evidence. Successful API traffic is not proof of global Internet availability.
+- SQLite commits the recovery summary with a stable id only after bounded historical drain (or at the next distinct outage); restart and duplicate ACK do not invent counts. Data, authentication, branch and device ownership remain unchanged.
+- GPS/service observations require the app process to run; Android force-stop can prevent collection until a later launch. Physical-device tests are still required for vendor power-management behavior.
