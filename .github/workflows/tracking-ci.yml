@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: tracking-ci-${{ github.event.pull_request.number || github.ref }}
+  group: tracking-validation-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -22,6 +22,12 @@ jobs:
           persist-credentials: false
       - name: Verify Google Play distribution policy
         run: bash scripts/verify_play_only_distribution.sh
+      - name: Verify reviewed source tree
+        run: |
+          if git ls-files '.automation/*' | grep -q .; then
+            echo 'Temporary transfer files must not be merged.'
+            exit 1
+          fi
       - name: Install project Flutter
         shell: bash
         run: |
@@ -33,8 +39,8 @@ jobs:
         run: git diff --exit-code -- pubspec.lock
       - run: flutter analyze --no-fatal-infos
       - run: flutter test --reporter expanded
-      - name: Repeat native concurrency regression
+      - name: Repeat native concurrency and durable outbox regressions
         run: |
           for attempt in 1 2 3; do
-            flutter test test/session_mutex_test.dart --reporter expanded
+            flutter test test/session_mutex_test.dart test/tracking_outbox_test.dart --reporter expanded
           done

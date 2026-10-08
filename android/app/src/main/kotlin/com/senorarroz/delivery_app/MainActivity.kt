@@ -51,6 +51,13 @@ class TrackingDeviceStateReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val prefs = context.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
         if (!prefs.getBoolean("flutter.sa_native_tracking_active", false)) return
+        // Capture ownership with the event. A later login must never reassign it.
+        val tracking = try {
+            JSONObject(prefs.getString("flutter.sa_native_tracking_context", null) ?: return)
+        } catch (_: Exception) { return }
+        val now = System.currentTimeMillis()
+        if (now < tracking.optLong("startedAtMs", Long.MAX_VALUE) ||
+            now >= tracking.optLong("autoCloseAtMs", 0L)) return
 
         val event = when (intent.action) {
             Intent.ACTION_AIRPLANE_MODE_CHANGED -> if (
@@ -82,16 +89,16 @@ class TrackingDeviceStateReceiver : BroadcastReceiver() {
         val clientEventId = UUID.randomUUID().toString()
         val eventJson = JSONObject().apply {
             put("clientEventId", clientEventId)
+            put("workSessionId", tracking.getInt("workSessionId"))
+            put("_authSessionId", tracking.getString("authSessionId"))
+            put("_ownerKey", tracking.getString("ownerKey"))
             put("eventType", event.first)
             put("details", event.second)
             put("recordedAt", SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
                 timeZone = TimeZone.getTimeZone("UTC")
             }.format(Date()))
         }
-        val keyPrefix = "flutter.sa_native_device_event_"
-        val existingKeys = prefs.all.keys.filter { it.startsWith(keyPrefix) }.sorted()
-        val editor = prefs.edit()
-        existingKeys.take((existingKeys.size - 99).coerceAtLeast(0)).forEach(editor::remove)
-        editor.putString("$keyPrefix${System.currentTimeMillis()}_$clientEventId", eventJson.toString()).apply()
+        // Unique keys avoid lost updates between broadcasts and Dart imports.
+        prefs.edit().putString("flutter.sa_native_device_event_${now}_$clientEventId", eventJson.toString()).apply()
     }
 }
