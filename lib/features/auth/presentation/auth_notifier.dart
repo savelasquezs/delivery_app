@@ -547,6 +547,26 @@ class AuthNotifier extends StateNotifier<AuthState> {
     }
   }
 
+  /// No delivery may be started while Android tracking has not been
+  /// confirmed for the authenticated, active work session.
+  Future<bool> canBeginDelivery() async {
+    final session = state.workSession;
+    if (state.status != AuthStatus.authenticated ||
+        !state.trackingActive ||
+        state.trackingIssue != null ||
+        session == null ||
+        !session.isActive ||
+        !DateTime.now().toUtc().isBefore(session.autoCloseAt)) {
+      return false;
+    }
+    try {
+      return await _isTrackingRunning()
+          .timeout(const Duration(seconds: 2), onTimeout: () => false);
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<void> logout() async {
     _authGeneration++;
     _trackingRetryTimer?.cancel();
