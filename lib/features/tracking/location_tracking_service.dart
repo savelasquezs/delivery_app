@@ -52,6 +52,25 @@ TrackingHttpClient? _cachedTrackingClient;
 String? _cachedTrackingBaseUrl;
 TrackingContext? _cachedTrackingContext;
 
+/// Only stage names, elapsed times and exception types are logged. Never
+/// include JWTs, device identifiers, coordinates or customer details.
+Future<T> _traceTrackingPhase<T>(
+    String stage, Future<T> Function() action) async {
+  final watch = Stopwatch()..start();
+  debugPrint('TrackingStartup phase=$stage begin');
+  try {
+    final result = await action();
+    debugPrint(
+        'TrackingStartup phase=$stage ok elapsedMs=${watch.elapsedMilliseconds}');
+    return result;
+  } catch (error) {
+    debugPrint('TrackingStartup phase=$stage failed '
+        'elapsedMs=${watch.elapsedMilliseconds} type=${error.runtimeType}');
+    rethrow;
+  }
+}
+
+
 Future<void> _recordDeviceEvent(
   String eventType, {
   String? clientEventId,
@@ -100,8 +119,14 @@ Future<void> _migrateLegacyQueues(TrackingContext context) async {
   for (final source in sources.entries) {
     final raw = prefs.getString(source.key);
     if (raw == null) continue;
-    await _outbox.importLegacy(source.key, raw, source.value, context,
+    final complete = await _outbox.importLegacyBatch(
+        source.key, raw, source.value, context,
         rejected: source.key == _kRejectedQueue);
+    if (!complete) {
+      // One bounded batch per sync. A later tick will resume using the
+      // committed cursor. No historical point or preference is discarded.
+      break;
+    }
     // SQL receipt is committed before removing the old value. Never overwrite
     // another writer's new native event or a changed legacy queue.
     await prefs.reload();
@@ -357,7 +382,13 @@ class LocationTaskHandler extends TaskHandler {
     final context = await _active();
     if (context == null) return;
     await _outbox.note(context, heartbeat: true);
-    await _migrateLegacyQueues(context);
+    try {
+      await _migrateLegacyQueues(context);
+    } catch (error) {
+      // A damaged or oversized old queue must not prevent fresh captured
+      // positions from being uploaded while the history is investigated.
+      debugPrint('Tracking legacy import deferred: ${error.runtimeType}');
+    }
     final baseUrl = await FlutterForegroundTask.getData<String>(key: _kBaseUrl);
     if (baseUrl == null || !await _isCurrent(context)) return;
     final locations = await _outbox.pending(context);
@@ -637,8 +668,10 @@ class LocationTrackingService {
     if (!workSession.isActive || !context.activeAt(DateTime.now())) {
       throw const TrackingServiceException('La jornada ya no está activa.');
     }
-    await _outbox.activate(context);
-    await _migrateLegacyQueues(context);
+    await _traceTrackingPhase(
+        'activate_outbox', () => _outbox.activate(context));
+    // Legacy data belongs to the background synchronizer. Never process it
+    // here: this function is called while authentication is finishing.
     final nativePrefs = await SharedPreferences.getInstance();
     await nativePrefs.setString(
         'sa_native_tracking_context', jsonEncode(context.toJson()));
@@ -667,11 +700,14 @@ class LocationTrackingService {
     if (!resumeActive) {
       await FlutterForegroundTask.removeData(key: _kDeliveryRouteId);
     }
-    final result = await FlutterForegroundTask.startService(
-      serviceTypes: [ForegroundServiceTypes.location],
-      notificationTitle: 'Señor Arroz',
-      notificationText: 'Jornada activa — seguimiento liviano',
-      callback: locationTaskCallback,
+    final result = await _traceTrackingPhase(
+      'start_android_service',
+      () => FlutterForegroundTask.startService(
+        serviceTypes: [ForegroundServiceTypes.location],
+        notificationTitle: 'Señor Arroz',
+        notificationText: 'Jornada activa — seguimiento liviano',
+        callback: locationTaskCallback,
+      ),
     );
     if (result is ServiceRequestFailure) {
       throw TrackingServiceException(
@@ -688,11 +724,13 @@ class LocationTrackingService {
     );
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_kUnexpectedStopReportedSession);
-    if (resumeActive) {
-      await _setActiveDeliveryMode(routeId: previousRouteId);
-    } else {
-      await _setLightMode();
-    }
+    await _traceTrackingPhase('update_tracking_mode', () async {
+      if (resumeActive) {
+        await _setActiveDeliveryMode(routeId: previousRouteId);
+      } else {
+        await _setLightMode();
+      }
+    });
   }
 
   static Future<void> setLightMode() => _enqueue(_setLightMode);
