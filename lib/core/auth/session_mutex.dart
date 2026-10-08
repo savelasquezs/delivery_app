@@ -4,8 +4,29 @@ import 'dart:io';
 import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 
-/// A short SQLite CAS, not a Dart static/Completer, arbitrates different engines.
-/// No SQLite transaction or native worker is held while doing HTTP/secure I/O.
+/// SQLite busy_timeout is not uniformly honored by all native/FFI adapters.
+/// Retry only lock contention, never malformed SQL, corruption or I/O errors.
+Future<T> retrySqliteBusy<T>(Future<T> Function() operation,
+    {Duration timeout = const Duration(seconds: 5)}) async {
+  final watch = Stopwatch()..start();
+  while (true) {
+    try {
+      return await operation();
+    } on DatabaseException catch (error) {
+      final code = error.getResultCode();
+      final primaryCode = code == null ? null : code & 0xff;
+      final message = error.toString().toLowerCase();
+      final busy = primaryCode == 5 || primaryCode == 6 ||
+          (code == null && (message.contains('database is locked') ||
+              message.contains('database is busy')));
+      if (!busy || watch.elapsed >= timeout) rethrow;
+      await Future<void>.delayed(const Duration(milliseconds: 25));
+    }
+  }
+}
+
+/// Short SQLite CAS operations arbitrate different Flutter engines/isolate heaps.
+/// No database transaction is held during HTTP or encrypted credential I/O.
 class SessionMutex {
   static final shared = SessionMutex();
   final Future<Database> Function() open;
@@ -40,14 +61,19 @@ class SessionMutex {
 
   Future<Database> _initialize() async {
     final db = await open();
-    await db.execute('PRAGMA busy_timeout = 1000');
-    await db.execute('CREATE TABLE IF NOT EXISTS session_mutex ('
-        'name TEXT PRIMARY KEY, owner TEXT, expires_at INTEGER NOT NULL)');
-    await db.rawInsert(
-        'INSERT OR IGNORE INTO session_mutex '
-        '(name, owner, expires_at) VALUES (?, NULL, 0)',
-        ['auth']);
-    return db;
+    try {
+      await db.execute('PRAGMA busy_timeout = 1000');
+      await retrySqliteBusy(() => db.execute(
+          'CREATE TABLE IF NOT EXISTS session_mutex ('
+          'name TEXT PRIMARY KEY, owner TEXT, expires_at INTEGER NOT NULL)'));
+      await retrySqliteBusy(() => db.rawInsert(
+          'INSERT OR IGNORE INTO session_mutex '
+          '(name, owner, expires_at) VALUES (?, NULL, 0)', ['auth']));
+      return db;
+    } catch (_) {
+      await db.close();
+      rethrow;
+    }
   }
 
   Future<T> protect<T>(Future<T> Function(SessionLease lease) operation) async {
@@ -55,16 +81,19 @@ class SessionMutex {
     final owner = '$pid:${const Uuid().v4()}';
     final watch = Stopwatch()..start();
     while (true) {
-      final now = DateTime.now().millisecondsSinceEpoch;
-      final changed = await db.rawUpdate(
-        'UPDATE session_mutex SET owner = ?, expires_at = ? '
-        'WHERE name = ? AND (owner IS NULL OR expires_at <= ?)',
-        [owner, now + leaseDuration.inMilliseconds, 'auth', now],
-      );
-      if (changed == 1) break;
-      if (watch.elapsed >= waitTimeout) {
+      final remaining = waitTimeout - watch.elapsed;
+      if (remaining <= Duration.zero) {
         throw TimeoutException('Session coordination is busy');
       }
+      final changed = await retrySqliteBusy(() {
+        final now = DateTime.now().millisecondsSinceEpoch;
+        return db.rawUpdate(
+          'UPDATE session_mutex SET owner = ?, expires_at = ? '
+          'WHERE name = ? AND (owner IS NULL OR expires_at <= ?)',
+          [owner, now + leaseDuration.inMilliseconds, 'auth', now],
+        );
+      }, timeout: remaining);
+      if (changed == 1) break;
       await Future<void>.delayed(pollInterval);
     }
     final lease = SessionLease._(db, owner, leaseDuration);
@@ -76,11 +105,13 @@ class SessionMutex {
     } finally {
       heartbeat.cancel();
       lease._closed = true;
-      await db.rawUpdate(
-        'UPDATE session_mutex SET owner = NULL, expires_at = 0 '
-        'WHERE name = ? AND owner = ?',
-        ['auth', owner],
-      );
+      // Never mask a completed credential write with a cleanup exception.
+      // Expiry recovers the lock if the database becomes unavailable here.
+      try {
+        await retrySqliteBusy(() => db.rawUpdate(
+          'UPDATE session_mutex SET owner = NULL, expires_at = 0 '
+          'WHERE name = ? AND owner = ?', ['auth', owner]));
+      } on DatabaseException catch (_) {}
     }
   }
 }
@@ -97,11 +128,9 @@ class SessionLease {
 
   Future<void> ensureOwned() async {
     if (_closed || _lost) throw StateError('Session lease lost');
-    final rows = await _db.rawQuery(
-      'SELECT owner, expires_at FROM session_mutex WHERE name = ?',
-      ['auth'],
-    );
-    if (rows.isEmpty ||
+    final rows = await retrySqliteBusy(() => _db.rawQuery(
+      'SELECT owner, expires_at FROM session_mutex WHERE name = ?', ['auth']));
+    if (_closed || _lost || rows.isEmpty ||
         rows.single['owner'] != _owner ||
         (rows.single['expires_at'] as int) <=
             DateTime.now().millisecondsSinceEpoch) {
@@ -114,16 +143,18 @@ class SessionLease {
     if (_closed || _lost || _renewing) return;
     _renewing = true;
     try {
-      final now = DateTime.now().millisecondsSinceEpoch;
-      final changed = await _db.rawUpdate(
-        'UPDATE session_mutex SET expires_at = ? '
-        'WHERE name = ? AND owner = ? AND expires_at > ?',
-        [now + _duration.inMilliseconds, 'auth', _owner, now],
-      );
+      final changed = await retrySqliteBusy(() {
+        if (_closed) return Future<int>.value(0);
+        final now = DateTime.now().millisecondsSinceEpoch;
+        return _db.rawUpdate(
+          'UPDATE session_mutex SET expires_at = ? '
+          'WHERE name = ? AND owner = ? AND expires_at > ?',
+          [now + _duration.inMilliseconds, 'auth', _owner, now],
+        );
+      });
       if (changed != 1) _lost = true;
     } catch (_) {
-      _lost =
-          true; // Fail closed: never save credentials after losing ownership.
+      _lost = true;
     } finally {
       _renewing = false;
     }
