@@ -73,8 +73,7 @@ void main() {
     expect(userFacingErrorMessage(error), localStorageErrorMessage);
     expect(
         userFacingErrorMessage(DioException(
-          requestOptions: RequestOptions(path: '/login'),
-          error: error,
+          requestOptions: RequestOptions(path: '/login'), error: error,
         )),
         localStorageErrorMessage);
     expect(userFacingErrorMessage(error.toString(), fallback: 'Reintenta.'),
@@ -84,7 +83,7 @@ void main() {
   test('failed login reaches an error state even when cleanup also fails',
       () async {
     final storage = SecureStorage();
-    final client = DioClient(storage);
+    final client = DioClient(storage, DeliveryAppVersionInfoLoader());
     final repository = _FailedLoginRepository(client, storage);
     final sessions = _FailedCleanupWorkSessions(client, storage);
     final notifier = AuthNotifier(repository, sessions, client);
@@ -96,7 +95,7 @@ void main() {
     }
     expect(notifier.state.status, AuthStatus.unauthenticated);
     // The plugin is intentionally unavailable in this host test. Cleanup must
-    // still attempt all remaining steps and must not leave the loading spinner.
+    // attempt the remaining steps instead of leaving a loading spinner.
     await notifier.login('test@example.invalid', 'not-a-real-password');
     expect(sessions.cleanupAttempts, 1);
     expect(repository.cleanupAttempts, 1);

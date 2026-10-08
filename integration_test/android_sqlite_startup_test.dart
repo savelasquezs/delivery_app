@@ -62,7 +62,8 @@ void main() {
       (tester) async {
     final path = '${await getDatabasesPath()}/hotfix_outbox_probe.db';
     Database db = await openDatabase(path, singleInstance: false);
-    final at = DateTime.now().toUtc();
+    final at = DateTime.fromMillisecondsSinceEpoch(
+        DateTime.now().millisecondsSinceEpoch, isUtc: true);
     final context = TrackingContext(
       authSessionId: 'test-only-session',
       ownerKey: 'test-only-owner',
