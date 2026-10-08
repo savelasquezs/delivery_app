@@ -1,0 +1,46 @@
+name: Tracking validation
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tracking-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - name: Archive review sources
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import pathlib, subprocess, tarfile
+          paths = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
+          with tarfile.open('/tmp/tracking-review-source.tar.gz', 'w:gz') as archive:
+              for name in paths:
+                  p = pathlib.Path(name)
+                  if name and p.is_file() and (name.startswith(('lib/', 'test/', 'docs/', 'scripts/')) or name in ('pubspec.yaml', 'pubspec.lock', 'analysis_options.yaml', 'README.md', 'CHANGELOG.md', 'AGENTS.md', '.github/workflows/tracking-ci.yml')):
+                      archive.add(name, arcname=name)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tracking-review-source
+          path: /tmp/tracking-review-source.tar.gz
+          retention-days: 1
+      - name: Install project Flutter
+        shell: bash
+        run: |
+          git clone --depth=1 --branch 3.41.6 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/flutter/bin/flutter" --version
+      - run: flutter pub get
+      - run: flutter analyze --no-fatal-infos
+      - run: flutter test
