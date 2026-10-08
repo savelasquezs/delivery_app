@@ -12,11 +12,15 @@ import 'package:uuid/uuid.dart';
 import '../../core/storage/secure_storage.dart';
 import '../../core/auth/session_refresh.dart';
 import 'tracking_http_client.dart';
+import 'tracking_outbox.dart';
+import 'tracking_scheduler.dart';
+import 'work_session_models.dart';
 import '../../core/version/delivery_app_version.dart';
 import 'location_tracking_policy.dart';
 
 const _kAuthSessionId = 'sa_loc_auth_session_id';
 const _kRejectedQueue = 'sa_loc_rejected_queue';
+final _outbox = TrackingOutbox.shared;
 const _kAuthToken = 'sa_loc_auth_token';
 const _kBaseUrl = 'sa_loc_base_url';
 const _kVersionName = 'sa_delivery_app_version';
@@ -41,11 +45,11 @@ const _kTrackingExpectedActive = 'sa_loc_expected_active';
 const _kUnexpectedStopReportedSession = 'sa_loc_stop_reported_session';
 const _modeLight = 'light';
 const _modeActiveDelivery = 'active_delivery';
-const _modeOffline = 'offline';
 const _batteryLowThresholdPercent = 15;
 const _uuid = Uuid();
 TrackingHttpClient? _cachedTrackingClient;
 String? _cachedTrackingBaseUrl;
+TrackingContext? _cachedTrackingContext;
 
 Future<void> _recordDeviceEvent(
   String eventType, {
@@ -60,17 +64,12 @@ Future<void> _recordDeviceEvent(
   DateTime? offlineEndedAt,
   DateTime? recordedAt,
 }) async {
-  final token = await FlutterForegroundTask.getData<String>(key: _kAuthToken);
-  final baseUrl = await FlutterForegroundTask.getData<String>(key: _kBaseUrl);
-  final workSessionId =
-      await FlutterForegroundTask.getData<int>(key: _kWorkSessionId);
-  if (workSessionId == null) return;
-
-  final payload = <String, dynamic>{
-    '_authSessionId':
-        await FlutterForegroundTask.getData<String>(key: _kAuthSessionId),
+  final context = await _outbox.current();
+  if (context == null) return;
+  await _outbox.enqueue(context, 'event', {
+    '_authSessionId': context.authSessionId,
     'clientEventId': clientEventId ?? _uuid.v4(),
-    'workSessionId': workSessionId,
+    'workSessionId': context.workSessionId,
     'eventType': eventType,
     'batteryLevelPercent': batteryLevel,
     'internetAvailable': internetAvailable,
@@ -81,149 +80,89 @@ Future<void> _recordDeviceEvent(
     'offlineStartedAt': offlineStartedAt?.toUtc().toIso8601String(),
     'offlineEndedAt': offlineEndedAt?.toUtc().toIso8601String(),
     'recordedAt': (recordedAt ?? DateTime.now()).toUtc().toIso8601String(),
+  });
+}
+
+Future<void> _migrateLegacyQueues(TrackingContext context) async {
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.reload();
+  final sources = <String, String>{
+    _kOfflineQueue: 'location',
+    _kDeviceEventQueue: 'event',
+    _kNativeDeviceEventQueue: 'event',
+    _kRejectedQueue: 'location',
+    for (final key in prefs
+        .getKeys()
+        .where((k) => k.startsWith(_kNativeDeviceEventPrefix)))
+      key: 'event',
   };
-  if (token == null || baseUrl == null) {
-    await _enqueueDeviceEvent(payload);
-    return;
-  }
-
-  try {
-    await (await _trackingClient(baseUrl, token))
-        .post('/deliverymen/device-event', data: payload);
-  } on DioException catch (error) {
-    final updatePolicy = _updateRequiredPolicy(error);
-    if (updatePolicy != null) {
-      _notifyMainOfRequiredUpdate(updatePolicy);
-      await LocationTrackingService._stopTracking(
-        recordEvent: false,
-        discardPending: false,
-      );
-      return;
-    }
-    if (isTrackingSessionEnded(error)) {
-      await _stopForPayload(payload);
-      return;
-    }
-    if (_isPermanentClientErrorStatus(error.response?.statusCode)) {
-      await _quarantineRejected(payload, error.response?.statusCode);
-    } else {
-      await _enqueueDeviceEvent(payload);
-    }
-  } catch (_) {
-    await _enqueueDeviceEvent(payload);
+  for (final source in sources.entries) {
+    final raw = prefs.getString(source.key);
+    if (raw == null) continue;
+    await _outbox.importLegacy(source.key, raw, source.value, context,
+        rejected: source.key == _kRejectedQueue);
+    // SQL receipt is committed before removing the old value. Never overwrite
+    // another writer's new native event or a changed legacy queue.
+    await prefs.reload();
+    if (prefs.getString(source.key) == raw) await prefs.remove(source.key);
   }
 }
 
-Future<void> _drainNativeDeviceEvents() async {
-  final prefs = await SharedPreferences.getInstance();
-  await prefs.reload();
-  final pendingKeys = prefs
-      .getKeys()
-      .where((key) => key.startsWith(_kNativeDeviceEventPrefix))
-      .toList()
-    ..sort();
-  for (final key in pendingKeys) {
-    final encoded = prefs.getString(key);
-    if (encoded == null) continue;
-    final event = Map<String, dynamic>.from(jsonDecode(encoded) as Map);
-    await _recordDeviceEvent(
-      event['eventType']?.toString() ?? '',
-      clientEventId: event['clientEventId']?.toString(),
-      details: event['details']?.toString(),
-      recordedAt: DateTime.tryParse(event['recordedAt']?.toString() ?? ''),
-    );
-    await prefs.remove(key);
+Future<TrackingContext?> _ensureTrackingContext() async {
+  final existing = await _outbox.current();
+  if (existing != null) return existing;
+  // Upgrade/reboot of an existing, still-authorized work session needs no UI.
+  final storage = SecureStorage();
+  final auth = await storage.readSession();
+  final raw = await storage.getWorkSessionData();
+  final baseUrl = await FlutterForegroundTask.getData<String>(key: _kBaseUrl);
+  final workId = await FlutterForegroundTask.getData<int>(key: _kWorkSessionId);
+  final expected = await FlutterForegroundTask.getData<bool>(
+          key: _kTrackingExpectedActive) ??
+      false;
+  if (!expected || auth == null || raw == null || baseUrl == null) return null;
+  final session = DeliveryWorkSession.fromJson(
+      Map<String, dynamic>.from(jsonDecode(raw) as Map));
+  final oldAuth =
+      await FlutterForegroundTask.getData<String>(key: _kAuthSessionId);
+  final oldToken =
+      await FlutterForegroundTask.getData<String>(key: _kAuthToken);
+  if (session.id != workId ||
+      !session.isActive ||
+      !DateTime.now().isBefore(session.autoCloseAt) ||
+      (oldAuth != auth.id &&
+          !(oldAuth == null && oldToken == auth.accessToken))) return null;
+  final context = _contextFor(session, auth.id, baseUrl);
+  await _outbox.activate(context, onlyIfAbsent: true);
+  final current = await _outbox.current();
+  if (current != null && current.matches(context)) {
+    await FlutterForegroundTask.saveData(key: _kAuthSessionId, value: auth.id);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+        'sa_native_tracking_context', jsonEncode(context.toJson()));
   }
-
-  final legacyEncoded = prefs.getString(_kNativeDeviceEventQueue);
-  if (legacyEncoded == null) return;
-  final legacyQueue = jsonDecode(legacyEncoded) as List<dynamic>;
-  await prefs.remove(_kNativeDeviceEventQueue);
-  for (final item in legacyQueue) {
-    final event = Map<String, dynamic>.from(item as Map);
-    await _recordDeviceEvent(
-      event['eventType']?.toString() ?? '',
-      clientEventId: event['clientEventId']?.toString(),
-      details: event['details']?.toString(),
-      recordedAt: DateTime.tryParse(event['recordedAt']?.toString() ?? ''),
-    );
-  }
+  return current;
 }
 
-class _OfflineSyncResult {
-  final int count;
-  final DateTime? startedAt;
-  final DateTime? endedAt;
+TrackingContext _contextFor(
+        DeliveryWorkSession session, String authId, String baseUrl) =>
+    TrackingContext(
+        authSessionId: authId,
+        ownerKey: jsonEncode([
+          baseUrl,
+          session.deliverymanId,
+          session.branchId,
+          session.deviceInstallationId
+        ]),
+        workSessionId: session.id,
+        startedAt: session.startedAt,
+        autoCloseAt: session.autoCloseAt);
 
-  const _OfflineSyncResult(this.count, this.startedAt, this.endedAt);
-}
-
-Future<void> _enqueueDeviceEvent(Map<String, dynamic> payload) async {
-  final prefs = await SharedPreferences.getInstance();
-  await prefs.reload();
-  final encoded = prefs.getString(_kDeviceEventQueue);
-  final queue =
-      encoded == null ? <dynamic>[] : jsonDecode(encoded) as List<dynamic>;
-  queue.add(payload);
-  await prefs.setString(_kDeviceEventQueue, jsonEncode(queue));
-}
-
-Future<void> _flushDeviceEvents(String token, String baseUrl) async {
-  final prefs = await SharedPreferences.getInstance();
-  await prefs.reload();
-  final encoded = prefs.getString(_kDeviceEventQueue);
-  if (encoded == null) return;
-  final queue = jsonDecode(encoded) as List<dynamic>;
-  final remaining = <Map<String, dynamic>>[];
-  final dio = await _trackingClient(baseUrl, token);
-  var attempted = 0;
-  for (var index = 0; index < queue.length; index++) {
-    final payload = Map<String, dynamic>.from(queue[index] as Map);
-    if (!await _belongsToCurrentTracking(payload)) {
-      remaining.add(payload);
-      continue;
-    }
-    if (attempted >= 10) {
-      remaining.addAll(
-          queue.skip(index).map((e) => Map<String, dynamic>.from(e as Map)));
-      break;
-    }
-    attempted++;
-    payload['_authSessionId'] ??= dio.sessionId;
-    try {
-      await dio.post('/deliverymen/device-event', data: payload);
-    } on DioException catch (error) {
-      final updatePolicy = _updateRequiredPolicy(error);
-      if (updatePolicy != null) {
-        _notifyMainOfRequiredUpdate(updatePolicy);
-        await LocationTrackingService._stopTracking(
-          recordEvent: false,
-          discardPending: false,
-        );
-        return;
-      }
-      if (isTrackingSessionEnded(error)) {
-        await _stopForPayload(payload);
-        return;
-      }
-      if (_isPermanentClientErrorStatus(error.response?.statusCode)) {
-        await _quarantineRejected(payload, error.response?.statusCode);
-      } else {
-        remaining.addAll(
-            queue.skip(index).map((e) => Map<String, dynamic>.from(e as Map)));
-        break;
-      }
-    } catch (_) {
-      remaining.addAll(
-          queue.skip(index).map((e) => Map<String, dynamic>.from(e as Map)));
-      break;
-    }
-  }
-  if (remaining.isEmpty) {
-    await prefs.remove(_kDeviceEventQueue);
-  } else {
-    await prefs.setString(_kDeviceEventQueue, jsonEncode(remaining));
-  }
+Future<bool> _isCurrent(TrackingContext context) async {
+  final current = await _outbox.current();
+  return current != null &&
+      current.matches(context) &&
+      current.activeAt(DateTime.now());
 }
 
 Future<bool> _recordBooleanTransition({
@@ -274,87 +213,34 @@ Future<void> _recordBatteryLowTransition(int? batteryLevel) async {
   }
 }
 
-bool _isPermanentClientErrorStatus(int? status) =>
-    status == 400 || status == 422;
-
 Future<TrackingHttpClient> _trackingClient(
-    String baseUrl, String legacyToken) async {
-  var sessionId =
-      await FlutterForegroundTask.getData<String>(key: _kAuthSessionId);
-  // One-time migration after upgrading an already-running installation. Never
-  // infer ownership from a different token or attach old data to a new login.
-  if (sessionId == null) {
-    final session = await SecureStorage().readSession();
-    if (session != null && session.accessToken == legacyToken) {
-      sessionId = session.id;
-      await FlutterForegroundTask.saveData(
-          key: _kAuthSessionId, value: sessionId);
-    }
-  }
-  final expected = sessionId ?? 'unbound';
-  final workSession =
-      await FlutterForegroundTask.getData<int>(key: _kWorkSessionId);
-  if (_cachedTrackingClient?.sessionId == expected &&
-      _cachedTrackingClient?.workSessionId == workSession &&
-      _cachedTrackingBaseUrl == baseUrl) {
+    String baseUrl, TrackingContext context, int pointWorkSession) async {
+  if (_cachedTrackingClient?.sessionId == context.authSessionId &&
+      _cachedTrackingClient?.workSessionId == pointWorkSession &&
+      _cachedTrackingBaseUrl == baseUrl &&
+      _cachedTrackingContext?.matches(context) == true)
     return _cachedTrackingClient!;
-  }
   _cachedTrackingClient?.dio.close();
   _cachedTrackingClient?.auth.dio.close();
   _cachedTrackingBaseUrl = baseUrl;
+  _cachedTrackingContext = context;
   return _cachedTrackingClient = TrackingHttpClient(
       baseUrl: baseUrl,
-      sessionId: expected,
-      workSessionId: workSession,
+      sessionId: context.authSessionId,
+      workSessionId: pointWorkSession,
       versionHeaders: _trackingVersionHeaders,
-      isCurrent: () async {
-        final current =
-            await FlutterForegroundTask.getData<String>(key: _kAuthSessionId);
-        final currentWorkSession =
-            await FlutterForegroundTask.getData<int>(key: _kWorkSessionId);
-        final cutoff =
-            await FlutterForegroundTask.getData<String>(key: _kAutoCloseAt);
-        final until = DateTime.tryParse(cutoff ?? '');
-        return current == expected &&
-            currentWorkSession == workSession &&
-            until != null &&
-            DateTime.now().isBefore(until);
-      });
+      isCurrent: () => _isCurrent(context));
 }
 
-Future<bool> _belongsToCurrentTracking(Map<String, dynamic> payload) async {
-  final workSession =
-      await FlutterForegroundTask.getData<int>(key: _kWorkSessionId);
-  final authSession =
-      await FlutterForegroundTask.getData<String>(key: _kAuthSessionId);
-  return payload['workSessionId'] == workSession &&
-      (payload['_authSessionId'] == null ||
-          payload['_authSessionId'] == authSession);
-}
-
-Future<void> _stopForPayload(Map<String, dynamic> payload) async {
-  if (!await _belongsToCurrentTracking(payload)) return;
+Future<void> _stopForContext(TrackingContext context) async {
+  final current = await _outbox.current();
+  if (current == null || !current.matches(context)) return;
   await LocationTrackingService._stopTracking(
-      recordEvent: false, discardPending: false);
+      recordEvent: false, discardPending: false, expectedContext: context);
   FlutterForegroundTask.sendDataToMain({
     'type': 'tracking_session_ended',
-    'sessionId': payload['_authSessionId'],
+    'sessionId': context.authSessionId,
   });
-}
-
-Future<void> _quarantineRejected(
-    Map<String, dynamic> payload, int? status) async {
-  final prefs = await SharedPreferences.getInstance();
-  await prefs.reload();
-  final encoded = prefs.getString(_kRejectedQueue);
-  final rows =
-      encoded == null ? <dynamic>[] : jsonDecode(encoded) as List<dynamic>;
-  rows.add({
-    'payload': payload,
-    'status': status,
-    'rejectedAt': DateTime.now().toUtc().toIso8601String()
-  });
-  await prefs.setString(_kRejectedQueue, jsonEncode(rows));
 }
 
 Future<Map<String, String>> _trackingVersionHeaders() async => {
@@ -388,331 +274,220 @@ void locationTaskCallback() {
 }
 
 class LocationTaskHandler extends TaskHandler {
-  bool _sending = false;
+  late final TrackingScheduler _scheduler = TrackingScheduler(
+      capture: _capture,
+      synchronize: _synchronize,
+      onError: (error) =>
+          debugPrint('Tracking tick failed: ${error.runtimeType}'));
+  Timer? _syncTimer;
+  bool _destroyed = false;
 
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
-    debugPrint('LocationTaskHandler: started');
-    await _sendCurrentLocation();
+    _syncTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+      unawaited(_scheduler.syncNow());
+    });
+    _scheduler.tick();
   }
 
   @override
-  void onRepeatEvent(DateTime timestamp) {
-    if (_sending) return;
-    unawaited(_sendCurrentLocation());
-  }
+  void onRepeatEvent(DateTime timestamp) => _scheduler.tick();
 
   @override
   Future<void> onDestroy(DateTime timestamp, bool isTimeout) async {
-    debugPrint('LocationTaskHandler: destroyed (timeout=$isTimeout)');
+    _destroyed = true;
+    _syncTimer?.cancel();
+    _scheduler.close();
+    _cachedTrackingClient?.dio.close(force: true);
+    _cachedTrackingClient?.auth.dio.close(force: true);
+    _cachedTrackingClient = null;
   }
 
-  Future<void> _sendCurrentLocation() async {
-    _sending = true;
-    try {
-      final token =
-          await FlutterForegroundTask.getData<String>(key: _kAuthToken);
-      final baseUrl =
-          await FlutterForegroundTask.getData<String>(key: _kBaseUrl);
-      final autoCloseAtValue =
-          await FlutterForegroundTask.getData<String>(key: _kAutoCloseAt);
-      if (token == null || baseUrl == null || autoCloseAtValue == null) return;
+  Future<TrackingContext?> _active() async {
+    if (_destroyed) return null;
+    final context = await _ensureTrackingContext();
+    if (context == null) return null;
+    if (!context.activeAt(DateTime.now())) {
+      await LocationTrackingService._stopTracking(expectedContext: context);
+      return null;
+    }
+    return context;
+  }
 
-      final autoCloseAt = DateTime.tryParse(autoCloseAtValue)?.toUtc();
-      if (autoCloseAt == null ||
-          !DateTime.now().toUtc().isBefore(autoCloseAt)) {
-        final expectedActive = await FlutterForegroundTask.getData<bool>(
-              key: _kTrackingExpectedActive,
-            ) ??
-            false;
-        if (expectedActive) {
-          await _recordDeviceEvent(
-            'tracking_stopped',
-            details: 'automatic_cutoff',
-          );
-        }
-        await FlutterForegroundTask.saveData(
-          key: _kTrackingExpectedActive,
-          value: false,
-        );
-        final nativePrefs = await SharedPreferences.getInstance();
-        await nativePrefs.setBool(_kNativeTrackingActive, false);
-        await FlutterForegroundTask.stopService();
+  Future<void> _capture() async {
+    final context = await _active();
+    if (context == null) return;
+    try {
+      final permissions = await readLocationPermissionState();
+      await _recordBooleanTransition(
+          storageKey: _kGpsEnabled,
+          current: permissions.serviceEnabled,
+          negativeEvent: 'gps_disabled',
+          positiveEvent: 'gps_enabled',
+          gpsState: true);
+      await _recordBooleanTransition(
+          storageKey: _kLocationPermissionGranted,
+          current: permissions.canTrackInBackground,
+          negativeEvent: 'location_permission_revoked',
+          positiveEvent: 'location_permission_recovered',
+          permissionState: true,
+          details: permissions.eventDetails);
+      if (!permissions.canTrackInBackground) {
+        await _outbox.note(context,
+            setCaptureIssue: true, captureIssue: permissions.issueMessage);
         return;
       }
-
-      final permissionState = await readLocationPermissionState();
-      final gpsEnabled = permissionState.serviceEnabled;
-      await _recordBooleanTransition(
-        storageKey: _kGpsEnabled,
-        current: gpsEnabled,
-        negativeEvent: 'gps_disabled',
-        positiveEvent: 'gps_enabled',
-        gpsState: true,
-      );
-      if (!gpsEnabled) return;
-
-      final permissionGranted = permissionState.canTrackInBackground;
-      await _recordBooleanTransition(
-        storageKey: _kLocationPermissionGranted,
-        current: permissionGranted,
-        negativeEvent: 'location_permission_revoked',
-        positiveEvent: 'location_permission_recovered',
-        permissionState: true,
-        details: permissionState.eventDetails,
-      );
-      if (!permissionGranted) return;
-
-      final position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-          timeLimit: Duration(seconds: 10),
-        ),
-      );
-      final trackingMode =
+      final mode =
           await FlutterForegroundTask.getData<String>(key: _kTrackingMode) ??
               _modeLight;
-      final batteryLevel = await _readBatteryLevel();
-      await _recordBatteryLowTransition(batteryLevel);
+      final routeId =
+          await FlutterForegroundTask.getData<int>(key: _kDeliveryRouteId);
+      final position = await Geolocator.getCurrentPosition(
+          locationSettings: const LocationSettings(
+              accuracy: LocationAccuracy.high,
+              timeLimit: Duration(seconds: 10)));
+      if (_destroyed || !await _isCurrent(context)) return;
+      if (position.timestamp.isBefore(context.startedAt) ||
+          !position.timestamp.isBefore(context.autoCloseAt)) {
+        throw const FormatException('GPS fix outside work-session window');
+      }
+      int? battery;
+      try {
+        battery =
+            await Battery().batteryLevel.timeout(const Duration(seconds: 2));
+      } catch (_) {}
+      if (_destroyed || !await _isCurrent(context)) return;
       final payload = <String, dynamic>{
-        '_authSessionId':
-            await FlutterForegroundTask.getData<String>(key: _kAuthSessionId),
+        '_authSessionId': context.authSessionId,
         'clientPointId': _uuid.v4(),
-        'workSessionId':
-            await FlutterForegroundTask.getData<int>(key: _kWorkSessionId),
-        'deliveryRouteId':
-            await FlutterForegroundTask.getData<int>(key: _kDeliveryRouteId),
+        'workSessionId': context.workSessionId,
+        'deliveryRouteId': routeId,
         'latitude': position.latitude,
         'longitude': position.longitude,
         'accuracyMeters': validAccuracyMeters(position.accuracy),
         'headingDegrees': validHeadingDegrees(position.heading),
-        'batteryLevelPercent': batteryLevel,
-        'internetAvailable': true,
+        'batteryLevelPercent': battery,
+        'internetAvailable':
+            await FlutterForegroundTask.getData<bool>(key: _kInternetAvailable),
         'gpsEnabled': true,
-        'trackingMode': trackingMode,
+        'trackingMode': mode,
         'recordedAt': position.timestamp.toUtc().toIso8601String(),
       };
-
-      await _drainNativeDeviceEvents();
-      await _flushDeviceEvents(token, baseUrl);
-      final offlineSync = await _flushOfflineQueue(token, baseUrl);
-      await _postLocation(token, baseUrl, payload, offlineSync);
-    } catch (e) {
-      debugPrint('LocationTaskHandler: error sending location: $e');
-    } finally {
-      _sending = false;
+      // Persist first. No HTTP or backlog processing blocks this capture path.
+      await _outbox.enqueue(context, 'location', payload);
+      await _recordBatteryLowTransition(battery);
+      unawaited(_scheduler.syncNow());
+    } catch (error) {
+      await _outbox.note(context,
+          setCaptureIssue: true,
+          captureIssue: error is TimeoutException || error is FormatException
+              ? 'GPS sin una posición reciente. Reintentando.'
+              : 'No se pudo guardar u obtener la ubicación. Revisa el seguimiento.');
     }
   }
 
-  Future<void> _postLocation(
-    String token,
-    String baseUrl,
-    Map<String, dynamic> payload,
-    _OfflineSyncResult offlineSync,
-  ) async {
-    try {
-      if (!await _belongsToCurrentTracking(payload)) return;
-      final response = await (await _buildDio(baseUrl, token))
-          .post('/deliverymen/location', data: payload);
-      if (await _belongsToCurrentTracking(payload))
-        await _applyTrackingResult(response.data);
-      final recoveryReported = await _recordBooleanTransition(
-        storageKey: _kInternetAvailable,
-        current: true,
-        negativeEvent: 'internet_lost',
-        positiveEvent: 'internet_recovered',
-        internetState: true,
-        details: offlineSync.count > 0
-            ? 'queued_location_count=${offlineSync.count}'
-            : null,
-        offlineLocationCount: offlineSync.count > 0 ? offlineSync.count : null,
-        offlineStartedAt: offlineSync.startedAt,
-        offlineEndedAt: offlineSync.endedAt,
-      );
-      if (offlineSync.count > 0 && !recoveryReported) {
-        await _recordDeviceEvent(
-          'internet_recovered',
-          internetAvailable: true,
-          details: 'queued_location_count=${offlineSync.count}',
-          offlineLocationCount: offlineSync.count,
-          offlineStartedAt: offlineSync.startedAt,
-          offlineEndedAt: offlineSync.endedAt,
-        );
-      }
-    } on DioException catch (error) {
-      final status = error.response?.statusCode;
-      final updatePolicy = _updateRequiredPolicy(error);
-      if (updatePolicy != null) {
-        _notifyMainOfRequiredUpdate(updatePolicy);
-        await LocationTrackingService._stopTracking(
-          recordEvent: false,
-          discardPending: false,
-        );
-        return;
-      }
-      if (isTrackingSessionEnded(error)) {
-        await _stopForPayload(payload);
-        return;
-      }
-      final disposition = locationFailureDisposition(status);
-      if (disposition == LocationFailureDisposition.quarantinePoint) {
-        await _quarantineRejected(payload, status);
-        return;
-      }
-      if (isLocationTransportFailure(error)) {
-        await _recordBooleanTransition(
-          storageKey: _kInternetAvailable,
-          current: false,
-          negativeEvent: 'internet_lost',
-          positiveEvent: 'internet_recovered',
-          internetState: true,
-        );
-      }
-      await _enqueueOffline(
-        isLocationTransportFailure(error)
-            ? _asOfflinePayload(payload)
-            : payload,
-      );
-    } catch (_) {
-      await _recordBooleanTransition(
-        storageKey: _kInternetAvailable,
-        current: false,
-        negativeEvent: 'internet_lost',
-        positiveEvent: 'internet_recovered',
-        internetState: true,
-      );
-      await _enqueueOffline(_asOfflinePayload(payload));
-    }
-  }
-
-  Future<_OfflineSyncResult> _flushOfflineQueue(
-      String token, String baseUrl) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.reload();
-    final queueJson = prefs.getString(_kOfflineQueue);
-    if (queueJson == null) return const _OfflineSyncResult(0, null, null);
-
-    final queue = jsonDecode(queueJson) as List<dynamic>;
-    if (queue.isEmpty) return const _OfflineSyncResult(0, null, null);
-
-    final dio = await _buildDio(baseUrl, token);
-    final remaining = <Map<String, dynamic>>[];
-    var syncedCount = 0;
-    DateTime? syncedStartedAt;
-    DateTime? syncedEndedAt;
-    var attempted = 0;
-    for (var index = 0; index < queue.length; index++) {
-      final payload = Map<String, dynamic>.from(queue[index] as Map);
-      if (!await _belongsToCurrentTracking(payload)) {
-        remaining.add(payload);
-        continue;
-      }
-      if (attempted >= 10) {
-        remaining.addAll(
-            queue.skip(index).map((e) => Map<String, dynamic>.from(e as Map)));
-        break;
-      }
-      attempted++;
-      payload['_authSessionId'] ??= dio.sessionId;
+  Future<void> _synchronize() async {
+    final context = await _active();
+    if (context == null) return;
+    await _outbox.note(context, heartbeat: true);
+    await _migrateLegacyQueues(context);
+    final baseUrl = await FlutterForegroundTask.getData<String>(key: _kBaseUrl);
+    if (baseUrl == null || !await _isCurrent(context)) return;
+    final locations = await _outbox.pending(context);
+    // Small event passes cannot monopolize GPS upload; both share HTTP cooldown.
+    final records = [...locations, ...await _outbox.events(context, limit: 3)];
+    final watch = Stopwatch()..start();
+    for (final record in records) {
+      if (_destroyed ||
+          !await _isCurrent(context) ||
+          watch.elapsed > const Duration(seconds: 20)) break;
+      final payload = {
+        ...record.payload,
+        '_authSessionId': context.authSessionId
+      };
       try {
-        final response = await dio.post('/deliverymen/location', data: payload);
-        if (await _belongsToCurrentTracking(payload))
-          await _applyTrackingResult(response.data);
-        syncedCount++;
-        final recordedAt =
-            DateTime.tryParse(payload['recordedAt']?.toString() ?? '')?.toUtc();
-        if (recordedAt != null) {
-          if (syncedStartedAt == null || recordedAt.isBefore(syncedStartedAt)) {
-            syncedStartedAt = recordedAt;
+        final client =
+            await _trackingClient(baseUrl, context, record.workSessionId);
+        final response = await client.post<dynamic>(
+            record.kind == 'location'
+                ? '/deliverymen/location'
+                : '/deliverymen/device-event',
+            data: payload);
+        // Even after logout, acknowledge only this original owned row. Never
+        // replace a queue snapshot or attach an old reply to the new workday.
+        await _outbox.acknowledge(record, DateTime.now().toUtc());
+        if (_destroyed || !await _isCurrent(context)) break;
+        await _outbox.note(context, setUploadIssue: true);
+        if (record.kind == 'location' &&
+            record.workSessionId == context.workSessionId) {
+          final snapshot = await _outbox.snapshot(context);
+          final recordedAt =
+              DateTime.parse(record.payload['recordedAt'] as String);
+          if (snapshot.capturedAt == null ||
+              !recordedAt.isBefore(snapshot.capturedAt!)) {
+            await _applyTrackingResult(response.data, context);
           }
-          if (syncedEndedAt == null || recordedAt.isAfter(syncedEndedAt)) {
-            syncedEndedAt = recordedAt;
-          }
+          await _recordBooleanTransition(
+              storageKey: _kInternetAvailable,
+              current: true,
+              negativeEvent: 'internet_lost',
+              positiveEvent: 'internet_recovered',
+              internetState: true);
         }
       } on DioException catch (error) {
-        final status = error.response?.statusCode;
-        final updatePolicy = _updateRequiredPolicy(error);
-        if (updatePolicy != null) {
-          _notifyMainOfRequiredUpdate(updatePolicy);
+        final update = _updateRequiredPolicy(error);
+        if (update != null) {
+          _notifyMainOfRequiredUpdate(update);
           await LocationTrackingService._stopTracking(
-            recordEvent: false,
-            discardPending: false,
-          );
-          return _OfflineSyncResult(
-              syncedCount, syncedStartedAt, syncedEndedAt);
-        }
-        if (isTrackingSessionEnded(error)) {
-          await _stopForPayload(payload);
-          return _OfflineSyncResult(
-              syncedCount, syncedStartedAt, syncedEndedAt);
-        }
-        if (locationFailureDisposition(status) ==
-            LocationFailureDisposition.quarantinePoint) {
-          await _quarantineRejected(payload, status);
-        } else {
-          remaining.addAll(queue
-              .skip(index)
-              .map((e) => Map<String, dynamic>.from(e as Map)));
+              recordEvent: false, expectedContext: context);
           break;
         }
-      } catch (_) {
-        remaining.addAll(
-            queue.skip(index).map((e) => Map<String, dynamic>.from(e as Map)));
+        if (isTrackingSessionEnded(error)) {
+          await _outbox.note(context,
+              setUploadIssue: true, uploadIssue: 'Autenticación requerida');
+          await _stopForContext(context);
+          break;
+        }
+        final status = error.response?.statusCode;
+        if (status == 400 || status == 422) {
+          await _outbox.reject(record, 'http_$status');
+          continue;
+        }
+        final issue = status == 401 || error.error is SessionRefreshUnavailable
+            ? 'Renovación de sesión pendiente. Reintentando.'
+            : status == 429
+                ? 'Servidor ocupado. Envíos pausados temporalmente.'
+                : isLocationTransportFailure(error)
+                    ? 'Sin comunicación con el servidor. Ubicaciones guardadas.'
+                    : error.error is TrackingDeferred
+                        ? null
+                        : 'No se pudo sincronizar. Ubicaciones guardadas.';
+        if (issue != null)
+          await _outbox.note(context, setUploadIssue: true, uploadIssue: issue);
+        if (isLocationTransportFailure(error)) {
+          await _recordBooleanTransition(
+              storageKey: _kInternetAvailable,
+              current: false,
+              negativeEvent: 'internet_lost',
+              positiveEvent: 'internet_recovered',
+              internetState: true);
+        }
         break;
       }
+      await Future<void>.delayed(const Duration(milliseconds: 250));
     }
-
-    if (remaining.isEmpty) {
-      await prefs.remove(_kOfflineQueue);
-    } else {
-      await prefs.setString(_kOfflineQueue, jsonEncode(remaining));
-    }
-    return _OfflineSyncResult(syncedCount, syncedStartedAt, syncedEndedAt);
   }
 
-  Future<void> _applyTrackingResult(dynamic data) async {
-    if (data is! Map) return;
-    final continueActive = data['continueActiveTracking'] == true;
-    final routeIdValue = data['deliveryRouteId'];
-    final routeId = routeIdValue is int
-        ? routeIdValue
-        : int.tryParse(routeIdValue?.toString() ?? '');
-    if (continueActive && routeId != null) {
+  Future<void> _applyTrackingResult(
+      dynamic data, TrackingContext context) async {
+    if (data is! Map || !await _isCurrent(context)) return;
+    final routeId = int.tryParse(data['deliveryRouteId']?.toString() ?? '');
+    if (data['continueActiveTracking'] == true && routeId != null) {
       await LocationTrackingService.setActiveDeliveryMode(routeId: routeId);
     } else {
       await LocationTrackingService.setLightMode();
     }
   }
-
-  Future<void> _enqueueOffline(Map<String, dynamic> payload) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.reload();
-    final queueJson = prefs.getString(_kOfflineQueue);
-    final queue = queueJson != null
-        ? jsonDecode(queueJson) as List<dynamic>
-        : <dynamic>[];
-    // Do not silently discard a location. The queue is drained before every
-    // new point is posted and every item remains until the API acknowledges it.
-    queue.add(payload);
-    await prefs.setString(_kOfflineQueue, jsonEncode(queue));
-  }
-
-  Map<String, dynamic> _asOfflinePayload(Map<String, dynamic> payload) => {
-        ...payload,
-        'internetAvailable': false,
-        'trackingMode': _modeOffline,
-      };
-
-  Future<int?> _readBatteryLevel() async {
-    try {
-      return await Battery().batteryLevel;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  Future<TrackingHttpClient> _buildDio(String baseUrl, String token) =>
-      _trackingClient(baseUrl, token);
 }
 
 class LocationTrackingService {
@@ -803,39 +578,31 @@ class LocationTrackingService {
   static Future<void> startTracking({
     required String authToken,
     required String baseUrl,
-    required int workSessionId,
-    required DateTime autoCloseAtUtc,
-    required int lightIntervalSeconds,
-    required int activeIntervalSeconds,
+    required DeliveryWorkSession workSession,
     required String versionName,
     required String buildNumber,
     required String packageName,
   }) =>
-      _enqueue(
-        () => _startTracking(
+      _enqueue(() => _startTracking(
           authToken: authToken,
           baseUrl: baseUrl,
-          workSessionId: workSessionId,
-          autoCloseAtUtc: autoCloseAtUtc,
-          lightIntervalSeconds: lightIntervalSeconds,
-          activeIntervalSeconds: activeIntervalSeconds,
+          workSession: workSession,
           versionName: versionName,
           buildNumber: buildNumber,
-          packageName: packageName,
-        ),
-      );
+          packageName: packageName));
 
   static Future<void> _startTracking({
     required String authToken,
     required String baseUrl,
-    required int workSessionId,
-    required DateTime autoCloseAtUtc,
-    required int lightIntervalSeconds,
-    required int activeIntervalSeconds,
+    required DeliveryWorkSession workSession,
     required String versionName,
     required String buildNumber,
     required String packageName,
   }) async {
+    final workSessionId = workSession.id;
+    final autoCloseAtUtc = workSession.autoCloseAt;
+    final lightIntervalSeconds = workSession.tracking.lightIntervalSeconds;
+    final activeIntervalSeconds = workSession.tracking.activeIntervalSeconds;
     if (!_initialized) initialize();
 
     final wasExpectedActive = await FlutterForegroundTask.getData<bool>(
@@ -899,8 +666,20 @@ class LocationTrackingService {
       key: _kActiveIntervalSeconds,
       value: activeIntervalSeconds,
     );
-    await _drainNativeDeviceEvents();
+    await FlutterForegroundTask.saveData(
+        key: _kTrackingMode,
+        value: resumeActive ? _modeActiveDelivery : _modeLight);
+    if (!resumeActive)
+      await FlutterForegroundTask.removeData(key: _kDeliveryRouteId);
+    final context = _contextFor(workSession, authSession.id, baseUrl);
+    if (!workSession.isActive || !context.activeAt(DateTime.now())) {
+      throw const TrackingServiceException('La jornada ya no está activa.');
+    }
+    await _outbox.activate(context);
+    await _migrateLegacyQueues(context);
     final nativePrefs = await SharedPreferences.getInstance();
+    await nativePrefs.setString(
+        'sa_native_tracking_context', jsonEncode(context.toJson()));
     await nativePrefs.setBool(_kNativeTrackingActive, true);
 
     if (wasRunning) {
@@ -1001,6 +780,9 @@ class LocationTrackingService {
     }
     await FlutterForegroundTask.saveData(key: _kTrackingMode, value: mode);
     final safeInterval = intervalSeconds.clamp(1, 86400).toInt();
+    final context = await _outbox.current();
+    if (context != null)
+      await _outbox.note(context, intervalSeconds: safeInterval);
     final result = await FlutterForegroundTask.updateService(
       foregroundTaskOptions: _foregroundTaskOptions(safeInterval * 1000),
       notificationText: notificationText,
@@ -1026,7 +808,11 @@ class LocationTrackingService {
   static Future<void> _stopTracking({
     bool recordEvent = true,
     bool discardPending = false,
+    TrackingContext? expectedContext,
   }) async {
+    final current = await _outbox.current();
+    if (expectedContext != null &&
+        (current == null || !current.matches(expectedContext))) return;
     final expectedActive = await FlutterForegroundTask.getData<bool>(
           key: _kTrackingExpectedActive,
         ) ??
@@ -1038,8 +824,10 @@ class LocationTrackingService {
       key: _kTrackingExpectedActive,
       value: false,
     );
+    if (current != null && !await _outbox.deactivate(current)) return;
     final nativePrefs = await SharedPreferences.getInstance();
     await nativePrefs.setBool(_kNativeTrackingActive, false);
+    await nativePrefs.remove('sa_native_tracking_context');
 
     if (await FlutterForegroundTask.isRunningService) {
       final result = await FlutterForegroundTask.stopService();
@@ -1069,10 +857,8 @@ class LocationTrackingService {
     await FlutterForegroundTask.removeData(key: _kInternetAvailable);
     await FlutterForegroundTask.removeData(key: _kBatteryLowReported);
     final prefs = await SharedPreferences.getInstance();
-    if (discardPending) {
-      await prefs.remove(_kOfflineQueue);
-      await prefs.remove(_kDeviceEventQueue);
-    }
+    // A normal stop/update/logout never deletes unacknowledged coordinates.
+    // The legacy argument is retained for existing call sites only.
     await prefs.remove(_kUnexpectedStopReportedSession);
   }
 
@@ -1083,6 +869,15 @@ class LocationTrackingService {
 
   static Future<void> updateAutoCloseAt(DateTime autoCloseAtUtc) async {
     final cutoff = autoCloseAtUtc.toUtc();
+    final context = await _outbox.current();
+    if (context != null) {
+      if (!await _outbox.updateCutoff(context, cutoff)) return;
+      final updated = await _outbox.current();
+      final prefs = await SharedPreferences.getInstance();
+      if (updated != null)
+        await prefs.setString(
+            'sa_native_tracking_context', jsonEncode(updated.toJson()));
+    }
     await FlutterForegroundTask.saveData(
       key: _kAutoCloseAt,
       value: cutoff.toIso8601String(),

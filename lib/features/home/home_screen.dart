@@ -26,6 +26,7 @@ import '../profile/data/profile_image_url.dart';
 import '../realtime/order_hub_event.dart';
 import '../realtime/order_hub_service.dart';
 import 'home_resume_policy.dart';
+import '../tracking/tracking_status_provider.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -491,7 +492,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   }
 }
 
-class _TrackingStatusBanner extends StatelessWidget {
+class _TrackingStatusBanner extends ConsumerWidget {
   const _TrackingStatusBanner({
     required this.authState,
     required this.onOpenSettings,
@@ -501,15 +502,24 @@ class _TrackingStatusBanner extends StatelessWidget {
   final VoidCallback onOpenSettings;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final session = authState.workSession;
     if (session == null) return const SizedBox.shrink();
-    final tracking =
-        authState.trackingActive && authState.trackingIssue == null;
-    final issue = authState.trackingIssue;
-    final closeTime = session.tracking.autoCloseTime.length >= 5
-        ? session.tracking.autoCloseTime.substring(0, 5)
-        : session.tracking.autoCloseTime;
+    final snapshot =
+        ref.watch(trackingSnapshotProvider(session.id)).asData?.value;
+    final tracking = session.isActive &&
+        DateTime.now().isBefore(session.autoCloseAt) &&
+        snapshot?.healthyAt(DateTime.now()) == true;
+    final issue = snapshot == null
+        ? authState.trackingIssue
+        : snapshot.captureIssue ?? snapshot.uploadIssue;
+    final settingsIssue = issue != null &&
+        (issue.contains('GPS') ||
+            issue.contains('permiso') ||
+            issue.contains('precisa'));
+    final label = issue ??
+        snapshot?.labelAt(DateTime.now()) ??
+        'Comprobando el último envío de ubicación';
     final color = tracking ? AppColors.success : AppColors.warning;
 
     return Container(
@@ -527,31 +537,13 @@ class _TrackingStatusBanner extends StatelessWidget {
             color: color,
           ),
           const SizedBox(width: AppTheme.spacingXs),
-          if (issue != null)
-            Expanded(
-              child: Text(
-                issue,
-                style: TextStyle(
-                  color: color,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          if (issue == null)
-            Expanded(
-              child: Text(
-                tracking
-                    ? 'Ubicación monitoreada · cierre $closeTime (Colombia)'
-                    : 'Jornada activa · revisa el GPS y los permisos de ubicación',
-                style: TextStyle(
-                  color: color,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          if (issue != null)
+          Expanded(
+              child: Text(label,
+                  style: TextStyle(
+                      color: color,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600))),
+          if (settingsIssue)
             SizedBox(
               width: 112,
               child: TextButton(

@@ -20,3 +20,17 @@ Run `flutter pub get`, `flutter analyze --no-fatal-infos`, and `flutter test`. A
 Device acceptance still requires an Android phone: expire a token with the screen locked; test 401/429/503, airplane mode, service restart and auto-close. Verify actual accepted timestamps, not merely a running foreground notification.
 
 `main` automatically publishes to the existing **internal** Play track. PR validation runs before merge.
+
+# Delivery 2 — durable capture and observable synchronization
+
+- GPS capture and upload have separate guards. Capture persists a UUID-tagged point before doing any network work. The foreground service retains the server-configured GPS interval and runs a separate 15-second synchronization tick. GPS/permission failures do not prevent uploading already captured authorized history.
+- Locations and device events use an SQLite outbox. ACK removes only the acknowledged ID in a short transaction; captures cannot be overwritten by a rewritten JSON queue. Retry keeps the original UUID and timestamp. The server's existing duplicate-ID protection covers a crash after remote acceptance but before local ACK.
+- Ownership is recorded as API + deliveryman + branch + installation, using the server-issued work-session DTO. A later login of the same owner can recover owned history; another owner cannot. Authentication generations still guard in-flight responses. Unverifiable legacy records are preserved in diagnostic quarantine, never attributed to a different driver.
+- Legacy import and an import receipt commit together. Preference removal follows that commit. Re-running import after a crash or an ACK is idempotent. Android events now record their original work-session and owner metadata and stop at the known workday cutoff.
+- Each pass is bounded (up to ten locations, three events, a 20-second loop budget and per-request deadline). The most recent current-session point is sent first; historical points then backfill in capture order. Deploy the paired API freshness guard before this version so replayed history cannot trigger live geofences/route completion. Only a recent current-session response may adjust the live tracking mode. The admin's existing recordedAt guard ignores older marker updates. The paired server guard preserves historical records and notifications but limits live route effects to the newest non-stale position.
+- The home banner reads confirmed timestamps, heartbeat, pending count and GPS/upload issues from local SQLite, not an HTTP poll. It does not display a healthy state merely because the notification is running. Successful point timestamps never move backwards when historical ACKs arrive.
+- Logout/update/automatic cutoff stop capture without deleting pending rows. SQLite and encrypted auth data remain in the application sandbox. Uninstall/clear-data still removes local history; do not recommend either as a troubleshooting step before pending records are recovered.
+
+## Additional regression tests
+
+Outbox tests cover concurrent capture vs ACK, freshness reservations, old ACK ordering, cross-owner isolation, reconnect after login, stale context commands, idempotent migration, malformed/unbound records, rejection quarantine and database reopen. Scheduler tests prove upload latency and GPS exceptions do not block each other. Physical Android verification (background permissions, OEM battery restrictions, reboot, Play update, cutoff and realistic workday) remains required before declaring the incident resolved for every phone.

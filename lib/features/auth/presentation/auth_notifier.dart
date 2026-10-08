@@ -366,6 +366,13 @@ class AuthNotifier extends StateNotifier<AuthState> {
     }
 
     final session = await _workSessions.startOrResume();
+    final owner = await _repository.getStoredUser();
+    if (owner == null ||
+        owner.id != session.deliverymanId ||
+        (owner.branchId != null && owner.branchId != session.branchId)) {
+      throw const TrackingServiceException(
+          'No se pudo verificar el propietario de la jornada.');
+    }
     final token = await _repository.getStoredAccessToken();
     if (token == null) {
       throw StateError(
@@ -378,10 +385,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
       await LocationTrackingService.startTracking(
         authToken: token,
         baseUrl: ApiConstants.baseUrl,
-        workSessionId: session.id,
-        autoCloseAtUtc: session.autoCloseAt,
-        lightIntervalSeconds: session.tracking.lightIntervalSeconds,
-        activeIntervalSeconds: session.tracking.activeIntervalSeconds,
+        workSession: session,
         versionName: versionHeaders[deliveryAppVersionHeader]!,
         buildNumber: versionHeaders[deliveryAppBuildHeader]!,
         packageName: versionHeaders[deliveryAppPackageHeader]!,
