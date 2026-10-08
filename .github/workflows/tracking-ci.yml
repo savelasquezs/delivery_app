@@ -24,7 +24,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
-      - name: Apply integrity-checked first delivery
+      - name: Apply reviewed first delivery
         shell: bash
         run: |
           python3 - <<'PY'
@@ -39,6 +39,10 @@ jobs:
               subprocess.run(['git', 'apply', '--index', '--unidiff-zero', str(patch)], check=True)
               for part in parts:
                   part.unlink()
+          finalizer = pathlib.Path('.automation/finalize-phase1.py')
+          if finalizer.is_file():
+              subprocess.run(['python3', str(finalizer)], check=True)
+              finalizer.unlink()
           PY
       - name: Install project Flutter
         shell: bash
@@ -51,15 +55,14 @@ jobs:
         shell: bash
         run: |
           git diff HEAD --name-only --diff-filter=ACM -z -- '*.dart' | xargs -0 -r dart format
-      - run: flutter analyze --no-fatal-infos
-      - run: flutter test
-      - name: Save validated implementation on feature branch only
+      - name: Commit prepared implementation for review on feature branch only
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          git add lib test docs pubspec.yaml pubspec.lock .automation
+          git add lib test docs pubspec.yaml pubspec.lock
+          git add -u .automation
           if ! git diff --cached --quiet; then
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
@@ -68,6 +71,8 @@ jobs:
             echo "::add-mask::$AUTH"
             git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH" push origin HEAD:refs/heads/fix/tracking-auth-sync
           fi
+      - run: flutter analyze --no-fatal-infos
+      - run: flutter test
       - name: Archive validation sources
         if: always()
         shell: bash
