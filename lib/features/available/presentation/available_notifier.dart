@@ -133,7 +133,8 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
     try {
       final orders = await _repository.getAvailableOrders(branchId: branchId);
       if (!mounted) return;
-      if (readRevision != _ordersRevision) {
+      if (readRevision != _ordersRevision ||
+          _reloadAvailableAfterInFlight) {
         if (state.isLoading) state = state.copyWith(isLoading: false);
         return; // A newer SignalR/local change must never be overwritten.
       }
@@ -288,6 +289,12 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
     try {
       final plan = await _routingRepository.getPlan();
       if (!mounted) return;
+      if (_reloadRoutingAfterInFlight) {
+        if (state.isLoadingRouting) {
+          state = state.copyWith(isLoadingRouting: false);
+        }
+        return;
+      }
       state = state.copyWith(
         routingPlan: plan,
         isLoadingRouting: false,

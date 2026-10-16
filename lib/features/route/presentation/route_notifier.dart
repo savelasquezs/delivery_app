@@ -94,7 +94,7 @@ class RouteNotifier extends StateNotifier<RouteState> {
     try {
       final result = await _fetchOrders();
       if (!mounted) return;
-      if (readRevision != _ordersRevision) {
+      if (readRevision != _ordersRevision || _reloadAfterInFlight) {
         if (state.isLoading) state = state.copyWith(isLoading: false);
         return; // A newer local/SignalR mutation wins over stale HTTP data.
       }
