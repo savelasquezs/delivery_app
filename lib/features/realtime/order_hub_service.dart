@@ -131,10 +131,7 @@ class OrderHubService {
     for (final event in [
       'OrderReady',
       'OrderAssigned',
-      'OrderAssignedToDelivery',
       'OrderModified',
-      'OrderStatusChanged',
-      'OrderCancelled',
       'DeliveryRoutingPlanChanged',
       'RouteProposalClaimed',
     ]) {

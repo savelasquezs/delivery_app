@@ -43,6 +43,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   bool _signalRListenersAttached = false;
   Future<void>? _resumeInFlight;
   Future<void>? _hubConnectInFlight;
+  Future<void>? _catchUpInFlight;
+  Timer? _hubRetryTimer;
+  int _hubRetryAttempts = 0;
+  bool _connectedOnce = false;
+  bool _missedHubEvents = false;
 
   static const _screens = [
     AvailableScreen(),
@@ -114,6 +119,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     }
     await _connectSignalR();
     if (!mounted) return;
+    final catchUp = _catchUpInFlight;
+    if (catchUp != null) {
+      await catchUp;
+      return;
+    }
     switch (homeResumeRefreshForTab(_currentIndex)) {
       case HomeResumeRefresh.available:
         await ref
@@ -178,7 +188,56 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   }
 
   void _onHubStatusChange(HubConnectionStatus status) {
-    if (mounted) setState(() => _hubStatus = status);
+    if (!mounted) return;
+    if (_hubStatus != status) setState(() => _hubStatus = status);
+
+    if (status == HubConnectionStatus.connected) {
+      _hubRetryTimer?.cancel();
+      _hubRetryTimer = null;
+      _hubRetryAttempts = 0;
+      if (_connectedOnce && _missedHubEvents) {
+        _missedHubEvents = false;
+        unawaited(_catchUpAfterReconnect());
+      }
+      _connectedOnce = true;
+    } else {
+      if (_connectedOnce) _missedHubEvents = true;
+      if (status == HubConnectionStatus.disconnected ||
+          status == HubConnectionStatus.error) {
+        _scheduleHubRetry();
+      }
+    }
+  }
+
+  void _scheduleHubRetry() {
+    if (_hubRetryTimer?.isActive == true || !mounted) return;
+    final auth = ref.read(authNotifierProvider);
+    if (!shouldConnectOrderHub(
+      authenticated: auth.status == AuthStatus.authenticated,
+      workSession: auth.workSession,
+    )) return;
+    final delay = [5, 10, 20, 40, 60][_hubRetryAttempts.clamp(0, 4)];
+    if (_hubRetryAttempts < 4) _hubRetryAttempts++;
+    _hubRetryTimer = Timer(Duration(seconds: delay), () {
+      _hubRetryTimer = null;
+      if (mounted) unawaited(_connectSignalR());
+    });
+  }
+
+  Future<void> _catchUpAfterReconnect() {
+    final current = _catchUpInFlight;
+    if (current != null) return current;
+    final operation = Future.wait([
+      ref.read(availableNotifierProvider.notifier)
+          .load(silently: true, ensureFresh: true),
+      ref.read(availableNotifierProvider.notifier)
+          .loadRouting(silently: true, ensureFresh: true),
+      ref.read(routeNotifierProvider.notifier).load(silently: true),
+    ]).then((_) {});
+    _catchUpInFlight = operation;
+    return operation.whenComplete(() {
+      if (identical(_catchUpInFlight, operation)) _catchUpInFlight = null;
+    });
   }
 
   void _onHubEvent(String event, List<Object?>? args) {
@@ -192,7 +251,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     final kind = classifyOrderHubEvent(event);
 
     if (kind == OrderHubEventKind.routing) {
-      await available.loadRouting(silently: true);
+      await available.loadRouting(silently: true, ensureFresh: true);
       return;
     }
     if (kind == OrderHubEventKind.ignored) return;
@@ -201,16 +260,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     if (order == null) return;
 
     if (kind == OrderHubEventKind.ready) {
-      await Future.wait([
-        available.load(silently: true),
-        available.loadRouting(silently: true),
-      ]);
+      await available.load(silently: true, ensureFresh: true);
       return;
     }
 
     if (kind == OrderHubEventKind.assigned) {
-      available.removeOrder(order.id);
-      unawaited(available.loadRouting(silently: true));
+      available.removeOrders([order.id]);
     }
 
     final change = await ref
@@ -258,9 +313,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       if (!mounted) return;
       switch (index) {
         case 0:
-          ref.read(availableNotifierProvider.notifier).loadAll(silently: true);
-          break;
         case 1:
+          // Live notifiers are kept current by SignalR; no request on tab switch.
           break;
         case 2:
           ref.read(historyNotifierProvider.notifier).load();
@@ -275,6 +329,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _hubRetryTimer?.cancel();
     if (_signalRListenersAttached && _hubService != null) {
       _hubService!.removeStatusListener(_onHubStatusChange);
       _hubService!.removeEventListener(_onHubEvent);

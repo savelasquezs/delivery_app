@@ -78,6 +78,9 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
   Future<void>? _availableLoadInFlight;
   Future<void>? _preparationLoadInFlight;
   Future<void>? _routingLoadInFlight;
+  int _ordersRevision = 0;
+  bool _reloadAvailableAfterInFlight = false;
+  bool _reloadRoutingAfterInFlight = false;
 
   AvailableNotifier(
     this._repository,
@@ -91,10 +94,17 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
   })  : _canBeginDelivery = canBeginDelivery,
         super(const AvailableState());
 
-  Future<void> load({int? branchId, bool silently = false}) {
+  Future<void> load({
+    int? branchId,
+    bool silently = false,
+    bool ensureFresh = false,
+  }) {
     final current = _availableLoadInFlight;
-    if (current != null) return current;
-    final operation = _load(branchId: branchId, silently: silently);
+    if (current != null) {
+      if (ensureFresh) _reloadAvailableAfterInFlight = true;
+      return current;
+    }
+    final operation = _loadUntilFresh(branchId: branchId, silently: silently);
     _availableLoadInFlight = operation;
     return operation.whenComplete(() {
       if (identical(_availableLoadInFlight, operation)) {
@@ -103,7 +113,19 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
     });
   }
 
+  Future<void> _loadUntilFresh({
+    int? branchId,
+    required bool silently,
+  }) async {
+    do {
+      _reloadAvailableAfterInFlight = false;
+      await _load(branchId: branchId, silently: silently);
+      silently = true;
+    } while (_reloadAvailableAfterInFlight && mounted);
+  }
+
   Future<void> _load({int? branchId, required bool silently}) async {
+    final readRevision = _ordersRevision;
     if (!mounted) return;
     if (!silently) {
       state = state.copyWith(isLoading: true, clearError: true);
@@ -111,6 +133,10 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
     try {
       final orders = await _repository.getAvailableOrders(branchId: branchId);
       if (!mounted) return;
+      if (readRevision != _ordersRevision) {
+        if (state.isLoading) state = state.copyWith(isLoading: false);
+        return; // A newer SignalR/local change must never be overwritten.
+      }
       final unchanged = routeOrdersHaveSameContent(state.orders, orders);
       if (!unchanged || state.isLoading || state.error != null) {
         state = state.copyWith(
@@ -225,16 +251,30 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
     ]);
   }
 
-  Future<void> loadRouting({bool silently = false}) {
+  Future<void> loadRouting({
+    bool silently = false,
+    bool ensureFresh = false,
+  }) {
     final current = _routingLoadInFlight;
-    if (current != null) return current;
-    final operation = _loadRouting(silently: silently);
+    if (current != null) {
+      if (ensureFresh) _reloadRoutingAfterInFlight = true;
+      return current;
+    }
+    final operation = _loadRoutingUntilFresh(silently: silently);
     _routingLoadInFlight = operation;
     return operation.whenComplete(() {
       if (identical(_routingLoadInFlight, operation)) {
         _routingLoadInFlight = null;
       }
     });
+  }
+
+  Future<void> _loadRoutingUntilFresh({required bool silently}) async {
+    do {
+      _reloadRoutingAfterInFlight = false;
+      await _loadRouting(silently: silently);
+      silently = true;
+    } while (_reloadRoutingAfterInFlight && mounted);
   }
 
   Future<void> _loadRouting({required bool silently}) async {
@@ -266,22 +306,23 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
     }
   }
 
-  void removeOrder(int orderId) {
+  void removeOrders(Iterable<int> orderIds) {
     if (!mounted) return;
-    final orders = state.orders.where((order) => order.id != orderId).toList();
+    final ids = orderIds.toSet();
+    if (ids.isEmpty) return;
+    final orders = state.orders.where((order) => !ids.contains(order.id)).toList();
     final preparationOrders =
-        state.preparationOrders.where((order) => order.id != orderId).toList();
+        state.preparationOrders.where((order) => !ids.contains(order.id)).toList();
     if (orders.length == state.orders.length &&
-        preparationOrders.length == state.preparationOrders.length) {
-      return;
-    }
+        preparationOrders.length == state.preparationOrders.length) return;
+    _ordersRevision++;
     state = state.copyWith(
       orders: orders,
       preparationOrders: preparationOrders,
     );
   }
 
-  Future<bool> selfAssign({
+  Future<List<Order>> selfAssign({
     required List<int> orderIds,
     int? proposalId,
     int? expectedPlanVersion,
@@ -290,13 +331,13 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
       throw StateError(
           'No puedes tomar pedidos hasta que el seguimiento de ubicación esté activo.');
     }
-    await _repository.selfAssignOrders(
+    final assigned = await _repository.selfAssignOrders(
       orderIds: orderIds,
       proposalId: proposalId,
       expectedPlanVersion: expectedPlanVersion,
     );
-    if (!mounted) return false;
-    return true;
+    removeOrders(assigned.map((order) => order.id));
+    return assigned;
   }
 }
 
