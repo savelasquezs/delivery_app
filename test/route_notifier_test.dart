@@ -128,22 +128,34 @@ void main() {
     expect(snapshots.length, 1);
   });
 
-  test('un GET viejo no borra una autoasignación recibida mientras cargaba',
+  test('un GET viejo no elimina pedidos y reconcilia el resto de la ruta',
       () async {
     final pending = Completer<PagedOrders>();
-    final notifier = _notifier(() => pending.future);
+    var calls = 0;
+    final notifier = _notifier(() {
+      calls++;
+      if (calls == 1) return pending.future;
+      return Future.value(_page([
+        _order(id: 39, deliveryManId: 7),
+        _order(id: 40, deliveryManId: 7),
+        _order(id: 41, deliveryManId: 7),
+      ]));
+    });
+
     final oldRequest = notifier.load(silently: true);
     await notifier.applyRealtimeOrders([
       _order(id: 40, deliveryManId: 7),
       _order(id: 41, deliveryManId: 7),
     ]);
-    pending.complete(_page(const []));
+    // Stale HTTP response knows about #39, but not the new assignments.
+    pending.complete(_page([_order(id: 39, deliveryManId: 7)]));
     await oldRequest;
 
-    expect(notifier.state.orders.map((o) => o.id), [40, 41]);
+    expect(calls, 2); // Only one recovery request for the concurrency race.
+    expect(notifier.state.orders.map((o) => o.id), [39, 40, 41]);
   });
 
-    test('solo reconcilia pedidos pertenecientes a la ruta actual', () async {
+  test('solo reconcilia pedidos pertenecientes a la ruta actual', () async {
     final notifier = _notifier(() async => _page(const []));
 
     final foreignChange = await notifier.applyRealtimeOrder(

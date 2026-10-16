@@ -135,8 +135,11 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
       if (!mounted) return;
       if (readRevision != _ordersRevision ||
           _reloadAvailableAfterInFlight) {
+        // An old request can still contain an order just claimed locally.
+        // Refresh once after the in-flight request to restore other ready orders.
+        _reloadAvailableAfterInFlight = true;
         if (state.isLoading) state = state.copyWith(isLoading: false);
-        return; // A newer SignalR/local change must never be overwritten.
+        return;
       }
       final unchanged = routeOrdersHaveSameContent(state.orders, orders);
       if (!unchanged || state.isLoading || state.error != null) {

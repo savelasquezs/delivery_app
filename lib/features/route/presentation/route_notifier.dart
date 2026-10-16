@@ -95,8 +95,11 @@ class RouteNotifier extends StateNotifier<RouteState> {
       final result = await _fetchOrders();
       if (!mounted) return;
       if (readRevision != _ordersRevision || _reloadAfterInFlight) {
+        // Retain realtime changes, then reconcile other already-assigned
+        // orders with one authoritative read rather than losing them.
+        _reloadAfterInFlight = true;
         if (state.isLoading) state = state.copyWith(isLoading: false);
-        return; // A newer local/SignalR mutation wins over stale HTTP data.
+        return;
       }
       final unchanged = routeOrdersHaveSameContent(state.orders, result.items);
       if (!unchanged || state.isLoading || state.error != null) {
