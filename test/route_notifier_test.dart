@@ -99,7 +99,51 @@ void main() {
     expect(calls, 1);
   });
 
-  test('solo reconcilia pedidos pertenecientes a la ruta actual', () async {
+  test('un lote de asignaciones hace una sola sincronización del GPS',
+      () async {
+    final snapshots = <List<int>>[];
+    final notifier = RouteNotifier.withLoader(
+      deliverymanId: 7,
+      loadOrders: () async => _page(const []),
+      syncTracking: (orders) async =>
+          snapshots.add(orders.map((order) => order.id).toList()),
+    );
+
+    final changes = await notifier.applyRealtimeOrders([
+      _order(id: 30, deliveryManId: 7),
+      _order(id: 31, deliveryManId: 7),
+      _order(id: 32, deliveryManId: 7),
+    ]);
+    expect(changes, [RouteOrderChange.added, RouteOrderChange.added,
+      RouteOrderChange.added]);
+    expect(notifier.state.orders.map((o) => o.id), [30, 31, 32]);
+    expect(snapshots, [[30, 31, 32]]);
+
+    // Repeated SignalR events must not add duplicate entries or restart GPS.
+    await notifier.applyRealtimeOrders([
+      _order(id: 30, deliveryManId: 7),
+      _order(id: 31, deliveryManId: 7),
+    ]);
+    expect(notifier.state.orders.length, 3);
+    expect(snapshots.length, 1);
+  });
+
+  test('un GET viejo no borra una autoasignación recibida mientras cargaba',
+      () async {
+    final pending = Completer<PagedOrders>();
+    final notifier = _notifier(() => pending.future);
+    final oldRequest = notifier.load(silently: true);
+    await notifier.applyRealtimeOrders([
+      _order(id: 40, deliveryManId: 7),
+      _order(id: 41, deliveryManId: 7),
+    ]);
+    pending.complete(_page(const []));
+    await oldRequest;
+
+    expect(notifier.state.orders.map((o) => o.id), [40, 41]);
+  });
+
+    test('solo reconcilia pedidos pertenecientes a la ruta actual', () async {
     final notifier = _notifier(() async => _page(const []));
 
     final foreignChange = await notifier.applyRealtimeOrder(

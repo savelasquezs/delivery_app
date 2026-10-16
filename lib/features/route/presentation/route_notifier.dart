@@ -42,6 +42,7 @@ class RouteNotifier extends StateNotifier<RouteState> {
   final Future<bool> Function()? _canBeginDelivery;
   Future<void>? _loadInFlight;
   int _ordersRevision = 0;
+  bool _reloadAfterInFlight = false;
 
   RouteNotifier(this._repository, this._deliverymanId,
       {Future<bool> Function()? canBeginDelivery})
@@ -65,14 +66,25 @@ class RouteNotifier extends StateNotifier<RouteState> {
   bool containsOrder(int orderId) =>
       state.orders.any((order) => order.id == orderId);
 
-  Future<void> load({bool silently = false}) {
+  Future<void> load({bool silently = false, bool ensureFresh = false}) {
     final current = _loadInFlight;
-    if (current != null) return current;
-    final operation = _load(silently: silently);
+    if (current != null) {
+      if (ensureFresh) _reloadAfterInFlight = true;
+      return current;
+    }
+    final operation = _loadUntilFresh(silently: silently);
     _loadInFlight = operation;
     return operation.whenComplete(() {
       if (identical(_loadInFlight, operation)) _loadInFlight = null;
     });
+  }
+
+  Future<void> _loadUntilFresh({required bool silently}) async {
+    do {
+      _reloadAfterInFlight = false;
+      await _load(silently: silently);
+      silently = true;
+    } while (_reloadAfterInFlight && mounted);
   }
 
   Future<void> _load({required bool silently}) async {

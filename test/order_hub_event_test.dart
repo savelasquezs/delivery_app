@@ -60,7 +60,19 @@ void main() {
       expect(assigned?.deliveryManId, 9);
     });
 
-    test('extrae el pedido anidado de OrderModified', () {
+    test('acepta estados snake_case en el contrato de SignalR', () {
+      final assigned = orderFromHubEvent(orderAssignedHubEvent,
+          [_orderJson(status: 'on_the_way', id: 41, deliveryManId: 7)]);
+      final ready = orderFromHubEvent(orderReadyHubEvent,
+          [_orderJson(status: 'ready', id: 42, deliveryManId: 0)]);
+
+      expect(assigned?.status, OrderStatus.onTheWay);
+      expect(assigned?.deliveryManId, 7);
+      expect(ready?.status, OrderStatus.ready);
+      expect(ready?.id, 42);
+    });
+
+        test('extrae el pedido anidado de OrderModified', () {
       final order = orderFromHubEvent(
         orderModifiedHubEvent,
         [

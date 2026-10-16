@@ -216,7 +216,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       authenticated: auth.status == AuthStatus.authenticated,
       workSession: auth.workSession,
     )) return;
-    final delay = [5, 10, 20, 40, 60][_hubRetryAttempts.clamp(0, 4)];
+    final index = _hubRetryAttempts < 4 ? _hubRetryAttempts : 4;
+    final delay = [5, 10, 20, 40, 60][index];
     if (_hubRetryAttempts < 4) _hubRetryAttempts++;
     _hubRetryTimer = Timer(Duration(seconds: delay), () {
       _hubRetryTimer = null;
@@ -232,7 +233,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           .load(silently: true, ensureFresh: true),
       ref.read(availableNotifierProvider.notifier)
           .loadRouting(silently: true, ensureFresh: true),
-      ref.read(routeNotifierProvider.notifier).load(silently: true),
+      ref.read(routeNotifierProvider.notifier)
+          .load(silently: true, ensureFresh: true),
     ]).then((_) {});
     _catchUpInFlight = operation;
     return operation.whenComplete(() {
@@ -260,7 +262,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     if (order == null) return;
 
     if (kind == OrderHubEventKind.ready) {
-      await available.load(silently: true, ensureFresh: true);
+      await available.refreshReadyOrders();
       return;
     }
 
@@ -313,8 +315,16 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       if (!mounted) return;
       switch (index) {
         case 0:
+          if (_hubStatus != HubConnectionStatus.connected) {
+            unawaited(ref.read(availableNotifierProvider.notifier)
+                .load(silently: true));
+          }
+          break;
         case 1:
-          // Live notifiers are kept current by SignalR; no request on tab switch.
+          if (_hubStatus != HubConnectionStatus.connected) {
+            unawaited(ref.read(routeNotifierProvider.notifier)
+                .load(silently: true));
+          }
           break;
         case 2:
           ref.read(historyNotifierProvider.notifier).load();

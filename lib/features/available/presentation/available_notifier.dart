@@ -306,16 +306,22 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
     }
   }
 
+  /// Reconcile Ready events from the server without polling.
+  Future<void> refreshReadyOrders() {
+    _ordersRevision++; // Invalidate an HTTP read started before the event.
+    return load(silently: true, ensureFresh: true);
+  }
+
   void removeOrders(Iterable<int> orderIds) {
     if (!mounted) return;
     final ids = orderIds.toSet();
     if (ids.isEmpty) return;
+    _ordersRevision++; // An in-flight GET must not resurrect a claimed order.
     final orders = state.orders.where((order) => !ids.contains(order.id)).toList();
     final preparationOrders =
         state.preparationOrders.where((order) => !ids.contains(order.id)).toList();
     if (orders.length == state.orders.length &&
         preparationOrders.length == state.preparationOrders.length) return;
-    _ordersRevision++;
     state = state.copyWith(
       orders: orders,
       preparationOrders: preparationOrders,
