@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../orders/data/order_repository.dart';
 import '../../orders/models/order_models.dart';
@@ -151,7 +152,13 @@ class RouteNotifier extends StateNotifier<RouteState> {
     if (changes.isEmpty) return changes;
     _ordersRevision++;
     state = state.copyWith(orders: next, isLoading: false, error: null);
-    await _syncTracking(next);
+    try {
+      await _syncTracking(next);
+    } catch (error) {
+      // The server has already committed the assignment: never report it
+      // as failed solely because local GPS mode synchronization failed.
+      debugPrint('Delivery tracking sync after assignment failed: $error');
+    }
     return changes;
   }
 

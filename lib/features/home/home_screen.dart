@@ -195,13 +195,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       _hubRetryTimer?.cancel();
       _hubRetryTimer = null;
       _hubRetryAttempts = 0;
-      if (_connectedOnce && _missedHubEvents) {
+      if (_missedHubEvents) {
         _missedHubEvents = false;
         unawaited(_catchUpAfterReconnect());
       }
       _connectedOnce = true;
     } else {
-      if (_connectedOnce) _missedHubEvents = true;
+      if (_connectedOnce || status == HubConnectionStatus.error) {
+        _missedHubEvents = true;
+      }
       if (status == HubConnectionStatus.disconnected ||
           status == HubConnectionStatus.error) {
         _scheduleHubRetry();
