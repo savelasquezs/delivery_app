@@ -472,10 +472,25 @@ class LocationTaskHandler extends TaskHandler {
       dynamic data, TrackingContext context) async {
     if (data is! Map || !await _isCurrent(context)) return;
     final routeId = int.tryParse(data['deliveryRouteId']?.toString() ?? '');
+    final savedRouteId = await FlutterForegroundTask.getData<int>(
+        key: _kDeliveryRouteId);
+    final savedMode = await FlutterForegroundTask.getData<String>(
+        key: _kTrackingMode);
     if (data['continueActiveTracking'] == true && routeId != null) {
-      await LocationTrackingService.setActiveDeliveryMode(routeId: routeId);
-    } else {
+      if (savedMode != _modeActiveDelivery || savedRouteId != routeId) {
+        await LocationTrackingService.setActiveDeliveryMode(routeId: routeId);
+      }
+    } else if (savedMode != _modeLight || savedRouteId != null) {
       await LocationTrackingService.setLightMode();
+    }
+
+    if (data['returnReview'] is Map &&
+        !await _outbox.hasPendingLocationHistory(context)) {
+      FlutterForegroundTask.sendDataToMain({
+        'type': 'route_return_review',
+        'sessionId': context.authSessionId,
+        'review': data['returnReview'],
+      });
     }
   }
 }

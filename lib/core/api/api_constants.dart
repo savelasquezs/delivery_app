@@ -50,6 +50,8 @@ abstract class ApiConstants {
       '/orders/delivery/assigned/$deliverymanId';
   static String deliveryAssignedBranchSummary(int deliverymanId) =>
       '/orders/delivery/assigned/$deliverymanId/branch-summary';
+  static String confirmRouteReturn(int routeId) =>
+      '/deliverymen/routes/$routeId/confirm-return-deliveries';
   static String deliveryAssignedNeighborhoods(int deliverymanId) =>
       '/orders/delivery/assigned/$deliverymanId/neighborhoods';
   static String orderStatus(int orderId) => '/orders/$orderId/status';

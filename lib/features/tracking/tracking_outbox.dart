@@ -268,6 +268,19 @@ class TrackingOutbox {
         conflictAlgorithm: ConflictAlgorithm.ignore);
   }
 
+  /// Whether the current workday still has older GPS points to upload.
+  Future<bool> hasPendingLocationHistory(TrackingContext context) async {
+    final db = await _db();
+    final rows = await retrySqliteBusy(() => db.query(
+      'tracking_outbox',
+      columns: ['id'],
+      where: "owner_key = ? AND work_session = ? AND state = 'pending' AND kind = 'location'",
+      whereArgs: [context.ownerKey, context.workSessionId],
+      limit: 1,
+    ));
+    return rows.isNotEmpty;
+  }
+
   Future<List<OutboxRecord>> pending(TrackingContext context,
       {int limit = 10}) async {
     final db = await _db();
