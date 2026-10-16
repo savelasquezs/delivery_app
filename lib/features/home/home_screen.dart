@@ -169,8 +169,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       _hubService!.addEventListener(_onHubEvent);
       _signalRListenersAttached = true;
     }
-    // El grupo SignalR lo define el JWT (`branch_id`); el parámetro es solo por compatibilidad.
-    await _hubService!.connect(user.branchId ?? 0);
+    // El grupo de sucursal lo determina el JWT autenticado.
+    await _hubService!.connect();
     final latest = ref.read(authNotifierProvider);
     if (!shouldConnectOrderHub(
       authenticated: latest.status == AuthStatus.authenticated,
@@ -259,7 +259,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     if (kind == OrderHubEventKind.ignored) return;
 
     final order = orderFromHubEvent(event, args);
-    if (order == null) return;
+    if (order == null) {
+      // Recover once if the event payload cannot be parsed.
+      if (kind == OrderHubEventKind.ready || kind == OrderHubEventKind.assigned) {
+        await Future.wait([
+          available.refreshReadyOrders(),
+          ref.read(routeNotifierProvider.notifier)
+              .load(silently: true, ensureFresh: true),
+        ]);
+      }
+      return;
+    }
 
     if (kind == OrderHubEventKind.ready) {
       await available.refreshReadyOrders();

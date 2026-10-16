@@ -63,9 +63,6 @@ class RouteNotifier extends StateNotifier<RouteState> {
         _canBeginDelivery = canBeginDelivery,
         super(const RouteState());
 
-  bool containsOrder(int orderId) =>
-      state.orders.any((order) => order.id == orderId);
-
   Future<void> load({bool silently = false, bool ensureFresh = false}) {
     final current = _loadInFlight;
     if (current != null) {
