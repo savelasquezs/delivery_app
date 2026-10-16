@@ -83,12 +83,12 @@ class OrderRepository {
     );
   }
 
-  Future<void> selfAssignOrders({
+  Future<List<Order>> selfAssignOrders({
     required List<int> orderIds,
     int? proposalId,
     int? expectedPlanVersion,
   }) async {
-    await _client.post<dynamic>(
+    return _client.post<List<Order>>(
       ApiConstants.deliverySelfAssign,
       data: {
         'orderIds': orderIds,
@@ -96,6 +96,7 @@ class OrderRepository {
         if (expectedPlanVersion != null)
           'expectedPlanVersion': expectedPlanVersion,
       },
+      fromJson: _parseOrderList,
     );
   }
 

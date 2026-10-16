@@ -99,6 +99,62 @@ void main() {
     expect(calls, 1);
   });
 
+  test('un lote de asignaciones hace una sola sincronización del GPS',
+      () async {
+    final snapshots = <List<int>>[];
+    final notifier = RouteNotifier.withLoader(
+      deliverymanId: 7,
+      loadOrders: () async => _page(const []),
+      syncTracking: (orders) async =>
+          snapshots.add(orders.map((order) => order.id).toList()),
+    );
+
+    final changes = await notifier.applyRealtimeOrders([
+      _order(id: 30, deliveryManId: 7),
+      _order(id: 31, deliveryManId: 7),
+      _order(id: 32, deliveryManId: 7),
+    ]);
+    expect(changes, [RouteOrderChange.added, RouteOrderChange.added,
+      RouteOrderChange.added]);
+    expect(notifier.state.orders.map((o) => o.id), [30, 31, 32]);
+    expect(snapshots, [[30, 31, 32]]);
+
+    // Repeated SignalR events must not add duplicate entries or restart GPS.
+    await notifier.applyRealtimeOrders([
+      _order(id: 30, deliveryManId: 7),
+      _order(id: 31, deliveryManId: 7),
+    ]);
+    expect(notifier.state.orders.length, 3);
+    expect(snapshots.length, 1);
+  });
+
+  test('un GET viejo no elimina pedidos y reconcilia el resto de la ruta',
+      () async {
+    final pending = Completer<PagedOrders>();
+    var calls = 0;
+    final notifier = _notifier(() {
+      calls++;
+      if (calls == 1) return pending.future;
+      return Future.value(_page([
+        _order(id: 39, deliveryManId: 7),
+        _order(id: 40, deliveryManId: 7),
+        _order(id: 41, deliveryManId: 7),
+      ]));
+    });
+
+    final oldRequest = notifier.load(silently: true);
+    await notifier.applyRealtimeOrders([
+      _order(id: 40, deliveryManId: 7),
+      _order(id: 41, deliveryManId: 7),
+    ]);
+    // Stale HTTP response knows about #39, but not the new assignments.
+    pending.complete(_page([_order(id: 39, deliveryManId: 7)]));
+    await oldRequest;
+
+    expect(calls, 2); // Only one recovery request for the concurrency race.
+    expect(notifier.state.orders.map((o) => o.id), [39, 40, 41]);
+  });
+
   test('solo reconcilia pedidos pertenecientes a la ruta actual', () async {
     final notifier = _notifier(() async => _page(const []));
 

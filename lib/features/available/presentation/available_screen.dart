@@ -10,6 +10,7 @@ import '../../../core/widgets/empty_state_widget.dart';
 import '../../../core/widgets/error_banner.dart';
 import '../../../core/widgets/confirm_assignment_dialog.dart';
 import '../../orders/models/order_models.dart';
+import '../../route/presentation/route_notifier.dart';
 import '../data/branch_presence_verifier.dart';
 import 'available_notifier.dart';
 import '../../routing/delivery_routing_models.dart';
@@ -93,9 +94,10 @@ class _AvailableScreenState extends ConsumerState<AvailableScreen>
           'Pasarán a En camino.\n\n'
           'Pedidos: ${selectedList.map((id) => '#$id').join(', ')}',
       onConfirm: () async {
-        await ref.read(availableNotifierProvider.notifier).selfAssign(
-              orderIds: selectedList,
-            );
+        final assigned = await ref.read(availableNotifierProvider.notifier)
+            .selfAssign(orderIds: selectedList);
+        if (!mounted) return;
+        await ref.read(routeNotifierProvider.notifier).applyRealtimeOrders(assigned);
       },
     );
 
@@ -107,7 +109,6 @@ class _AvailableScreenState extends ConsumerState<AvailableScreen>
           backgroundColor: AppColors.accentContainer,
         ),
       );
-      ref.read(availableNotifierProvider.notifier).load();
     }
   }
 
@@ -123,11 +124,14 @@ class _AvailableScreenState extends ConsumerState<AvailableScreen>
           'Pasarán a En camino.\n\n'
           'Pedidos: ${proposal.claimableReadyOrderIds.map((id) => '#$id').join(', ')}',
       onConfirm: () async {
-        await ref.read(availableNotifierProvider.notifier).selfAssign(
+        final assigned = await ref.read(availableNotifierProvider.notifier)
+            .selfAssign(
               orderIds: proposal.claimableReadyOrderIds,
               proposalId: proposal.id,
               expectedPlanVersion: plan.version,
             );
+        if (!mounted) return;
+        await ref.read(routeNotifierProvider.notifier).applyRealtimeOrders(assigned);
       },
     );
     if (confirmed && mounted) {
@@ -135,7 +139,8 @@ class _AvailableScreenState extends ConsumerState<AvailableScreen>
         content: Text('Ruta asignada exitosamente ✓'),
         backgroundColor: AppColors.accentContainer,
       ));
-      await ref.read(availableNotifierProvider.notifier).loadAll();
+      await ref.read(availableNotifierProvider.notifier)
+          .loadRouting(silently: true, ensureFresh: true);
     }
   }
 

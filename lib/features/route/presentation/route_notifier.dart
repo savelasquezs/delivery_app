@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../orders/data/order_repository.dart';
 import '../../orders/models/order_models.dart';
@@ -41,6 +42,8 @@ class RouteNotifier extends StateNotifier<RouteState> {
   final RouteTrackingSync? _trackingSync;
   final Future<bool> Function()? _canBeginDelivery;
   Future<void>? _loadInFlight;
+  int _ordersRevision = 0;
+  bool _reloadAfterInFlight = false;
 
   RouteNotifier(this._repository, this._deliverymanId,
       {Future<bool> Function()? canBeginDelivery})
@@ -61,27 +64,43 @@ class RouteNotifier extends StateNotifier<RouteState> {
         _canBeginDelivery = canBeginDelivery,
         super(const RouteState());
 
-  bool containsOrder(int orderId) =>
-      state.orders.any((order) => order.id == orderId);
-
-  Future<void> load({bool silently = false}) {
+  Future<void> load({bool silently = false, bool ensureFresh = false}) {
     final current = _loadInFlight;
-    if (current != null) return current;
-    final operation = _load(silently: silently);
+    if (current != null) {
+      if (ensureFresh) _reloadAfterInFlight = true;
+      return current;
+    }
+    final operation = _loadUntilFresh(silently: silently);
     _loadInFlight = operation;
     return operation.whenComplete(() {
       if (identical(_loadInFlight, operation)) _loadInFlight = null;
     });
   }
 
+  Future<void> _loadUntilFresh({required bool silently}) async {
+    do {
+      _reloadAfterInFlight = false;
+      await _load(silently: silently);
+      silently = true;
+    } while (_reloadAfterInFlight && mounted);
+  }
+
   Future<void> _load({required bool silently}) async {
     if (!mounted) return;
+    final readRevision = _ordersRevision;
     if (!silently) {
       state = state.copyWith(isLoading: true, error: null);
     }
     try {
       final result = await _fetchOrders();
       if (!mounted) return;
+      if (readRevision != _ordersRevision || _reloadAfterInFlight) {
+        // Retain realtime changes, then reconcile other already-assigned
+        // orders with one authoritative read rather than losing them.
+        _reloadAfterInFlight = true;
+        if (state.isLoading) state = state.copyWith(isLoading: false);
+        return;
+      }
       final unchanged = routeOrdersHaveSameContent(state.orders, result.items);
       if (!unchanged || state.isLoading || state.error != null) {
         state = state.copyWith(
@@ -105,34 +124,45 @@ class RouteNotifier extends StateNotifier<RouteState> {
   }
 
   Future<RouteOrderChange> applyRealtimeOrder(Order order) async {
-    if (!mounted) return RouteOrderChange.none;
-    final index = state.orders.indexWhere((item) => item.id == order.id);
-    final belongsToCurrentRoute = order.status == OrderStatus.onTheWay &&
-        order.deliveryManId == _deliverymanId;
+    final changes = await applyRealtimeOrders([order]);
+    return changes.isEmpty ? RouteOrderChange.none : changes.single;
+  }
 
-    if (!belongsToCurrentRoute) {
-      if (index < 0) return RouteOrderChange.none;
-      final next = [...state.orders]..removeAt(index);
-      state = state.copyWith(orders: next, isLoading: false, error: null);
-      await _syncTracking(next);
-      return RouteOrderChange.removed;
+  /// Apply a batch atomically: one state update and one GPS mode sync.
+  Future<List<RouteOrderChange>> applyRealtimeOrders(Iterable<Order> incoming) async {
+    if (!mounted) return const [];
+    final next = [...state.orders];
+    final changes = <RouteOrderChange>[];
+
+    for (final order in incoming) {
+      final index = next.indexWhere((item) => item.id == order.id);
+      final belongsToMe = order.status == OrderStatus.onTheWay &&
+          order.deliveryManId == _deliverymanId;
+      if (!belongsToMe) {
+        if (index >= 0) {
+          next.removeAt(index);
+          changes.add(RouteOrderChange.removed);
+        }
+      } else if (index < 0) {
+        next.add(order);
+        changes.add(RouteOrderChange.added);
+      } else if (!routeOrderHasSameContent(next[index], order)) {
+        next[index] = order;
+        changes.add(RouteOrderChange.updated);
+      }
     }
 
-    if (index < 0) {
-      final next = [...state.orders, order];
-      state = state.copyWith(orders: next, isLoading: false, error: null);
-      await _syncTracking(next);
-      return RouteOrderChange.added;
-    }
-
-    if (routeOrderHasSameContent(state.orders[index], order)) {
-      return RouteOrderChange.none;
-    }
-
-    final next = [...state.orders]..[index] = order;
+    if (changes.isEmpty) return changes;
+    _ordersRevision++;
     state = state.copyWith(orders: next, isLoading: false, error: null);
-    await _syncTracking(next);
-    return RouteOrderChange.updated;
+    try {
+      await _syncTracking(next);
+    } catch (error) {
+      // The server has already committed the assignment: never report it
+      // as failed solely because local GPS mode synchronization failed.
+      debugPrint('Delivery tracking sync after assignment failed: $error');
+    }
+    return changes;
   }
 
   /// Starts or stops location tracking based on whether there are onTheWay orders.

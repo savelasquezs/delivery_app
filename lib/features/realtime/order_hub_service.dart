@@ -44,16 +44,7 @@ class OrderHubService {
     }
   }
 
-  /// [forceReconnect]: tras renovar el JWT en storage, hay que cerrar el hub y
-  /// volver a negociar; si no, SignalR sigue usando el access token capturado al conectar.
-  Future<void> connect(int branchId, {bool forceReconnect = false}) async {
-    if (forceReconnect && _connection != null) {
-      try {
-        await _connection!.stop();
-      } catch (_) {}
-      _connection = null;
-    }
-
+  Future<void> connect() async {
     // No confiar solo en _status: tras background/kill puede quedar desincronizado.
     if (_connection?.state == HubConnectionState.Connected) {
       if (_status != HubConnectionStatus.connected) {
@@ -131,10 +122,7 @@ class OrderHubService {
     for (final event in [
       'OrderReady',
       'OrderAssigned',
-      'OrderAssignedToDelivery',
       'OrderModified',
-      'OrderStatusChanged',
-      'OrderCancelled',
       'DeliveryRoutingPlanChanged',
       'RouteProposalClaimed',
     ]) {
