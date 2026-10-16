@@ -14,6 +14,17 @@ class OrderRepository {
     PrintJobRequestCoordinator? printCoordinator,
   }) : _printCoordinator = printCoordinator ?? PrintJobRequestCoordinator();
 
+  Future<void> confirmReturnedOrders({
+    required int routeId,
+    required int returnLocationId,
+    required List<int> orderIds,
+  }) async {
+    await _client.post<dynamic>(
+      ApiConstants.confirmRouteReturn(routeId),
+      data: {'returnLocationId': returnLocationId, 'orderIds': orderIds},
+    );
+  }
+
   Future<List<Order>> getAvailableOrders({int? branchId}) async {
     final params = <String, dynamic>{};
     if (branchId != null) params['branchId'] = branchId;
