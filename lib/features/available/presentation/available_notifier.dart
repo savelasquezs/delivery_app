@@ -153,8 +153,10 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
     }
   }
 
-  Future<void> loadAll({int? branchId, bool silently = false}) async => Future.wait([
-    load(branchId: branchId, silently: silently), loadPreparation(silently: silently), loadRouting(silently: silently)]);
+  Future<void> loadAll({int? branchId, bool silently = false}) async {
+    await Future.wait([load(branchId: branchId, silently: silently),
+      loadPreparation(silently: silently), loadRouting(silently: silently)]);
+  }
 
   Future<void> loadRouting({bool silently = false, bool ensureFresh = false}) {
     final current = _routingLoadInFlight;
@@ -244,7 +246,9 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
     final ids = orderIds.toSet();
     if (ids.isEmpty) return;
     _ordersRevision++;
-    invalidateRouting('Un pedido dejó de estar disponible.', removeOrders: ids);
+    if (_routingLoadInFlight != null || ids.any((id) => state.routingPlan?.containsOrder(id) ?? false)) {
+      invalidateRouting('Un pedido dejó de estar disponible.', removeOrders: ids);
+    }
     final orders = state.orders.where((o) => !ids.contains(o.id)).toList();
     final preparing = state.preparationOrders.where((o) => !ids.contains(o.id)).toList();
     if (orders.length != state.orders.length || preparing.length != state.preparationOrders.length) {
