@@ -18,6 +18,9 @@ import 'features/auth/presentation/auth_notifier.dart';
 import 'features/notifications/fcm_service.dart';
 import 'features/notifications/tracking_review_dialog.dart';
 import 'features/tracking/location_tracking_service.dart';
+import 'features/orders/data/order_repository.dart';
+import 'features/route/presentation/route_notifier.dart';
+import 'features/route/presentation/return_delivery_dialog.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -74,6 +77,8 @@ class _DeliveryAppState extends ConsumerState<DeliveryApp>
   final Set<int> _queuedReviewAlertIds = {};
   StreamSubscription<DeliveryTrackingReviewNotice>? _reviewSubscription;
   bool _reviewDialogOpen = false;
+  Map<String, dynamic>? _pendingReturnReview;
+  final Set<String> _dismissedReturnReviews = {};
 
   @override
   void initState() {
@@ -85,9 +90,13 @@ class _DeliveryAppState extends ConsumerState<DeliveryApp>
       if (next.status == AuthStatus.authenticated) {
         _scheduleNextTrackingReview();
       } else if (next.status == AuthStatus.unauthenticated) {
+        _pendingReturnReview = null;
+        _dismissedReturnReviews.clear();
         _pendingReviewNotices.clear();
         _queuedReviewAlertIds.clear();
       } else if (next.status == AuthStatus.updateRequired) {
+        _pendingReturnReview = null;
+        _dismissedReturnReviews.clear();
         _pendingReviewNotices.clear();
         _queuedReviewAlertIds.clear();
         if (_reviewDialogOpen) rootNavigatorKey.currentState?.pop();
@@ -110,6 +119,10 @@ class _DeliveryAppState extends ConsumerState<DeliveryApp>
   void _onTrackingTaskData(Object data) {
     if (data is! Map) return;
     final json = Map<String, dynamic>.from(data);
+    if (json['type'] == 'route_return_review') {
+      unawaited(_queueReturnReview(json));
+      return;
+    }
     if (json['type'] == 'tracking_session_ended') {
       unawaited(_onTrackingSessionEnded(json['sessionId']?.toString()));
       return;
@@ -118,6 +131,72 @@ class _DeliveryAppState extends ConsumerState<DeliveryApp>
     notifyDeliveryAppUpdateRequired(
       DeliveryAppVersionPolicy.fromJson(json),
     );
+  }
+
+  Future<void> _queueReturnReview(Map<String, dynamic> json) async {
+    final session = await SecureStorage().readSession();
+    if (!mounted || session == null || session.id != json['sessionId']) return;
+    final raw = json['review'];
+    if (raw is! Map) return;
+    final review = Map<String, dynamic>.from(raw);
+    final ids = (review['pendingOrderIds'] as List? ?? [])
+        .whereType<int>().where((id) => id > 0).toSet().toList()..sort();
+    if (ids.isEmpty ||
+        review['routeId'] is! int ||
+        review['returnLocationId'] is! int) return;
+
+    final key = "${review['routeId']}:${ids.join(',')}";
+    if (_dismissedReturnReviews.contains(key)) return;
+    _pendingReturnReview = {
+      ...review,
+      'pendingOrderIds': ids,
+      'key': key,
+      'sessionId': session.id,
+    };
+    _scheduleNextTrackingReview();
+  }
+
+  Future<void> _showPendingReturnReview() async {
+    final review = _pendingReturnReview;
+    if (review == null || _reviewDialogOpen ||
+        _dismissedReturnReviews.contains(review['key'])) return;
+    if (ref.read(authNotifierProvider).status != AuthStatus.authenticated) return;
+    final context = rootNavigatorKey.currentContext;
+    if (context == null ||
+        WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) return;
+    final session = await SecureStorage().readSession();
+    if (!mounted || !context.mounted ||
+        session?.id != review['sessionId'] || _reviewDialogOpen) return;
+
+    _reviewDialogOpen = true;
+    try {
+      await showReturnDeliveryDialog(
+        context,
+        orderIds: List<int>.from(review['pendingOrderIds'] as List),
+        onConfirm: (ids) async {
+          final latestSession = await SecureStorage().readSession();
+          if (!mounted || latestSession?.id != review['sessionId']) {
+            throw StateError('La sesión cambió.');
+          }
+          await ref.read(orderRepositoryProvider).confirmReturnedOrders(
+            routeId: review['routeId'] as int,
+            returnLocationId: review['returnLocationId'] as int,
+            orderIds: ids,
+          );
+          if (mounted) {
+            await ref.read(routeNotifierProvider.notifier)
+                .load(silently: true, ensureFresh: true);
+          }
+        },
+      );
+      _dismissedReturnReviews.add(review['key'] as String);
+      if (_pendingReturnReview?['key'] == review['key']) {
+        _pendingReturnReview = null;
+      }
+    } finally {
+      _reviewDialogOpen = false;
+      if (mounted) _scheduleNextTrackingReview();
+    }
   }
 
   Future<void> _onTrackingSessionEnded(String? oldSessionId) async {
@@ -134,6 +213,7 @@ class _DeliveryAppState extends ConsumerState<DeliveryApp>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
+      _scheduleNextTrackingReview();
       unawaited(FcmService.emitPendingTrackingReviewNotices());
     }
   }
@@ -151,7 +231,11 @@ class _DeliveryAppState extends ConsumerState<DeliveryApp>
   }
 
   Future<void> _showNextTrackingReview() async {
-    if (!mounted || _reviewDialogOpen || _pendingReviewNotices.isEmpty) return;
+    if (!mounted || _reviewDialogOpen) return;
+    if (_pendingReviewNotices.isEmpty) {
+      await _showPendingReturnReview();
+      return;
+    }
     final authState = ref.read(authNotifierProvider);
     if (authState.status != AuthStatus.authenticated ||
         authState.user == null) {
