@@ -283,7 +283,6 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
 
   Future<bool> selfAssign({
     required List<int> orderIds,
-    required String password,
     int? proposalId,
     int? expectedPlanVersion,
   }) async {
@@ -293,7 +292,6 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
     }
     await _repository.selfAssignOrders(
       orderIds: orderIds,
-      password: password,
       proposalId: proposalId,
       expectedPlanVersion: expectedPlanVersion,
     );
