@@ -4,12 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/maps/open_delivery_destination_maps.dart';
 import '../../../core/orders/available_orders_layout.dart';
-import '../../../core/storage/secure_storage.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/empty_state_widget.dart';
 import '../../../core/widgets/error_banner.dart';
-import '../../../core/widgets/confirm_password_dialog.dart';
+import '../../../core/widgets/confirm_assignment_dialog.dart';
 import '../../orders/models/order_models.dart';
 import '../data/branch_presence_verifier.dart';
 import 'available_notifier.dart';
@@ -87,27 +86,15 @@ class _AvailableScreenState extends ConsumerState<AvailableScreen>
   Future<void> _confirmAssignment() async {
     if (_selectedIds.isEmpty) return;
     final selectedList = List<int>.from(_selectedIds);
-    final storage = ref.read(secureStorageProvider);
-    final savedPassword = await storage.getSelfAssignPassword();
-    if (!mounted) return;
-
-    final confirmed = await ConfirmPasswordDialog.show(
+    final confirmed = await ConfirmAssignmentDialog.show(
       context,
       title: 'Confirmar asignación',
-      subtitle:
-          'Se asignarán ${selectedList.length} pedido(s) a tu nombre. Ingresa tu contraseña para continuar.',
-      initialPassword: savedPassword,
-      onPersistPassword: (password, remember) async {
-        if (remember) {
-          await storage.saveSelfAssignPassword(password);
-        } else {
-          await storage.deleteSelfAssignPassword();
-        }
-      },
-      onConfirm: (password) async {
+      subtitle: '¿Quieres asignarte ${selectedList.length} pedido(s)? '
+          'Pasarán a En camino.\n\n'
+          'Pedidos: ${selectedList.map((id) => '#$id').join(', ')}',
+      onConfirm: () async {
         await ref.read(availableNotifierProvider.notifier).selfAssign(
               orderIds: selectedList,
-              password: password,
             );
       },
     );
@@ -128,29 +115,20 @@ class _AvailableScreenState extends ConsumerState<AvailableScreen>
     if (proposal.claimableReadyOrderIds.isEmpty) return;
     final plan = ref.read(availableNotifierProvider).routingPlan;
     if (plan == null) return;
-    final storage = ref.read(secureStorageProvider);
-    final savedPassword = await storage.getSelfAssignPassword();
-    if (!mounted) return;
-    final confirmed = await ConfirmPasswordDialog.show(
+    final confirmed = await ConfirmAssignmentDialog.show(
       context,
       title: 'Tomar ruta ${proposal.sequence}',
-      subtitle:
-          'Se asignarán ${proposal.claimableReadyOrderIds.length} pedido(s) listos en el orden sugerido.',
-      initialPassword: savedPassword,
-      onPersistPassword: (password, remember) async {
-        if (remember) {
-          await storage.saveSelfAssignPassword(password);
-        } else {
-          await storage.deleteSelfAssignPassword();
-        }
+      subtitle: '¿Quieres tomar ${proposal.claimableReadyOrderIds.length} '
+          'pedido(s) listos en el orden sugerido? '
+          'Pasarán a En camino.\n\n'
+          'Pedidos: ${proposal.claimableReadyOrderIds.map((id) => '#$id').join(', ')}',
+      onConfirm: () async {
+        await ref.read(availableNotifierProvider.notifier).selfAssign(
+              orderIds: proposal.claimableReadyOrderIds,
+              proposalId: proposal.id,
+              expectedPlanVersion: plan.version,
+            );
       },
-      onConfirm: (password) =>
-          ref.read(availableNotifierProvider.notifier).selfAssign(
-                orderIds: proposal.claimableReadyOrderIds,
-                password: password,
-                proposalId: proposal.id,
-                expectedPlanVersion: plan.version,
-              ),
     );
     if (confirmed && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(

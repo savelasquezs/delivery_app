@@ -85,7 +85,6 @@ class OrderRepository {
 
   Future<void> selfAssignOrders({
     required List<int> orderIds,
-    required String password,
     int? proposalId,
     int? expectedPlanVersion,
   }) async {
@@ -93,7 +92,6 @@ class OrderRepository {
       ApiConstants.deliverySelfAssign,
       data: {
         'orderIds': orderIds,
-        'password': password,
         if (proposalId != null) 'proposalId': proposalId,
         if (expectedPlanVersion != null)
           'expectedPlanVersion': expectedPlanVersion,

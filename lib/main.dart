@@ -22,6 +22,13 @@ import 'features/tracking/location_tracking_service.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // Remove the obsolete stored assignment password without blocking startup.
+  unawaited(SecureStorage().deleteObsoleteSelfAssignPassword().catchError(
+    (Object error) {
+      debugPrint('Could not clear obsolete assignment credential: $error');
+    },
+  ));
+
   // Registro único aquí (no en FcmService). Tras hot restart (R) FlutterFire puede avisar
   // "duplicate background isolate": para probar FCM usar arranque frío (detener app o `flutter run` de nuevo).
   FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);

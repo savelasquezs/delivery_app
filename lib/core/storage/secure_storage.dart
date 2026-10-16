@@ -12,7 +12,6 @@ const _kTokenSession = 'auth_session_v2';
 const _kAuthToken = 'auth_token';
 const _kRefreshToken = 'refresh_token';
 const _kUserData = 'user_data';
-const _kSelfAssignPassword = 'self_assign_password';
 const _kInstallationId = 'installation_id';
 const _kWorkSessionData = 'work_session_data';
 
@@ -82,14 +81,9 @@ class SecureStorage {
   Future<void> saveUserData(String jsonData) =>
       _storage.write(key: _kUserData, value: jsonData);
 
-  Future<String?> getSelfAssignPassword() =>
-      _storage.read(key: _kSelfAssignPassword);
-
-  Future<void> saveSelfAssignPassword(String password) =>
-      _storage.write(key: _kSelfAssignPassword, value: password);
-
-  Future<void> deleteSelfAssignPassword() =>
-      _storage.delete(key: _kSelfAssignPassword);
+  /// Removes a credential retained by older releases of the assignment flow.
+  Future<void> deleteObsoleteSelfAssignPassword() =>
+      _storage.delete(key: 'self_assign_password');
 
   Future<String> getOrCreateInstallationId() async {
     final existing = await _storage.read(key: _kInstallationId);
