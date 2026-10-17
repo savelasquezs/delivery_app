@@ -13,7 +13,7 @@ void main() {
     addTearDown(n.dispose);
     await n.loadRouting();
     final current = n.state.routingPlan;
-    await n.reconcileRoutingOrder(Order(id: 999, status: OrderStatus.delivered,
+    await n.reconcileRoutingOrder(Order(id: 999, branchId: 1, status: OrderStatus.delivered,
       type: 'delivery', createdAt: DateTime.now(), total: 1000, items: const [], deliveryManId: 7));
     expect(identical(n.state.routingPlan, current), isTrue);
     expect(n.state.routingPlan!.isStale, isFalse);
