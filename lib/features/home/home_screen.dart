@@ -255,6 +255,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     final kind = classifyOrderHubEvent(event);
 
     if (kind == OrderHubEventKind.routing) {
+      available.invalidateRouting('El servidor está actualizando el plan.');
       await available.loadRouting(silently: true, ensureFresh: true);
       return;
     }
@@ -278,10 +279,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       return;
     }
 
-    if (kind == OrderHubEventKind.assigned) {
-      available.removeOrders([order.id]);
-    }
-
+    // Update the existing route immediately; plan recovery runs independently.
+    // The notifier removes assigned/delivered/cancelled orders from all plan lists.
+    unawaited(available.reconcileRoutingOrder(order));
     final change = await ref
         .read(routeNotifierProvider.notifier)
         .applyRealtimeOrder(order);
@@ -570,11 +570,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 }
 
 class _TrackingStatusBanner extends ConsumerWidget {
-  const _TrackingStatusBanner({
-    required this.authState,
-    required this.onOpenSettings,
-  });
-
+  const _TrackingStatusBanner({required this.authState, required this.onOpenSettings});
   final AuthState authState;
   final VoidCallback onOpenSettings;
 
@@ -582,113 +578,49 @@ class _TrackingStatusBanner extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final session = authState.workSession;
     if (session == null) return const SizedBox.shrink();
-    final snapshot =
-        ref.watch(trackingSnapshotProvider(session.id)).asData?.value;
-    final tracking = session.isActive &&
-        DateTime.now().isBefore(session.autoCloseAt) &&
-        snapshot?.healthyAt(DateTime.now()) == true;
-    final issue = snapshot == null
-        ? authState.trackingIssue
-        : snapshot.captureIssue ?? snapshot.uploadIssue;
-    final settingsIssue = issue != null &&
-        (issue.contains('GPS') ||
-            issue.contains('permiso') ||
-            issue.contains('precisa'));
-    final label = issue ??
-        snapshot?.labelAt(DateTime.now()) ??
-        'Comprobando el último envío de ubicación';
+    final snapshot = ref.watch(trackingSnapshotProvider(session.id)).asData?.value;
+    final tracking = session.isActive && DateTime.now().isBefore(session.autoCloseAt)
+        && snapshot?.healthyAt(DateTime.now()) == true;
+    final issue = snapshot == null ? authState.trackingIssue : snapshot.captureIssue ?? snapshot.uploadIssue;
+    final settingsIssue = issue != null && (issue.contains('GPS') || issue.contains('permiso') || issue.contains('precisa'));
+    final label = issue ?? snapshot?.labelAt(DateTime.now()) ?? 'Comprobando el último envío de ubicación';
     final color = tracking ? AppColors.success : AppColors.warning;
-
     return Container(
       width: double.infinity,
       color: color.withValues(alpha: 0.12),
-      padding: const EdgeInsets.symmetric(
-        horizontal: AppTheme.spacingMd,
-        vertical: AppTheme.spacingXs,
-      ),
-      child: Row(
-        children: [
-          Icon(
-            tracking ? Icons.location_on : Icons.location_off,
-            size: 16,
-            color: color,
-          ),
-          const SizedBox(width: AppTheme.spacingXs),
-          Expanded(
-              child: Text(label,
-                  style: TextStyle(
-                      color: color,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600))),
-          if (settingsIssue)
-            SizedBox(
-              width: 112,
-              child: TextButton(
-                onPressed: onOpenSettings,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text('Abrir Ajustes'),
-                  ],
-                ),
-              ),
-            ),
-        ],
-      ),
+      padding: const EdgeInsets.symmetric(horizontal: AppTheme.spacingMd, vertical: AppTheme.spacingXs),
+      child: Row(children: [
+        Icon(tracking ? Icons.location_on : Icons.location_off, size: 16, color: color),
+        const SizedBox(width: AppTheme.spacingXs),
+        Expanded(child: Text(label, style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w600))),
+        if (settingsIssue) SizedBox(width: 112, child: TextButton(onPressed: onOpenSettings,
+          child: const Column(mainAxisSize: MainAxisSize.min, children: [Text('Abrir Ajustes')]))),
+      ]),
     );
   }
 }
 
 class _ProfileAppBarAvatar extends StatelessWidget {
   const _ProfileAppBarAvatar({required this.user});
-
   final AuthUser? user;
 
   @override
   Widget build(BuildContext context) {
     final url = resolveProfileImageUrl(user?.profileImageUrl);
     final initials = _initialsFromName(user?.name ?? user?.email ?? '');
-
-    final child = url != null && url.isNotEmpty
-        ? ClipOval(
-            child: CachedNetworkImage(
-              imageUrl: url,
-              width: 36,
-              height: 36,
-              fit: BoxFit.cover,
-              placeholder: (_, __) => const SizedBox(
-                width: 36,
-                height: 36,
-                child: Center(
-                  child: SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                ),
-              ),
-              errorWidget: (_, __, ___) => _fallbackAvatar(initials),
-            ),
-          )
-        : _fallbackAvatar(initials);
-
-    return SizedBox(
-      width: 36,
-      height: 36,
-      child: child,
-    );
+    final child = url != null && url.isNotEmpty ? ClipOval(child: CachedNetworkImage(
+      imageUrl: url, width: 36, height: 36, fit: BoxFit.cover,
+      placeholder: (_, __) => const SizedBox(width: 36, height: 36,
+        child: Center(child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)))),
+      errorWidget: (_, __, ___) => _fallbackAvatar(initials))) : _fallbackAvatar(initials);
+    return SizedBox(width: 36, height: 36, child: child);
   }
 
   Widget _fallbackAvatar(String initials) {
     final letter = initials.isNotEmpty ? initials : '?';
-    return CircleAvatar(
-      radius: 18,
-      backgroundColor: AppColors.primaryContainer,
-      foregroundColor: AppColors.primaryLight,
-      child: letter.length <= 2
-          ? Text(letter, style: const TextStyle(fontWeight: FontWeight.w600))
-          : const Icon(Icons.person_outline, size: 22),
-    );
+    return CircleAvatar(radius: 18, backgroundColor: AppColors.primaryContainer, foregroundColor: AppColors.primaryLight,
+      child: letter.length <= 2 ? Text(letter, style: const TextStyle(fontWeight: FontWeight.w600))
+        : const Icon(Icons.person_outline, size: 22));
   }
 
   static String _initialsFromName(String name) {
@@ -706,11 +638,7 @@ class _TabItem {
   final IconData icon;
   final IconData activeIcon;
   final String label;
-  const _TabItem({
-    required this.icon,
-    required this.activeIcon,
-    required this.label,
-  });
+  const _TabItem({required this.icon, required this.activeIcon, required this.label});
 }
 
 class _HubStatusIndicator extends StatelessWidget {
@@ -719,31 +647,11 @@ class _HubStatusIndicator extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isConnected = status == HubConnectionStatus.connected;
-    final isConnecting = status == HubConnectionStatus.connecting;
-    final color = isConnected
-        ? AppColors.success
-        : isConnecting
-            ? AppColors.warning
-            : AppColors.error;
-
-    return Tooltip(
-      message: isConnected
-          ? 'Conectado en tiempo real'
-          : isConnecting
-              ? 'Conectando...'
-              : 'Sin conexión en tiempo real',
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 4),
-        child: Container(
-          width: 10,
-          height: 10,
-          decoration: BoxDecoration(
-            color: color,
-            shape: BoxShape.circle,
-          ),
-        ),
-      ),
-    );
+    final connected = status == HubConnectionStatus.connected;
+    final connecting = status == HubConnectionStatus.connecting;
+    final color = connected ? AppColors.success : connecting ? AppColors.warning : AppColors.error;
+    return Tooltip(message: connected ? 'Conectado en tiempo real' : connecting ? 'Conectando...' : 'Sin conexión en tiempo real',
+      child: Padding(padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 4),
+        child: Container(width: 10, height: 10, decoration: BoxDecoration(color: color, shape: BoxShape.circle))));
   }
 }
