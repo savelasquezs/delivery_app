@@ -82,11 +82,11 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Rutas'));
     await tester.pumpAndSettle();
-    expect(find.text('Tomar 1 listo(s)'), findsOneWidget);
+    expect(find.text('Revisar 1 listo(s)'), findsOneWidget);
     n.invalidateRouting('Falló la actualización.');
     await tester.pumpAndSettle();
     expect(find.textContaining('Plan desactualizado.'), findsOneWidget);
-    expect(find.text('Tomar 1 listo(s)'), findsNothing);
+    expect(find.text('Revisar 1 listo(s)'), findsNothing);
     expect(find.text('Disponibles'), findsOneWidget);
     await tester.pumpWidget(const SizedBox.shrink());
   });

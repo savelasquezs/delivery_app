@@ -30,6 +30,7 @@ bool routeOrderHasSameContent(Order current, Order next) {
       current.deliveryManId == next.deliveryManId &&
       current.deliveryManName == next.deliveryManName &&
       current.deliveryRouteId == next.deliveryRouteId &&
+      current.deliveryRouteStopSequence == next.deliveryRouteStopSequence &&
       current.customerId == next.customerId &&
       current.addressId == next.addressId &&
       current.addressDescription == next.addressDescription &&
@@ -159,6 +160,13 @@ Order? selectNextRouteOrder(
   }
 
   indexed.sort((a, b) {
+    if (a.$2.deliveryRouteId != null &&
+        a.$2.deliveryRouteId == b.$2.deliveryRouteId &&
+        a.$2.deliveryRouteStopSequence != null &&
+        b.$2.deliveryRouteStopSequence != null) {
+      return a.$2.deliveryRouteStopSequence!
+          .compareTo(b.$2.deliveryRouteStopSequence!);
+    }
     final groupCompare = group(a.$2).compareTo(group(b.$2));
     if (groupCompare != 0) return groupCompare;
 
@@ -188,6 +196,14 @@ List<Order> prioritizeRouteOrdersForDisplay(
   }
 
   final uniqueOrders = uniqueById.values.toList();
+  if (uniqueOrders.isNotEmpty &&
+      uniqueOrders.every((o) =>
+          o.deliveryRouteId == uniqueOrders.first.deliveryRouteId &&
+          o.deliveryRouteStopSequence != null)) {
+    uniqueOrders.sort((a, b) =>
+        a.deliveryRouteStopSequence!.compareTo(b.deliveryRouteStopSequence!));
+    return uniqueOrders;
+  }
   final nextOrder = selectNextRouteOrder(
     uniqueOrders,
     now,

@@ -155,6 +155,7 @@ class Order {
   final int? deliveryManId;
   final String? deliveryManName;
   final int? deliveryRouteId;
+  final int? deliveryRouteStopSequence;
 
   /// Campos planos del API (OrderDto), alineados con el front web.
   final int? customerId;
@@ -200,6 +201,7 @@ class Order {
     this.deliveryManId,
     this.deliveryManName,
     this.deliveryRouteId,
+    this.deliveryRouteStopSequence,
     this.customerId,
     this.addressId,
     this.addressDescription,
@@ -363,6 +365,7 @@ class Order {
       deliveryManId: json['deliveryManId'] as int?,
       deliveryManName: json['deliveryManName'] as String?,
       deliveryRouteId: json['deliveryRouteId'] as int?,
+      deliveryRouteStopSequence: json['deliveryRouteStopSequence'] as int?,
       customerId: flatCustomerId ?? nestedCustomer?.id,
       addressId: flatAddressId ?? nestedAddress?.id,
       addressDescription: flatAddrDesc,
@@ -434,6 +437,7 @@ class Order {
       deliveryManId: deliveryManId,
       deliveryManName: deliveryManName,
       deliveryRouteId: deliveryRouteId,
+      deliveryRouteStopSequence: deliveryRouteStopSequence,
       customerId: customerId,
       addressId: addressId,
       addressDescription: nextDesc,

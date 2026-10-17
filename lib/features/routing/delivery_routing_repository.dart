@@ -13,6 +13,14 @@ class DeliveryRoutingRepository {
           Map<String, dynamic>.from(data as Map),
         ),
       );
+
+  Future<DeliveryRouteProposal> preview(List<int> orderIds, int version) =>
+      _client.post(
+        '/delivery-routing/preview',
+        data: {'orderIds': orderIds, 'expectedPlanVersion': version},
+        fromJson: (data) => DeliveryRouteProposal.fromJson(
+            Map<String, dynamic>.from(data as Map)),
+      );
 }
 
 final deliveryRoutingRepositoryProvider = Provider(

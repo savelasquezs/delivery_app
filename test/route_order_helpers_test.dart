@@ -27,6 +27,26 @@ Order _order({
 }
 
 void main() {
+  test('confirmed stop sequence takes precedence over reservation sorting', () {
+    Order confirmed(int id, int sequence, DateTime? reservation) => Order(
+        id: id,
+        status: OrderStatus.onTheWay,
+        type: 'delivery',
+        createdAt: DateTime.utc(2026),
+        total: 1000,
+        items: const [],
+        branchId: 1,
+        deliveryRouteId: 8,
+        deliveryRouteStopSequence: sequence,
+        reservedFor: reservation);
+    final first = confirmed(2, 1, null);
+    final second = confirmed(1, 2, DateTime.utc(2025));
+    expect(
+        prioritizeRouteOrdersForDisplay([second, first], DateTime.utc(2026))
+            .map((o) => o.id),
+        [2, 1]);
+    expect(selectNextRouteOrder([second, first], DateTime.utc(2026))?.id, 2);
+  });
   group('reservationStateForOrder', () {
     final now = DateTime.utc(2026, 6, 13, 18);
 

@@ -98,6 +98,8 @@ class OrderRepository {
     required List<int> orderIds,
     int? proposalId,
     int? expectedPlanVersion,
+    bool modifiedProposal = false,
+    String? selectionFingerprint,
   }) async {
     return _client.post<List<Order>>(
       ApiConstants.deliverySelfAssign,
@@ -106,6 +108,9 @@ class OrderRepository {
         if (proposalId != null) 'proposalId': proposalId,
         if (expectedPlanVersion != null)
           'expectedPlanVersion': expectedPlanVersion,
+        if (modifiedProposal) 'modifiedProposal': true,
+        if (selectionFingerprint != null)
+          'selectionFingerprint': selectionFingerprint,
       },
       fromJson: _parseOrderList,
     );

@@ -14,6 +14,7 @@ import '../../route/presentation/route_notifier.dart';
 import '../data/branch_presence_verifier.dart';
 import 'available_notifier.dart';
 import '../../routing/delivery_routing_models.dart';
+import '../../routing/route_proposal_editor.dart';
 
 Future<void> _openOrderDestinationMap(BuildContext context, Order order) async {
   if (!orderHasOpenableMapDestination(order)) {
@@ -94,10 +95,13 @@ class _AvailableScreenState extends ConsumerState<AvailableScreen>
           'Pasarán a En camino.\n\n'
           'Pedidos: ${selectedList.map((id) => '#$id').join(', ')}',
       onConfirm: () async {
-        final assigned = await ref.read(availableNotifierProvider.notifier)
+        final assigned = await ref
+            .read(availableNotifierProvider.notifier)
             .selfAssign(orderIds: selectedList);
         if (!mounted) return;
-        await ref.read(routeNotifierProvider.notifier).applyRealtimeOrders(assigned);
+        await ref
+            .read(routeNotifierProvider.notifier)
+            .applyRealtimeOrders(assigned);
       },
     );
 
@@ -115,31 +119,26 @@ class _AvailableScreenState extends ConsumerState<AvailableScreen>
   Future<void> _confirmRoutingProposal(DeliveryRouteProposal proposal) async {
     if (proposal.claimableReadyOrderIds.isEmpty) return;
     final plan = ref.read(availableNotifierProvider).routingPlan;
-    if (plan == null) return;
-    final confirmed = await ConfirmAssignmentDialog.show(
-      context,
-      title: 'Tomar ruta ${proposal.sequence}',
-      subtitle: '¿Quieres tomar ${proposal.claimableReadyOrderIds.length} '
-          'pedido(s) listos en el orden sugerido? '
-          'Pasarán a En camino.\n\n'
-          'Pedidos: ${proposal.claimableReadyOrderIds.map((id) => '#$id').join(', ')}',
-      onConfirm: () async {
-        final assigned = await ref.read(availableNotifierProvider.notifier)
-            .selfAssign(
-              orderIds: proposal.claimableReadyOrderIds,
-              proposalId: proposal.id,
-              expectedPlanVersion: plan.version,
-            );
-        if (!mounted) return;
-        await ref.read(routeNotifierProvider.notifier).applyRealtimeOrders(assigned);
-      },
+    if (plan == null || plan.isStale) return;
+    final assigned = await showModalBottomSheet<List<Order>>(
+      context: context,
+      isScrollControlled: true,
+      isDismissible: false,
+      enableDrag: false,
+      builder: (_) =>
+          RouteProposalEditor(proposal: proposal, version: plan.version),
     );
-    if (confirmed && mounted) {
+    if (assigned != null && mounted) {
+      await ref
+          .read(routeNotifierProvider.notifier)
+          .applyRealtimeOrders(assigned);
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('Ruta asignada exitosamente ✓'),
         backgroundColor: AppColors.accentContainer,
       ));
-      await ref.read(availableNotifierProvider.notifier)
+      await ref
+          .read(availableNotifierProvider.notifier)
           .loadRouting(silently: true, ensureFresh: true);
     }
   }
@@ -312,7 +311,7 @@ class _RoutingTabContent extends StatelessWidget {
                             const SizedBox(width: 8),
                             Expanded(
                               child: Text(
-                                '#${stop.orderId} · ${stop.neighborhood ?? stop.address}\n${stop.isReady ? 'Listo' : 'En espera'}',
+                                '#${stop.orderId} · ${stop.neighborhood ?? stop.address}\n${stop.isReady ? 'Listo' : 'Preparación estimada: ${TimeOfDay.fromDateTime(stop.estimatedReadyAtUtc.toLocal()).format(context)} · ${(stop.readyWithinWindowProbability * 100).round()}% de estar listo pronto · confianza ${stop.confidenceLabel}'}',
                               ),
                             ),
                           ],
@@ -321,6 +320,10 @@ class _RoutingTabContent extends StatelessWidget {
                     if (proposal.warning != null)
                       Text(proposal.warning!,
                           style: const TextStyle(color: AppColors.warning)),
+                    if (proposal.waitDeadlineAtUtc != null &&
+                        proposal.recommendation == 'wait')
+                      Text(
+                          'Esperar como máximo hasta ${TimeOfDay.fromDateTime(proposal.waitDeadlineAtUtc!.toLocal()).format(context)}'),
                     if (proposal.isClaimable)
                       Padding(
                         padding: const EdgeInsets.only(top: 8),
@@ -330,7 +333,7 @@ class _RoutingTabContent extends StatelessWidget {
                             onPressed: () => onClaim(proposal),
                             icon: const Icon(Icons.delivery_dining),
                             label: Text(
-                                'Tomar ${proposal.claimableReadyOrderIds.length} listo(s)'),
+                                'Revisar ${proposal.claimableReadyOrderIds.length} listo(s)'),
                           ),
                         ),
                       ),
