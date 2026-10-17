@@ -18,6 +18,9 @@ concurrency:
   group: android-evidence-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+env:
+  FLUTTER_VERSION: 3.41.6
+
 jobs:
   validate:
     runs-on: ubuntu-latest
@@ -37,12 +40,49 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - name: Install project Flutter
+      - name: Restore pinned Flutter SDK
+        id: flutter-sdk
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/flutter
+          key: flutter-sdk-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.FLUTTER_VERSION }}-android
+      - name: Install pinned project Flutter
+        shell: bash
         run: |
-          git clone --depth=1 --branch 3.41.6 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
-          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
-          "$RUNNER_TEMP/flutter/bin/flutter" --version
+          set -euo pipefail
+          FLUTTER_DIR="$RUNNER_TEMP/flutter"
+          if [[ ! -x "$FLUTTER_DIR/bin/flutter" ]]; then
+            git clone --depth=1 --branch "$FLUTTER_VERSION" https://github.com/flutter/flutter.git "$FLUTTER_DIR"
+          fi
+          echo "$FLUTTER_DIR/bin" >> "$GITHUB_PATH"
+          "$FLUTTER_DIR/bin/flutter" --version
+          "$FLUTTER_DIR/bin/flutter" precache --android
+      # Save the SDK before running project builds or restoring signing credentials.
+      - name: Save pinned Flutter SDK
+        if: steps.flutter-sdk.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/flutter
+          key: ${{ steps.flutter-sdk.outputs.cache-primary-key }}
+      - name: Cache hosted pub packages
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          # Keep pub credentials and project build outputs out of the cache.
+          path: |
+            ~/.pub-cache/hosted
+            ~/.pub-cache/hosted-hashes
+          key: pub-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.FLUTTER_VERSION }}-${{ hashFiles('pubspec.lock') }}
       - run: flutter pub get
+      - name: Cache Gradle dependencies and wrapper
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          # Never cache Gradle configuration, signing files, or build outputs.
+          path: |
+            ~/.gradle/caches/modules-2
+            ~/.gradle/wrapper/dists
+          key: gradle-deps-v1-${{ runner.os }}-${{ runner.arch }}-jdk17-${{ env.FLUTTER_VERSION }}-${{ hashFiles('pubspec.lock', 'android/**/*.gradle*', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-deps-v1-${{ runner.os }}-${{ runner.arch }}-jdk17-${{ env.FLUTTER_VERSION }}-
       - name: Compile Android integration without distributing
         run: flutter build appbundle --debug
       - name: Native evidence state-machine tests
