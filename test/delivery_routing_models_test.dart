@@ -16,6 +16,7 @@ void main() {
           'approximateDrivingDurationSeconds': 600,
           'approximateDistanceMeters': 3200,
           'validatedDrivingDurationSeconds': 540,
+          'lastDeliverySeconds': 1140,
           'validatedDistanceMeters': 3000,
           'isClaimable': true,
           'claimableReadyOrderIds': [10],
@@ -49,6 +50,10 @@ void main() {
     expect(plan.version, 8);
     expect(plan.availableNow, 2);
     expect(plan.proposals.single.durationSeconds, 540);
+    expect(plan.proposals.single.lastDeliverySeconds, 1140);
+    expect(plan.proposals.single.timingLabel,
+        '~19 min hasta última entrega · 9 min de conducción');
+    expect(plan.proposals.single.asStale({}).lastDeliverySeconds, 1140);
     expect(plan.proposals.single.claimableReadyOrderIds, [10]);
     expect(plan.unroutedOrders.single.unroutedReason, 'requiresLocation');
     expect(plan.warning, isNull);
@@ -86,5 +91,14 @@ void main() {
       'unroutedOrders': [],
     });
     expect(plan.warning, startsWith('2 domiciliario(s) sin GPS reciente'));
+  });
+
+  test('explica los límites de tiempo sin confundirlos con falta de conductor', () {
+    final stop = DeliveryRoutingStop.fromJson({
+      'orderId': 34,
+      'estimatedReadyAtUtc': '2026-10-18T17:00:00Z',
+      'unroutedReason': 'deliveryTimeLimit',
+    });
+    expect(stop.reasonLabel, 'supera el tiempo máximo desde la sucursal');
   });
 }

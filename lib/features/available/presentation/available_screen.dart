@@ -304,9 +304,11 @@ class _RoutingTabContent extends StatelessWidget {
                           style: const TextStyle(fontWeight: FontWeight.w700),
                         ),
                       ),
-                      Text(
-                          '${proposal.usesApproximateMetrics ? '~' : ''}${(proposal.durationSeconds / 60).round()} min'),
                     ]),
+                    const SizedBox(height: 4),
+                    Text(proposal.timingLabel,
+                        style: const TextStyle(
+                            fontSize: 12, color: AppColors.hint)),
                     const SizedBox(height: 8),
                     for (final stop in proposal.stops)
                       Padding(

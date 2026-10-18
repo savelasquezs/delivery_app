@@ -6,6 +6,10 @@
   <title>Señor Arroz · Desarrollo</title>
 </head>
 <body>
-  <script src="flutter_bootstrap.js" async></script>
+  <script>
+    const bootstrap = document.createElement('script');
+    bootstrap.src = `flutter_bootstrap.js?local=${Date.now()}`;
+    document.body.appendChild(bootstrap);
+  </script>
 </body>
 </html>

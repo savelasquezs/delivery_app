@@ -175,7 +175,7 @@ class _RouteProposalEditorState extends ConsumerState<RouteProposalEditor> {
                     Padding(
                         padding: const EdgeInsets.symmetric(vertical: 8),
                         child: Text(
-                            '${(_preview!.durationSeconds / 60).ceil()} min de recorrido · ${(_preview!.distanceMeters / 1000).toStringAsFixed(1)} km\n'
+                            '${_preview!.timingLabel} · ${(_preview!.distanceMeters / 1000).toStringAsFixed(1)} km\n'
                             'Salida con ${_selected.length} pedido(s) listos.${_preview!.warning == null ? '' : '\n${_preview!.warning}'}')),
                   if (_error != null)
                     Text(_error!,

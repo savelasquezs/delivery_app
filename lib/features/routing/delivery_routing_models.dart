@@ -49,6 +49,10 @@ class DeliveryRoutingStop {
           'preparación sin suficiente certeza para esta salida',
         'notSelectedByOptimizer' =>
           'pendiente por costo de recorrido o capacidad de esta salida',
+        'deliveryTimeLimit' => 'supera el tiempo máximo desde la sucursal',
+        'directionConflict' => 'requiere una salida en otra dirección',
+        'additionalDelayOrDurationLimit' =>
+          'añadirlo excede la duración o el retraso permitido de esta salida',
         _ => 'requiere revisión',
       };
 
@@ -66,6 +70,7 @@ class DeliveryRouteProposal {
   final int sequence;
   final String recommendation;
   final int durationSeconds;
+  final int? lastDeliverySeconds;
   final int distanceMeters;
   final bool isClaimable;
   final List<int> claimableReadyOrderIds;
@@ -87,13 +92,23 @@ class DeliveryRouteProposal {
       required this.warning,
       this.selectionFingerprint,
       this.waitDeadlineAtUtc,
+      this.lastDeliverySeconds,
       this.usesApproximateMetrics = true});
+
+  String get timingLabel {
+    final driving =
+        '${usesApproximateMetrics ? '~' : ''}${(durationSeconds / 60).ceil()} min de conducción';
+    return lastDeliverySeconds == null
+        ? driving
+        : '~${(lastDeliverySeconds! / 60).ceil()} min hasta última entrega · $driving';
+  }
 
   DeliveryRouteProposal asStale(Set<int> removed) => DeliveryRouteProposal(
       id: id,
       sequence: sequence,
       recommendation: recommendation,
       durationSeconds: durationSeconds,
+      lastDeliverySeconds: lastDeliverySeconds,
       distanceMeters: distanceMeters,
       isClaimable: false,
       claimableReadyOrderIds: const [],
@@ -109,6 +124,7 @@ class DeliveryRouteProposal {
           durationSeconds: (json['validatedDrivingDurationSeconds'] ??
               json['approximateDrivingDurationSeconds'] ??
               0) as int,
+          lastDeliverySeconds: (json['lastDeliverySeconds'] as num?)?.toInt(),
           distanceMeters: (json['validatedDistanceMeters'] ??
               json['approximateDistanceMeters'] ??
               0) as int,

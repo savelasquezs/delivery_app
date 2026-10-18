@@ -85,6 +85,8 @@ python -m http.server 8088 --bind 127.0.0.1 --directory build/web
 ```
 
 Abrir http://127.0.0.1:8088. El script local de la API autoriza ese origen.
+La entrada web de desarrollo carga bootstrap y código con una clave por recarga
+y no registra service worker, para evitar probar una compilación anterior en caché.
 Web permite consultar pedidos, propuestas y warnings; no inicia jornadas, no
 publica GPS ni habilita entregas. Los domiciliarios simulados necesitan puntos
 GPS recientes en la base local para aportar capacidad al planificador.
