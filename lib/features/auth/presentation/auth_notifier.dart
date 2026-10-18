@@ -118,8 +118,10 @@ class AuthNotifier extends StateNotifier<AuthState> {
     Future<LocationPermissionState> Function()? permissionReader,
     Future<void> Function()? registerFcm,
   })  : _onUpdateRequiredCleanup = onUpdateRequiredCleanup,
-        _trackingStarter = trackingStarter ?? LocationTrackingService.startTracking,
-        _isTrackingRunning = isTrackingRunning ?? (() => LocationTrackingService.isRunning),
+        _trackingStarter =
+            trackingStarter ?? LocationTrackingService.startTracking,
+        _isTrackingRunning =
+            isTrackingRunning ?? (() => LocationTrackingService.isRunning),
         _permissionReader = permissionReader ?? readLocationPermissionState,
         _registerFcm = registerFcm,
         super(const AuthState()) {
@@ -177,7 +179,8 @@ class AuthNotifier extends StateNotifier<AuthState> {
   /// may still be importing old data, starting an isolate, or waiting for a
   /// native plugin. None of those operations may hold the login spinner.
   void _scheduleTrackingStart(DeliveryWorkSession session) {
-    if (!mounted || state.status != AuthStatus.authenticated ||
+    if (!mounted ||
+        state.status != AuthStatus.authenticated ||
         state.workSession?.id != session.id) return;
     if (_trackingStartInFlight != null) {
       if (_startingTrackingSessionId != session.id ||
@@ -255,7 +258,8 @@ class AuthNotifier extends StateNotifier<AuthState> {
       );
       if (!running) _retryTracking(session, generation);
     } catch (error) {
-      debugPrint('TrackingStartup: failed after ${watch.elapsedMilliseconds}ms: '
+      debugPrint(
+          'TrackingStartup: failed after ${watch.elapsedMilliseconds}ms: '
           '${error.runtimeType}');
       if (_sameTrackingSession(generation, session)) {
         state = state.copyWith(
@@ -442,6 +446,14 @@ class AuthNotifier extends StateNotifier<AuthState> {
       final user = await _repository.login(
         LoginRequest(email: email, password: password),
       );
+      if (kIsWeb) {
+        state = AuthState(
+            status: AuthStatus.authenticated,
+            user: user,
+            trackingIssue:
+                'Vista web: seguimiento y entregas disponibles en Android.');
+        return;
+      }
       if (!await _requestLocationPermissions()) {
         throw StateError(
           'Para iniciar la jornada debes permitir ubicación precisa "Todo el tiempo" en los ajustes de Android.',
@@ -490,6 +502,11 @@ class AuthNotifier extends StateNotifier<AuthState> {
     required bool requestPermission,
     required bool preserveExistingSessionOnIssue,
   }) async {
+    if (kIsWeb) {
+      return const _TrackingReconciliation(
+          session: null,
+          issue: 'Vista web: seguimiento y entregas disponibles en Android.');
+    }
     final permission = requestPermission
         ? await _requestLocationPermissionState()
         : await _permissionReader();

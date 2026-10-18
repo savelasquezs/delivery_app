@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -25,8 +26,10 @@ class WorkSessionRepository {
         ApiConstants.myWorkSession,
         data: {
           'deviceInstallationId': installationId,
-          'devicePlatform': Platform.operatingSystem,
-          'deviceDescription': Platform.operatingSystemVersion,
+          'devicePlatform': kIsWeb ? 'web' : Platform.operatingSystem,
+          'deviceDescription': kIsWeb
+              ? 'Navegador de desarrollo'
+              : Platform.operatingSystemVersion,
           'appVersion': '${package.version}+${package.buildNumber}',
         },
         fromJson: (data) => Map<String, dynamic>.from(data as Map),

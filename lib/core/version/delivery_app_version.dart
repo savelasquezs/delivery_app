@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
@@ -24,7 +25,7 @@ class DeliveryAppVersionInfo {
       DeliveryAppVersionInfo(
         versionName: info.version,
         buildNumber: int.tryParse(info.buildNumber) ?? 0,
-        packageName: info.packageName,
+        packageName: kIsWeb ? 'com.senorarroz.delivery_app' : info.packageName,
       );
 
   Map<String, String> get headers => {

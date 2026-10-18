@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_colors.dart';
@@ -31,7 +32,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
-    final accepted = await showLocationDisclosure(context);
+    final accepted = kIsWeb || await showLocationDisclosure(context);
     if (!accepted || !mounted) return;
     ref.read(authNotifierProvider.notifier).login(
           _emailController.text.trim(),

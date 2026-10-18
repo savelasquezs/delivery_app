@@ -51,5 +51,40 @@ void main() {
     expect(plan.proposals.single.durationSeconds, 540);
     expect(plan.proposals.single.claimableReadyOrderIds, [10]);
     expect(plan.unroutedOrders.single.unroutedReason, 'requiresLocation');
+    expect(plan.warning, isNull);
+    expect(plan.proposedOrderCount, 1);
+    expect(plan.totalOrderCount, 2);
+    expect(plan.proposedReadyCount, 1);
+    expect(plan.totalReadyCount, 1);
+    expect(plan.proposals.single.usesApproximateMetrics, isFalse);
+  });
+
+  test('los pendientes no se presentan como rutas imposibles', () {
+    final stop = DeliveryRoutingStop.fromJson({
+      'orderId': 12,
+      'estimatedReadyAtUtc': '2026-10-17T17:00:00Z',
+      'unroutedReason': 'notSelectedByOptimizer',
+    });
+    expect(stop.reasonLabel, contains('costo de recorrido'));
+    expect(stop.reasonLabel, isNot(contains('factible')));
+  });
+
+  test('informa por qué disminuye la capacidad cuando vence el GPS', () {
+    final plan = DeliveryRoutingPlan.fromJson({
+      'id': 1,
+      'version': 1,
+      'capacity': {
+        'availableNow': 1,
+        'availableSoon': 0,
+        'couriers': [
+          {'workSessionId': 3, 'state': 'unknown'},
+          {'workSessionId': 4, 'state': 'unknown'},
+          {'workSessionId': 0, 'state': 'offDuty'},
+        ]
+      },
+      'proposals': [],
+      'unroutedOrders': [],
+    });
+    expect(plan.warning, startsWith('2 domiciliario(s) sin GPS reciente'));
   });
 }

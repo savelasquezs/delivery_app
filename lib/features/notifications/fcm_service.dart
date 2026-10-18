@@ -202,6 +202,7 @@ class FcmService {
 
   /// Inicializa Firebase + FCM + canal local. Llamar desde `main()` antes de `runApp`.
   static Future<void> initialize() async {
+    if (kIsWeb) return;
     if (_initialized) return;
     _initialized = true;
 
@@ -328,6 +329,7 @@ class FcmService {
 
   /// Solicita permiso push (Android 13+ / iOS).
   static Future<bool> requestPermission() async {
+    if (kIsWeb) return false;
     final messaging = FirebaseMessaging.instance;
     final settings = await messaging.requestPermission(
       alert: true,
@@ -350,6 +352,7 @@ class FcmService {
 
   /// Registra el token en el backend.
   static Future<void> registerToken(DioClient client) async {
+    if (kIsWeb) return;
     _authenticatedClient = client;
     _listenForTokenRefresh();
     final token = await getToken();
@@ -392,6 +395,7 @@ class FcmService {
 
   /// Elimina el token del backend (al cerrar sesión).
   static Future<void> unregisterToken(DioClient client) async {
+    if (kIsWeb) return;
     final token = await getToken();
     if (token != null) {
       try {

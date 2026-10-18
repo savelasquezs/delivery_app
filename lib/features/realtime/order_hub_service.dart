@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/foundation.dart';
 import 'package:signalr_netcore/signalr_client.dart';
 import 'package:signalr_netcore/ihub_protocol.dart';
 import '../../core/api/api_constants.dart';
@@ -79,10 +80,18 @@ class OrderHubService {
   Future<bool> _tryConnect({required HttpTransportType transport}) async {
     try {
       final headers = MessageHeaders();
-      (await _versionInfo.headers()).forEach(headers.setHeaderValue);
+      final version = await _versionInfo.get();
+      version.headers.forEach(headers.setHeaderValue);
+      final hubUri = Uri.parse(ApiConstants.signalrHubUrl);
+      final hubUrl = kIsWeb ? hubUri.replace(queryParameters: {
+        ...hubUri.queryParameters,
+        'version': version.versionName,
+        'build': version.buildNumber.toString(),
+        'packageName': version.packageName,
+      }).toString() : ApiConstants.signalrHubUrl;
       _connection = HubConnectionBuilder()
           .withUrl(
-            ApiConstants.signalrHubUrl,
+            hubUrl,
             options: HttpConnectionOptions(
               transport: transport,
               skipNegotiation: transport == HttpTransportType.WebSockets,

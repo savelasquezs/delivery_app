@@ -262,9 +262,19 @@ class _RoutingTabContent extends StatelessWidget {
           Card(
             child: Padding(
               padding: const EdgeInsets.all(12),
-              child: Text(
-                'Plan v${current.version} · ${current.availableNow} libres · ${current.availableSoon} próximos',
-                style: const TextStyle(fontWeight: FontWeight.w700),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                      'Plan v${current.version} · ${current.availableNow} libres · ${current.availableSoon} próximos',
+                      style: const TextStyle(fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 6),
+                  Text(
+                      '${current.proposedOrderCount}/${current.totalOrderCount} pedidos con propuesta · ${current.proposedReadyCount}/${current.totalReadyCount} listos'),
+                  if (current.proposals.any((p) => p.usesApproximateMetrics))
+                    const Text('Tiempos y distancias aproximados.',
+                        style: TextStyle(fontSize: 12, color: AppColors.hint)),
+                ],
               ),
             ),
           ),
@@ -294,7 +304,8 @@ class _RoutingTabContent extends StatelessWidget {
                           style: const TextStyle(fontWeight: FontWeight.w700),
                         ),
                       ),
-                      Text('${(proposal.durationSeconds / 60).round()} min'),
+                      Text(
+                          '${proposal.usesApproximateMetrics ? '~' : ''}${(proposal.durationSeconds / 60).round()} min'),
                     ]),
                     const SizedBox(height: 8),
                     for (final stop in proposal.stops)
@@ -352,8 +363,7 @@ class _RoutingTabContent extends StatelessWidget {
                     const Text('Sin ruta sugerida',
                         style: TextStyle(fontWeight: FontWeight.w700)),
                     for (final stop in current.unroutedOrders)
-                      Text(
-                          '#${stop.orderId} · ${_reason(stop.unroutedReason)}'),
+                      Text('#${stop.orderId} · ${stop.reasonLabel}'),
                   ],
                 ),
               ),
@@ -368,12 +378,6 @@ class _RoutingTabContent extends StatelessWidget {
         'wait' => 'Esperar',
         'next' => 'Siguiente salida',
         _ => value,
-      };
-
-  static String _reason(String? value) => switch (value) {
-        'requiresLocation' => 'falta ubicación',
-        'noCapacity' => 'sin domiciliario disponible',
-        _ => 'pendiente',
       };
 }
 
@@ -466,6 +470,8 @@ class _OrderTabBar extends StatelessWidget {
       color: AppColors.surface,
       child: TabBar(
         controller: controller,
+        isScrollable: true,
+        tabAlignment: TabAlignment.start,
         labelColor: AppColors.primaryLight,
         unselectedLabelColor: AppColors.hint,
         indicatorColor: AppColors.primary,

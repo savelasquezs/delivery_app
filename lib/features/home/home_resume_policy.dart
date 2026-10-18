@@ -1,4 +1,5 @@
 import '../tracking/work_session_models.dart';
+import 'package:flutter/foundation.dart';
 
 enum HomeResumeRefresh { available, route, none }
 
@@ -15,6 +16,7 @@ bool shouldConnectOrderHub({
   required DeliveryWorkSession? workSession,
   DateTime? nowUtc,
 }) {
+  if (kIsWeb) return authenticated;
   if (!authenticated || workSession == null || !workSession.isActive) {
     return false;
   }

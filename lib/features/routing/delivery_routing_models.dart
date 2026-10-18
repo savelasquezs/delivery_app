@@ -45,7 +45,10 @@ class DeliveryRoutingStop {
         'noCapacity' => 'sin domiciliario disponible',
         'preparingLater' => 'preparación fuera de la ventana de salida',
         'waitingWouldDelayReadyOrders' => 'esperarlo retrasaría pedidos listos',
-        'notSelectedByOptimizer' => 'sin combinación factible en este cálculo',
+        'preparationUncertain' =>
+          'preparación sin suficiente certeza para esta salida',
+        'notSelectedByOptimizer' =>
+          'pendiente por costo de recorrido o capacidad de esta salida',
         _ => 'requiere revisión',
       };
 
@@ -70,6 +73,7 @@ class DeliveryRouteProposal {
   final String? warning;
   final String? selectionFingerprint;
   final DateTime? waitDeadlineAtUtc;
+  final bool usesApproximateMetrics;
 
   const DeliveryRouteProposal(
       {required this.id,
@@ -82,7 +86,8 @@ class DeliveryRouteProposal {
       required this.stops,
       required this.warning,
       this.selectionFingerprint,
-      this.waitDeadlineAtUtc});
+      this.waitDeadlineAtUtc,
+      this.usesApproximateMetrics = true});
 
   DeliveryRouteProposal asStale(Set<int> removed) => DeliveryRouteProposal(
       id: id,
@@ -93,7 +98,8 @@ class DeliveryRouteProposal {
       isClaimable: false,
       claimableReadyOrderIds: const [],
       stops: stops.where((s) => !removed.contains(s.orderId)).toList(),
-      warning: warning);
+      warning: warning,
+      usesApproximateMetrics: usesApproximateMetrics);
 
   factory DeliveryRouteProposal.fromJson(Map<String, dynamic> json) =>
       DeliveryRouteProposal(
@@ -115,10 +121,11 @@ class DeliveryRouteProposal {
                   Map<String, dynamic>.from(value as Map)))
               .toList(),
           warning: json['planningWarnings'] as String?,
+          usesApproximateMetrics:
+              (json['validatedDrivingDurationSeconds'] as num? ?? 0) <= 0,
           selectionFingerprint: json['selectionFingerprint'] as String?,
           waitDeadlineAtUtc:
-              DateTime.tryParse(json['waitDeadlineAtUtc']?.toString() ?? '')
-                  ?.toUtc());
+              DateTime.tryParse(json['waitDeadlineAtUtc']?.toString() ?? '')?.toUtc());
 }
 
 class DeliveryRoutingPlan {
@@ -147,6 +154,14 @@ class DeliveryRoutingPlan {
       proposals.any((p) => p.stops.any((s) => s.orderId == id)) ||
       unroutedOrders.any((s) => s.orderId == id);
 
+  int get proposedOrderCount =>
+      proposals.fold(0, (count, p) => count + p.stops.length);
+  int get totalOrderCount => proposedOrderCount + unroutedOrders.length;
+  int get proposedReadyCount =>
+      proposals.expand((p) => p.stops).where((s) => s.isReady).length;
+  int get totalReadyCount =>
+      proposedReadyCount + unroutedOrders.where((s) => s.isReady).length;
+
   DeliveryRoutingPlan asStale(String reason,
           {Set<int> removeOrders = const {}}) =>
       DeliveryRoutingPlan(
@@ -172,13 +187,20 @@ class DeliveryRoutingPlan {
         .map((value) => DeliveryRoutingStop.fromJson(
             Map<String, dynamic>.from(value as Map)))
         .toList();
-    // The existing screen already renders plan warnings above the routes.
-    // Include explicit exclusion reasons instead of leaving a generic "pendiente".
     final messages = <String>[
       if (json['warnings'] is String && (json['warnings'] as String).isNotEmpty)
         json['warnings'] as String,
-      for (final stop in unrouted) '#${stop.orderId}: ${stop.reasonLabel}.',
     ];
+    final couriers = (capacity['couriers'] as List? ?? const [])
+        .whereType<Map>()
+        .where((c) =>
+            (c['workSessionId'] as num? ?? 0) > 0 &&
+            (c['state'] == 'unknown' || c['state'] == 'probableAtBranch'))
+        .length;
+    if (couriers > 0) {
+      messages.add(
+          '$couriers domiciliario(s) sin GPS reciente y confiable. La capacidad de rutas puede reducirse.');
+    }
     final plan = DeliveryRoutingPlan(
         id: json['id'] as int,
         version: json['version'] as int,

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -102,7 +103,7 @@ class _DeliveryAppState extends ConsumerState<DeliveryApp>
         if (_reviewDialogOpen) rootNavigatorKey.currentState?.pop();
       }
     });
-    FlutterForegroundTask.addTaskDataCallback(_onTrackingTaskData);
+    if (!kIsWeb) FlutterForegroundTask.addTaskDataCallback(_onTrackingTaskData);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(FcmService.emitPendingTrackingReviewNotices());
     });
@@ -112,7 +113,8 @@ class _DeliveryAppState extends ConsumerState<DeliveryApp>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _reviewSubscription?.cancel();
-    FlutterForegroundTask.removeTaskDataCallback(_onTrackingTaskData);
+    if (!kIsWeb)
+      FlutterForegroundTask.removeTaskDataCallback(_onTrackingTaskData);
     super.dispose();
   }
 
@@ -140,7 +142,11 @@ class _DeliveryAppState extends ConsumerState<DeliveryApp>
     if (raw is! Map) return;
     final review = Map<String, dynamic>.from(raw);
     final ids = (review['pendingOrderIds'] as List? ?? [])
-        .whereType<int>().where((id) => id > 0).toSet().toList()..sort();
+        .whereType<int>()
+        .where((id) => id > 0)
+        .toSet()
+        .toList()
+      ..sort();
     if (ids.isEmpty ||
         review['routeId'] is! int ||
         review['returnLocationId'] is! int) return;
@@ -158,15 +164,20 @@ class _DeliveryAppState extends ConsumerState<DeliveryApp>
 
   Future<void> _showPendingReturnReview() async {
     final review = _pendingReturnReview;
-    if (review == null || _reviewDialogOpen ||
+    if (review == null ||
+        _reviewDialogOpen ||
         _dismissedReturnReviews.contains(review['key'])) return;
-    if (ref.read(authNotifierProvider).status != AuthStatus.authenticated) return;
+    if (ref.read(authNotifierProvider).status != AuthStatus.authenticated)
+      return;
     final context = rootNavigatorKey.currentContext;
     if (context == null ||
-        WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) return;
+        WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed)
+      return;
     final session = await SecureStorage().readSession();
-    if (!mounted || !context.mounted ||
-        session?.id != review['sessionId'] || _reviewDialogOpen) return;
+    if (!mounted ||
+        !context.mounted ||
+        session?.id != review['sessionId'] ||
+        _reviewDialogOpen) return;
 
     _reviewDialogOpen = true;
     try {
@@ -179,12 +190,13 @@ class _DeliveryAppState extends ConsumerState<DeliveryApp>
             throw StateError('La sesión cambió.');
           }
           await ref.read(orderRepositoryProvider).confirmReturnedOrders(
-            routeId: review['routeId'] as int,
-            returnLocationId: review['returnLocationId'] as int,
-            orderIds: ids,
-          );
+                routeId: review['routeId'] as int,
+                returnLocationId: review['returnLocationId'] as int,
+                orderIds: ids,
+              );
           if (mounted) {
-            await ref.read(routeNotifierProvider.notifier)
+            await ref
+                .read(routeNotifierProvider.notifier)
                 .load(silently: true, ensureFresh: true);
           }
         },

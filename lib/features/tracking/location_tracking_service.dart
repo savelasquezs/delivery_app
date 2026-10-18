@@ -70,7 +70,6 @@ Future<T> _traceTrackingPhase<T>(
   }
 }
 
-
 Future<void> _recordDeviceEvent(
   String eventType, {
   String? clientEventId,
@@ -472,10 +471,10 @@ class LocationTaskHandler extends TaskHandler {
       dynamic data, TrackingContext context) async {
     if (data is! Map || !await _isCurrent(context)) return;
     final routeId = int.tryParse(data['deliveryRouteId']?.toString() ?? '');
-    final savedRouteId = await FlutterForegroundTask.getData<int>(
-        key: _kDeliveryRouteId);
-    final savedMode = await FlutterForegroundTask.getData<String>(
-        key: _kTrackingMode);
+    final savedRouteId =
+        await FlutterForegroundTask.getData<int>(key: _kDeliveryRouteId);
+    final savedMode =
+        await FlutterForegroundTask.getData<String>(key: _kTrackingMode);
     if (data['continueActiveTracking'] == true && routeId != null) {
       if (savedMode != _modeActiveDelivery || savedRouteId != routeId) {
         await LocationTrackingService.setActiveDeliveryMode(routeId: routeId);
@@ -522,6 +521,7 @@ class LocationTrackingService {
   }
 
   static void initialize() {
+    if (kIsWeb) return;
     if (_initialized) return;
     _initialized = true;
     FlutterForegroundTask.init(
@@ -553,6 +553,7 @@ class LocationTrackingService {
   /// launch records it while the previous work session is still expected to be
   /// tracking and has not reached its automatic closing time.
   static Future<void> detectUnexpectedStop() async {
+    if (kIsWeb) return;
     if (!_initialized) initialize();
     final expectedActive = await FlutterForegroundTask.getData<bool>(
           key: _kTrackingExpectedActive,
@@ -607,6 +608,9 @@ class LocationTrackingService {
     required String buildNumber,
     required String packageName,
   }) async {
+    if (kIsWeb)
+      throw UnsupportedError(
+          'El seguimiento en segundo plano requiere Android.');
     final workSessionId = workSession.id;
     final autoCloseAtUtc = workSession.autoCloseAt;
     final lightIntervalSeconds = workSession.tracking.lightIntervalSeconds;
@@ -751,6 +755,7 @@ class LocationTrackingService {
   static Future<void> setLightMode() => _enqueue(_setLightMode);
 
   static Future<void> _setLightMode() async {
+    if (kIsWeb) return;
     await FlutterForegroundTask.removeData(key: _kDeliveryRouteId);
     final interval = await FlutterForegroundTask.getData<int>(
           key: _kLightIntervalSeconds,
@@ -764,6 +769,7 @@ class LocationTrackingService {
       _enqueue(() => _setActiveDeliveryMode(routeId: routeId));
 
   static Future<void> _setActiveDeliveryMode({int? routeId}) async {
+    if (kIsWeb) return;
     if (routeId == null) {
       await FlutterForegroundTask.removeData(key: _kDeliveryRouteId);
     } else {
@@ -825,6 +831,7 @@ class LocationTrackingService {
     bool discardPending = false,
     TrackingContext? expectedContext,
   }) async {
+    if (kIsWeb) return;
     final current = await _outbox.current();
     if (expectedContext != null &&
         (current == null || !current.matches(expectedContext))) return;
@@ -878,11 +885,13 @@ class LocationTrackingService {
   }
 
   static Future<void> updateToken(String newToken) async {
+    if (kIsWeb) return;
     if (!await FlutterForegroundTask.isRunningService) return;
     await FlutterForegroundTask.saveData(key: _kAuthToken, value: newToken);
   }
 
   static Future<void> updateAutoCloseAt(DateTime autoCloseAtUtc) async {
+    if (kIsWeb) return;
     final cutoff = autoCloseAtUtc.toUtc();
     final context = await _outbox.current();
     if (context != null) {
@@ -902,5 +911,7 @@ class LocationTrackingService {
     }
   }
 
-  static Future<bool> get isRunning => FlutterForegroundTask.isRunningService;
+  static Future<bool> get isRunning => kIsWeb
+      ? Future<bool>.value(false)
+      : FlutterForegroundTask.isRunningService;
 }

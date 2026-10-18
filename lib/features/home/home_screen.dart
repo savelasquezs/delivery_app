@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
@@ -255,6 +256,16 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     final kind = classifyOrderHubEvent(event);
 
     if (kind == OrderHubEventKind.routing) {
+      if (kIsWeb && event == deliveryRoutingPlanChangedHubEvent &&
+          args != null && args.isNotEmpty && args.first is Map) {
+        final version = (args.first as Map)['version'];
+        if (version is num) {
+          await available.loadRouting(silently: true);
+          if (!mounted || (ref.read(availableNotifierProvider).routingPlan?.version ?? 0) >= version) {
+            return;
+          }
+        }
+      }
       available.invalidateRouting('El servidor está actualizando el plan.');
       await available.loadRouting(silently: true, ensureFresh: true);
       return;

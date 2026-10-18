@@ -4,12 +4,18 @@ const String kDeliveryAppPlayStoreUrl =
     'https://play.google.com/store/apps/details?id=com.senorarroz.delivery_app';
 
 abstract class ApiConstants {
-  static String get baseUrl =>
-      dotenv.env['API_BASE_URL'] ?? 'https://senorarrozapi.up.railway.app/api';
+  static const _baseUrlOverride = String.fromEnvironment('API_BASE_URL');
+  static const _hubUrlOverride = String.fromEnvironment('SIGNALR_HUB_URL');
 
-  static String get signalrHubUrl =>
-      dotenv.env['SIGNALR_HUB_URL'] ??
-      'https://senorarrozapi.up.railway.app/hubs/orders';
+  static String get baseUrl => _baseUrlOverride.isNotEmpty
+      ? _baseUrlOverride
+      : dotenv.env['API_BASE_URL'] ??
+          'https://senorarrozapi.up.railway.app/api';
+
+  static String get signalrHubUrl => _hubUrlOverride.isNotEmpty
+      ? _hubUrlOverride
+      : dotenv.env['SIGNALR_HUB_URL'] ??
+          'https://senorarrozapi.up.railway.app/hubs/orders';
 
   /// Red móvil / API en frío (p. ej. Railway): más holgura que el front web (10s).
   static const Duration connectTimeout = Duration(seconds: 30);
