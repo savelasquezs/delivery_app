@@ -9,6 +9,7 @@ class DeliveryRoutingStop {
   final String preparationConfidence;
   final double readyWithinWindowProbability;
   final DateTime? estimatedArrivalAtUtc;
+  final int? deliveryTimeLimitSeconds;
 
   const DeliveryRoutingStop(
       {required this.orderId,
@@ -20,7 +21,8 @@ class DeliveryRoutingStop {
       required this.unroutedReason,
       this.preparationConfidence = 'unknown',
       this.readyWithinWindowProbability = 0,
-      this.estimatedArrivalAtUtc});
+      this.estimatedArrivalAtUtc,
+      this.deliveryTimeLimitSeconds});
 
   factory DeliveryRoutingStop.fromJson(Map<String, dynamic> json) =>
       DeliveryRoutingStop(
@@ -36,9 +38,15 @@ class DeliveryRoutingStop {
               json['preparationConfidence'] as String? ?? 'unknown',
           readyWithinWindowProbability:
               (json['readyWithinWindowProbability'] as num?)?.toDouble() ?? 0,
+          deliveryTimeLimitSeconds:
+              (json['deliveryTimeLimitSeconds'] as num?)?.toInt(),
           estimatedArrivalAtUtc:
               DateTime.tryParse(json['estimatedArrivalAtUtc']?.toString() ?? '')
                   ?.toUtc());
+
+  String? get exceptionLabel => deliveryTimeLimitSeconds == null
+      ? null
+      : 'Excepción automática por distancia · límite ${(deliveryTimeLimitSeconds! / 60).ceil()} min';
 
   String get reasonLabel => switch (unroutedReason) {
         'requiresLocation' => 'falta ubicación válida',

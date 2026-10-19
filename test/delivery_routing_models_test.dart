@@ -2,6 +2,20 @@ import 'package:delivery_app/features/routing/delivery_routing_models.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('muestra la excepción calculada sin aplicarla a los demás pedidos', () {
+    final normal = DeliveryRoutingStop.fromJson({
+      'orderId': 1,
+      'estimatedReadyAtUtc': '2026-10-18T17:00:00Z',
+    });
+    final distant = DeliveryRoutingStop.fromJson({
+      'orderId': 2,
+      'estimatedReadyAtUtc': '2026-10-18T17:00:00Z',
+      'deliveryTimeLimitSeconds': 4034,
+    });
+    expect(normal.exceptionLabel, isNull);
+    expect(distant.exceptionLabel, contains('automática'));
+    expect(distant.exceptionLabel, contains('68 min'));
+  });
   test('parsea plan, propuesta, capacidad y pedidos sin ruta', () {
     final plan = DeliveryRoutingPlan.fromJson({
       'id': 3,
@@ -93,7 +107,8 @@ void main() {
     expect(plan.warning, startsWith('2 domiciliario(s) sin GPS reciente'));
   });
 
-  test('explica los límites de tiempo sin confundirlos con falta de conductor', () {
+  test('explica los límites de tiempo sin confundirlos con falta de conductor',
+      () {
     final stop = DeliveryRoutingStop.fromJson({
       'orderId': 34,
       'estimatedReadyAtUtc': '2026-10-18T17:00:00Z',

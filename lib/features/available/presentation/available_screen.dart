@@ -324,7 +324,7 @@ class _RoutingTabContent extends StatelessWidget {
                             const SizedBox(width: 8),
                             Expanded(
                               child: Text(
-                                '#${stop.orderId} · ${stop.neighborhood ?? stop.address}\n${stop.isReady ? 'Listo' : 'Preparación estimada: ${TimeOfDay.fromDateTime(stop.estimatedReadyAtUtc.toLocal()).format(context)} · ${(stop.readyWithinWindowProbability * 100).round()}% de estar listo pronto · confianza ${stop.confidenceLabel}'}',
+                                '#${stop.orderId} · ${stop.address}${stop.neighborhood == null ? '' : ' · ${stop.neighborhood}'}\n${stop.isReady ? 'Listo' : 'Preparación estimada: ${TimeOfDay.fromDateTime(stop.estimatedReadyAtUtc.toLocal()).format(context)} · ${(stop.readyWithinWindowProbability * 100).round()}% de estar listo pronto · confianza ${stop.confidenceLabel}'}${stop.exceptionLabel == null ? '' : '\n${stop.exceptionLabel}'}',
                               ),
                             ),
                           ],
