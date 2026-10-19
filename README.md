@@ -101,3 +101,5 @@ El simulador dura dos horas y emite GPS cada minuto exclusivamente para los tres
 domiciliarios ficticios libres con jornada activa; se detiene para quien tenga
 pedidos o ruta asignados. El celular conserva su GPS real. No reinicia los tiempos
 de los pedidos; el script de reinicio anterior permite empezar otro escenario.
+
+<!-- Re-dispatch Google Play internal publication after switching repository visibility to public (2026-10-19). -->
