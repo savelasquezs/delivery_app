@@ -253,8 +253,10 @@ void main() {
     expect(_canAccept(tester), isTrue);
     expect(
         tester.getSize(find.byType(RouteProposalEditor)).height, lessThan(750));
-    await expectLater(find.byType(RouteProposalEditor),
-        matchesGoldenFile('goldens/route_proposal_editor_390.png'));
+    await expectLater(
+        find.byType(RouteProposalEditor),
+        matchesGoldenFile(
+            'goldens/route_proposal_editor_390${Platform.isLinux ? '_linux' : ''}.png'));
     expect(tester.takeException(), isNull);
   });
 
