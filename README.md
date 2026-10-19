@@ -39,6 +39,12 @@ Para exigir un hotfix sin cambiar la versión visible, aumentar
 
 ## Desarrollo
 
+Las propuestas de rutas se renuevan al vencer `expiresAtUtc`, recuperar conexión
+o volver al primer plano. Los avisos SignalR se agrupan por versión y las
+consultas se serializan. Los errores transitorios se reintentan después de 1,
+2 y 4 segundos; después se muestra la acción de reintentar. Las rutas aceptadas
+permanecen fijas y la selección manual sigue disponible.
+
 ```bash
 flutter pub get
 flutter run

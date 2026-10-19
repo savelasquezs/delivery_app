@@ -20,7 +20,7 @@ void main() {
     expect(requests, 1);
   });
 
-  testWidgets('expiry marks a plan stale without any periodic HTTP request', (tester) async {
+  testWidgets('expiry automatically replaces the stale recommendation', (tester) async {
     var requests = 0;
     final base = fixture.plan();
     final n = fixture.notifier(fixture.Routes(() async {
@@ -33,9 +33,9 @@ void main() {
     await n.loadRouting();
     expect(n.state.routingPlan!.isStale, isFalse);
     await tester.pump(const Duration(minutes: 2));
-    expect(n.state.routingPlan!.isStale, isTrue);
-    expect(n.state.routingPlan!.proposals.single.isClaimable, isFalse);
-    expect(requests, 1);
+    expect(n.state.routingPlan!.isStale, isFalse);
+    expect(n.state.routingPlan!.proposals.single.isClaimable, isTrue);
+    expect(requests, 2);
     n.dispose();
   });
 }

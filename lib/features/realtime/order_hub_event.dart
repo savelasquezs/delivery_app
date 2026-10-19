@@ -8,6 +8,14 @@ const routeProposalClaimedHubEvent = 'RouteProposalClaimed';
 
 enum OrderHubEventKind { ready, assigned, modified, routing, ignored }
 
+int? routingPlanVersionFromHubEvent(String event, List<Object?>? args) {
+  if (event != deliveryRoutingPlanChangedHubEvent) return null;
+  final payload = _firstMap(args);
+  final value = payload?['version'] ?? payload?['Version'];
+  if (value is int && value > 0) return value;
+  return null;
+}
+
 OrderHubEventKind classifyOrderHubEvent(String event) {
   return switch (event) {
     orderReadyHubEvent => OrderHubEventKind.ready,

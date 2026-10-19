@@ -9,6 +9,7 @@ import '../data/branch_presence_verifier.dart';
 import '../../routing/delivery_routing_models.dart';
 import '../../routing/delivery_routing_repository.dart';
 import '../../../core/errors/user_facing_error.dart';
+import '../../../core/api/api_exception.dart';
 import '../../../core/orders/route_order_helpers.dart';
 
 class AvailableState {
@@ -81,6 +82,10 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
   bool _reloadAvailableAfterInFlight = false;
   bool _reloadRoutingAfterInFlight = false;
   Timer? _planExpiry;
+  Timer? _routingRetry;
+  int _routingRetryAttempt = 0;
+  int _announcedRoutingVersion = 0;
+  bool _routingActive = true;
 
   AvailableNotifier(
       this._repository,
@@ -97,6 +102,7 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
   @override
   void dispose() {
     _planExpiry?.cancel();
+    _routingRetry?.cancel();
     super.dispose();
   }
 
@@ -110,8 +116,9 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
     final operation = _loadUntilFresh(branchId: branchId, silently: silently);
     _availableLoadInFlight = operation;
     return operation.whenComplete(() {
-      if (identical(_availableLoadInFlight, operation))
+      if (identical(_availableLoadInFlight, operation)) {
         _availableLoadInFlight = null;
+      }
     });
   }
 
@@ -157,8 +164,9 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
     final operation = _loadPreparation(silently: silently);
     _preparationLoadInFlight = operation;
     return operation.whenComplete(() {
-      if (identical(_preparationLoadInFlight, operation))
+      if (identical(_preparationLoadInFlight, operation)) {
         _preparationLoadInFlight = null;
+      }
     });
   }
 
@@ -225,6 +233,11 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
   }
 
   Future<void> loadRouting({bool silently = false, bool ensureFresh = false}) {
+    if (!mounted || !_routingActive) return Future.value();
+    if (!silently) {
+      _routingRetry?.cancel();
+      _routingRetryAttempt = 0;
+    }
     final current = _routingLoadInFlight;
     if (current != null) {
       if (ensureFresh) _reloadRoutingAfterInFlight = true;
@@ -233,24 +246,103 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
     final operation = _loadRoutingUntilFresh(silently: silently);
     _routingLoadInFlight = operation;
     return operation.whenComplete(() {
-      if (identical(_routingLoadInFlight, operation))
+      if (identical(_routingLoadInFlight, operation)) {
         _routingLoadInFlight = null;
+      }
     });
   }
 
   Future<void> _loadRoutingUntilFresh({required bool silently}) async {
+    var attempts = 0;
     do {
       _reloadRoutingAfterInFlight = false;
       await _loadRouting(silently: silently);
+      attempts++;
       silently = true;
-    } while (_reloadRoutingAfterInFlight && mounted);
+    } while (_reloadRoutingAfterInFlight &&
+        mounted &&
+        _routingActive &&
+        attempts < 2);
+    if (_reloadRoutingAfterInFlight && mounted) {
+      state = state.copyWith(
+          isLoadingRouting: false,
+          errorRouting:
+              'La disponibilidad cambió mientras actualizábamos las rutas.');
+      _scheduleRoutingRetry();
+    }
+  }
+
+  Future<void> routingPlanChanged(int? version) {
+    if (!mounted) return Future.value();
+    if (version == null) {
+      invalidateRouting('Cambió la disponibilidad de las rutas.');
+      return loadRouting(silently: true, ensureFresh: true);
+    }
+    if (version <= _announcedRoutingVersion ||
+        version <= (state.routingPlan?.version ?? 0)) {
+      return Future.value();
+    }
+    _announcedRoutingVersion = version;
+    _planExpiry?.cancel();
+    if (state.routingPlan != null) {
+      state = state.copyWith(
+          routingPlan: state.routingPlan!
+              .asStale('Estamos actualizando las rutas automáticamente.'));
+    }
+    return loadRouting(silently: true);
+  }
+
+  void setRoutingActive(bool active) {
+    if (!mounted || active == _routingActive) return;
+    _routingActive = active;
+    if (!active) {
+      _planExpiry?.cancel();
+      _routingRetry?.cancel();
+    } else {
+      _routingRetryAttempt = 0;
+      unawaited(loadRouting(silently: true, ensureFresh: true));
+    }
+  }
+
+  void _scheduleRoutingRetry() {
+    if (!mounted ||
+        !_routingActive ||
+        _routingRetry?.isActive == true ||
+        _routingRetryAttempt >= 3) {
+      return;
+    }
+    final delay = Duration(seconds: 1 << _routingRetryAttempt++);
+    _routingRetry = Timer(delay, () {
+      if (mounted && _routingActive) unawaited(loadRouting(silently: true));
+    });
+  }
+
+  bool _isTransientRoutingError(Object error) {
+    if (error is TimeoutException) return true;
+    final status = error is DioException
+        ? error.response?.statusCode ??
+            (error.error is ApiException
+                ? (error.error as ApiException).statusCode
+                : null)
+        : error is ApiException
+            ? error.statusCode
+            : null;
+    if (status != null) {
+      return status == 408 || status == 409 || status == 429 || status >= 500;
+    }
+    return error is DioException &&
+        (error.type == DioExceptionType.connectionError ||
+            error.type == DioExceptionType.connectionTimeout ||
+            error.type == DioExceptionType.receiveTimeout ||
+            error.type == DioExceptionType.sendTimeout);
   }
 
   Future<void> _loadRouting({required bool silently}) async {
     if (!mounted) return;
     final revision = _routingRevision;
-    if (!silently)
+    if (!silently) {
       state = state.copyWith(isLoadingRouting: true, clearErrorRouting: true);
+    }
     try {
       final plan = await _routingRepository.getPlan();
       if (!mounted) return;
@@ -259,21 +351,34 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
         state = state.copyWith(isLoadingRouting: false);
         return;
       }
+      if (plan.version < _announcedRoutingVersion ||
+          plan.version < (state.routingPlan?.version ?? 0)) {
+        _reloadRoutingAfterInFlight = true;
+        state = state.copyWith(
+            isLoadingRouting: false,
+            errorRouting: 'El servidor aún está actualizando las rutas.');
+        return;
+      }
+      final expires = plan.effectiveExpiresAtUtc;
+      if (plan.isStale ||
+          (expires != null && !expires.isAfter(DateTime.now().toUtc()))) {
+        state = state.copyWith(
+            isLoadingRouting: false,
+            routingPlan: plan.asStale('La recomendación necesita renovarse.'),
+            errorRouting: 'No pudimos obtener una recomendación vigente.');
+        _scheduleRoutingRetry();
+        return;
+      }
+      _routingRetry?.cancel();
+      _routingRetryAttempt = 0;
       state = state.copyWith(
           routingPlan: plan, isLoadingRouting: false, clearErrorRouting: true);
       _planExpiry?.cancel();
-      final generated = plan.generatedAtUtc;
-      if (generated != null && !plan.isStale) {
-        final seconds = generated
-            .add(const Duration(minutes: 2))
-            .difference(DateTime.now().toUtc())
-            .inSeconds
-            .clamp(0, 120)
-            .toInt();
-        // A single local expiry callback, not HTTP polling.
-        _planExpiry = Timer(Duration(seconds: seconds), () {
-          if (mounted && identical(state.routingPlan, plan)) {
+      if (expires != null && _routingActive) {
+        _planExpiry = Timer(expires.difference(DateTime.now().toUtc()), () {
+          if (mounted && _routingActive && identical(state.routingPlan, plan)) {
             invalidateRouting('Venció la vigencia de esta recomendación.');
+            unawaited(loadRouting(silently: true));
           }
         });
       }
@@ -285,6 +390,7 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
           isLoadingRouting: false,
           errorRouting: message,
           routingPlan: state.routingPlan?.asStale(message));
+      if (_isTransientRoutingError(error)) _scheduleRoutingRetry();
     }
   }
 

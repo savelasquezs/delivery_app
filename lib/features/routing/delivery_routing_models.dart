@@ -198,6 +198,7 @@ class DeliveryRoutingPlan {
   final String? warning;
   final bool isStale;
   final DateTime? generatedAtUtc;
+  final DateTime? expiresAtUtc;
 
   const DeliveryRoutingPlan(
       {required this.id,
@@ -208,7 +209,11 @@ class DeliveryRoutingPlan {
       required this.unroutedOrders,
       required this.warning,
       this.isStale = false,
-      this.generatedAtUtc});
+      this.generatedAtUtc,
+      this.expiresAtUtc});
+
+  DateTime? get effectiveExpiresAtUtc =>
+      expiresAtUtc ?? generatedAtUtc?.add(const Duration(minutes: 2));
 
   bool containsOrder(int id) =>
       proposals.any((p) => p.stops.any((s) => s.orderId == id)) ||
@@ -231,8 +236,9 @@ class DeliveryRoutingPlan {
           availableSoon: availableSoon,
           isStale: true,
           generatedAtUtc: generatedAtUtc,
+          expiresAtUtc: expiresAtUtc,
           warning:
-              'Plan desactualizado. $reason\nDesliza para actualizar. La selección manual sigue disponible.',
+              'Plan desactualizado. $reason\nLa selección manual sigue disponible.',
           proposals: proposals
               .map((p) => p.asStale(removeOrders))
               .where((p) => p.stops.isNotEmpty)
@@ -269,6 +275,8 @@ class DeliveryRoutingPlan {
         generatedAtUtc:
             DateTime.tryParse(json['generatedAtUtc']?.toString() ?? '')
                 ?.toUtc(),
+        expiresAtUtc:
+            DateTime.tryParse(json['expiresAtUtc']?.toString() ?? '')?.toUtc(),
         proposals: (json['proposals'] as List? ?? const [])
             .map((value) => DeliveryRouteProposal.fromJson(
                 Map<String, dynamic>.from(value as Map)))

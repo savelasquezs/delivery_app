@@ -248,6 +248,7 @@ class _RoutingTabContent extends StatelessWidget {
             child: ErrorBanner(
               title: 'No pudimos preparar la ruta sugerida',
               message: error!,
+              onRetry: () => onRefresh(),
             ),
           ),
         ]),
@@ -260,6 +261,8 @@ class _RoutingTabContent extends StatelessWidget {
       child: ListView(
         padding: const EdgeInsets.all(12),
         children: [
+          if (error != null)
+            ErrorBanner(message: error!, onRetry: () => onRefresh()),
           Card(
             child: Padding(
               padding: const EdgeInsets.all(12),

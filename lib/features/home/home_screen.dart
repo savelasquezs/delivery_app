@@ -1,7 +1,6 @@
 import 'dart:async';
 import '../lunch/employee_lunch.dart';
 import '../lunch/employee_lunch_control.dart';
-import 'package:flutter/foundation.dart';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
@@ -94,6 +93,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       unawaited(_resumeAfterBackground());
+    } else {
+      ref.read(availableNotifierProvider.notifier).setRoutingActive(false);
     }
   }
 
@@ -123,6 +124,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     }
     await _connectSignalR();
     if (!mounted) return;
+    unawaited(ref.read(availableNotifierProvider.notifier)
+        .loadRouting(silently: true, ensureFresh: true));
     final catchUp = _catchUpInFlight;
     if (catchUp != null) {
       await catchUp;
@@ -174,6 +177,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       _signalRListenersAttached = true;
     }
     // El grupo de sucursal lo determina el JWT autenticado.
+    ref.read(availableNotifierProvider.notifier).setRoutingActive(
+        WidgetsBinding.instance.lifecycleState == null ||
+        WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed);
     await _hubService!.connect();
     final latest = ref.read(authNotifierProvider);
     if (!shouldConnectOrderHub(
@@ -185,6 +191,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   }
 
   Future<void> _disconnectSignalR() async {
+    if (mounted) {
+      ref.read(availableNotifierProvider.notifier).setRoutingActive(false);
+    }
     await _hubService?.disconnect();
     if (mounted && _hubStatus != HubConnectionStatus.disconnected) {
       setState(() => _hubStatus = HubConnectionStatus.disconnected);
@@ -222,7 +231,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     if (!shouldConnectOrderHub(
       authenticated: auth.status == AuthStatus.authenticated,
       workSession: auth.workSession,
-    )) return;
+    )) {
+      return;
+    }
     final index = _hubRetryAttempts < 4 ? _hubRetryAttempts : 4;
     final delay = [5, 10, 20, 40, 60][index];
     if (_hubRetryAttempts < 4) _hubRetryAttempts++;
@@ -265,18 +276,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     final kind = classifyOrderHubEvent(event);
 
     if (kind == OrderHubEventKind.routing) {
-      if (kIsWeb && event == deliveryRoutingPlanChangedHubEvent &&
-          args != null && args.isNotEmpty && args.first is Map) {
-        final version = (args.first as Map)['version'];
-        if (version is num) {
-          await available.loadRouting(silently: true);
-          if (!mounted || (ref.read(availableNotifierProvider).routingPlan?.version ?? 0) >= version) {
-            return;
-          }
-        }
-      }
-      available.invalidateRouting('El servidor está actualizando el plan.');
-      await available.loadRouting(silently: true, ensureFresh: true);
+      await available.routingPlanChanged(routingPlanVersionFromHubEvent(event, args));
       return;
     }
     if (kind == OrderHubEventKind.ignored) return;
