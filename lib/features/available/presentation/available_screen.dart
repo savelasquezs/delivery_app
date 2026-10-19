@@ -15,6 +15,7 @@ import '../data/branch_presence_verifier.dart';
 import 'available_notifier.dart';
 import '../../routing/delivery_routing_models.dart';
 import '../../routing/route_proposal_editor.dart';
+import '../../routing/route_timing_summary.dart';
 
 Future<void> _openOrderDestinationMap(BuildContext context, Order order) async {
   if (!orderHasOpenableMapDestination(order)) {
@@ -306,9 +307,10 @@ class _RoutingTabContent extends StatelessWidget {
                       ),
                     ]),
                     const SizedBox(height: 4),
-                    Text(proposal.timingLabel,
+                    DefaultTextStyle.merge(
                         style: const TextStyle(
-                            fontSize: 12, color: AppColors.hint)),
+                            fontSize: 12, color: AppColors.hint),
+                        child: RouteTimingSummary(proposal: proposal)),
                     const SizedBox(height: 8),
                     for (final stop in proposal.stops)
                       Padding(

@@ -1,7 +1,67 @@
 import 'package:delivery_app/features/routing/delivery_routing_models.dart';
+import 'package:delivery_app/features/routing/helpers/route_editor_helpers.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('totales incluyen todas las paradas y el regreso una sola vez', () {
+    final proposal = DeliveryRouteProposal.fromJson({
+      'id': 1,
+      'sequence': 1,
+      'expectedDepartureAtUtc': '2026-10-18T23:50:00-05:00',
+      'waitSeconds': 600,
+      'approximateDrivingDurationSeconds': 600,
+      'approximateDistanceMeters': 3200,
+      'validatedDrivingDurationSeconds': 540,
+      'validatedDistanceMeters': 3000,
+      'returnDrivingDurationSeconds': 900,
+      'returnDistanceMeters': 2000,
+      'usesApproximateReturnMetrics': true,
+      'stops': [
+        for (final id in [1, 2])
+          {
+            'orderId': id,
+            'estimatedReadyAtUtc': '2026-10-19T04:40:00Z',
+            'serviceSeconds': 120,
+          }
+      ],
+    });
+    expect(proposal.deliveryElapsedSeconds, 780);
+    expect(proposal.roundTripElapsedSeconds, 1680);
+    expect(proposal.roundTripDistanceMeters, 5000);
+    expect(proposal.deliveryCompletedAtUtc, DateTime.utc(2026, 10, 19, 5, 3));
+    expect(proposal.returnedToBranchAtUtc, DateTime.utc(2026, 10, 19, 5, 18));
+    expect(proposal.usesApproximateMetrics, isFalse);
+    expect(proposal.usesApproximateReturnMetrics, isTrue);
+    expect(proposal.asStale({1}).returnedToBranchAtUtc, isNull);
+    expect(proposal.asStale({1}).roundTripDistanceMeters, isNull);
+  });
+
+  test('contratos anteriores no inventan un regreso ni una hora', () {
+    final proposal = DeliveryRouteProposal.fromJson({'id': 1, 'sequence': 1});
+    expect(proposal.roundTripElapsedSeconds, isNull);
+    expect(proposal.roundTripDistanceMeters, isNull);
+    expect(proposal.deliveryCompletedAtUtc, isNull);
+    expect(proposal.returnedToBranchAtUtc, isNull);
+  });
+
+  test('formato de recorrido maneja horas, redondeo y cambio de día', () {
+    expect(routeDurationLabel(1), '1 min');
+    expect(routeDurationLabel(0), '0 min');
+    expect(routeDurationLabel(3599), '1 h');
+    expect(routeDurationLabel(9120), '2 h y 32 min');
+    expect(routeDistanceLabel(105000), '105,0 km');
+    expect(routeArrivalLabel(DateTime(2026, 10, 18, 15, 18), null),
+        '3:18 p. m. aprox.');
+    expect(
+        routeArrivalLabel(
+            DateTime(2026, 10, 19, 0, 18), DateTime(2026, 10, 18, 23, 50)),
+        '12:18 a. m. aprox. · +1 día');
+    expect(
+        routeArrivalLabel(
+            DateTime(2026, 10, 20, 12), DateTime(2026, 10, 18, 23, 50)),
+        '12:00 p. m. aprox. · +2 días');
+  });
+
   test('muestra la excepción calculada sin aplicarla a los demás pedidos', () {
     final normal = DeliveryRoutingStop.fromJson({
       'orderId': 1,

@@ -10,6 +10,7 @@ class DeliveryRoutingStop {
   final double readyWithinWindowProbability;
   final DateTime? estimatedArrivalAtUtc;
   final int? deliveryTimeLimitSeconds;
+  final int serviceSeconds;
 
   const DeliveryRoutingStop(
       {required this.orderId,
@@ -22,7 +23,8 @@ class DeliveryRoutingStop {
       this.preparationConfidence = 'unknown',
       this.readyWithinWindowProbability = 0,
       this.estimatedArrivalAtUtc,
-      this.deliveryTimeLimitSeconds});
+      this.deliveryTimeLimitSeconds,
+      this.serviceSeconds = 0});
 
   factory DeliveryRoutingStop.fromJson(Map<String, dynamic> json) =>
       DeliveryRoutingStop(
@@ -40,6 +42,7 @@ class DeliveryRoutingStop {
               (json['readyWithinWindowProbability'] as num?)?.toDouble() ?? 0,
           deliveryTimeLimitSeconds:
               (json['deliveryTimeLimitSeconds'] as num?)?.toInt(),
+          serviceSeconds: (json['serviceSeconds'] as num?)?.toInt() ?? 0,
           estimatedArrivalAtUtc:
               DateTime.tryParse(json['estimatedArrivalAtUtc']?.toString() ?? '')
                   ?.toUtc());
@@ -87,6 +90,10 @@ class DeliveryRouteProposal {
   final String? selectionFingerprint;
   final DateTime? waitDeadlineAtUtc;
   final bool usesApproximateMetrics;
+  final DateTime? expectedDepartureAtUtc;
+  final int? returnDrivingDurationSeconds;
+  final int? returnDistanceMeters;
+  final bool usesApproximateReturnMetrics;
 
   const DeliveryRouteProposal(
       {required this.id,
@@ -101,7 +108,31 @@ class DeliveryRouteProposal {
       this.selectionFingerprint,
       this.waitDeadlineAtUtc,
       this.lastDeliverySeconds,
-      this.usesApproximateMetrics = true});
+      this.usesApproximateMetrics = true,
+      this.expectedDepartureAtUtc,
+      this.returnDrivingDurationSeconds,
+      this.returnDistanceMeters,
+      this.usesApproximateReturnMetrics = true});
+
+  int get deliveryElapsedSeconds =>
+      durationSeconds +
+      stops.fold(0, (total, stop) => total + stop.serviceSeconds);
+
+  int? get roundTripElapsedSeconds => returnDrivingDurationSeconds == null
+      ? null
+      : deliveryElapsedSeconds + returnDrivingDurationSeconds!;
+
+  int? get roundTripDistanceMeters => returnDistanceMeters == null
+      ? null
+      : distanceMeters + returnDistanceMeters!;
+
+  DateTime? get deliveryCompletedAtUtc =>
+      expectedDepartureAtUtc?.add(Duration(seconds: deliveryElapsedSeconds));
+
+  DateTime? get returnedToBranchAtUtc => roundTripElapsedSeconds == null
+      ? null
+      : expectedDepartureAtUtc
+          ?.add(Duration(seconds: roundTripElapsedSeconds!));
 
   String get timingLabel {
     final driving =
@@ -124,32 +155,37 @@ class DeliveryRouteProposal {
       warning: warning,
       usesApproximateMetrics: usesApproximateMetrics);
 
-  factory DeliveryRouteProposal.fromJson(Map<String, dynamic> json) =>
-      DeliveryRouteProposal(
-          id: json['id'] as int,
-          sequence: json['sequence'] as int,
-          recommendation: json['recommendation'] as String? ?? '',
-          durationSeconds: (json['validatedDrivingDurationSeconds'] ??
-              json['approximateDrivingDurationSeconds'] ??
-              0) as int,
-          lastDeliverySeconds: (json['lastDeliverySeconds'] as num?)?.toInt(),
-          distanceMeters: (json['validatedDistanceMeters'] ??
-              json['approximateDistanceMeters'] ??
-              0) as int,
-          isClaimable: json['status'] != 'stale' &&
-              (json['isClaimable'] as bool? ?? false),
-          claimableReadyOrderIds:
-              (json['claimableReadyOrderIds'] as List? ?? const []).cast<int>(),
-          stops: (json['stops'] as List? ?? const [])
-              .map((value) => DeliveryRoutingStop.fromJson(
-                  Map<String, dynamic>.from(value as Map)))
-              .toList(),
-          warning: json['planningWarnings'] as String?,
-          usesApproximateMetrics:
-              (json['validatedDrivingDurationSeconds'] as num? ?? 0) <= 0,
-          selectionFingerprint: json['selectionFingerprint'] as String?,
-          waitDeadlineAtUtc:
-              DateTime.tryParse(json['waitDeadlineAtUtc']?.toString() ?? '')?.toUtc());
+  factory DeliveryRouteProposal.fromJson(Map<String, dynamic> json) => DeliveryRouteProposal(
+      id: json['id'] as int,
+      sequence: json['sequence'] as int,
+      recommendation: json['recommendation'] as String? ?? '',
+      durationSeconds: (json['validatedDrivingDurationSeconds'] ??
+          json['approximateDrivingDurationSeconds'] ??
+          0) as int,
+      lastDeliverySeconds: (json['lastDeliverySeconds'] as num?)?.toInt(),
+      expectedDepartureAtUtc:
+          DateTime.tryParse(json['expectedDepartureAtUtc']?.toString() ?? '')
+              ?.toUtc(),
+      returnDrivingDurationSeconds:
+          (json['returnDrivingDurationSeconds'] as num?)?.toInt(),
+      returnDistanceMeters: (json['returnDistanceMeters'] as num?)?.toInt(),
+      usesApproximateReturnMetrics:
+          json['usesApproximateReturnMetrics'] as bool? ?? true,
+      distanceMeters: (json['validatedDistanceMeters'] ??
+          json['approximateDistanceMeters'] ??
+          0) as int,
+      isClaimable:
+          json['status'] != 'stale' && (json['isClaimable'] as bool? ?? false),
+      claimableReadyOrderIds:
+          (json['claimableReadyOrderIds'] as List? ?? const []).cast<int>(),
+      stops: (json['stops'] as List? ?? const [])
+          .map(
+              (value) => DeliveryRoutingStop.fromJson(Map<String, dynamic>.from(value as Map)))
+          .toList(),
+      warning: json['planningWarnings'] as String?,
+      usesApproximateMetrics: (json['validatedDrivingDurationSeconds'] as num? ?? 0) <= 0,
+      selectionFingerprint: json['selectionFingerprint'] as String?,
+      waitDeadlineAtUtc: DateTime.tryParse(json['waitDeadlineAtUtc']?.toString() ?? '')?.toUtc());
 }
 
 class DeliveryRoutingPlan {
