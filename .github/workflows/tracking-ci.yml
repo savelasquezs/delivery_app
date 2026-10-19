@@ -14,6 +14,7 @@ concurrency:
 
 env:
   FLUTTER_VERSION: 3.41.6
+  TZ: America/Bogota
 
 jobs:
   test:
@@ -68,6 +69,13 @@ jobs:
         run: git diff --exit-code -- pubspec.lock
       - run: flutter analyze --no-fatal-infos
       - run: flutter test --reporter expanded
+      - name: Upload failed golden comparisons
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-failures
+          path: test/failures
+          if-no-files-found: ignore
       - name: Repeat native concurrency and durable outbox regressions
         run: |
           for attempt in 1 2 3; do

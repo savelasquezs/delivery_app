@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'features/lunch/employee_lunch_control.dart';
 import 'package:flutter/foundation.dart';
 
 import 'package:firebase_core/firebase_core.dart';
@@ -290,6 +291,7 @@ class _DeliveryAppState extends ConsumerState<DeliveryApp>
       debugShowCheckedModeBanner: false,
       theme: AppTheme.darkTheme,
       routerConfig: router,
+      builder: (context, child) => EmployeeLunchGate(child: child ?? const SizedBox.shrink()),
       locale: const Locale('es', 'CO'),
       supportedLocales: const [
         Locale('es', 'CO'),

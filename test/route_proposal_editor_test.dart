@@ -221,7 +221,7 @@ void main() {
             config.absolute.uri.resolve(flutter['rootUri'] as String))
         .uri;
     final font = await File.fromUri(root.resolve(
-            '../../bin/cache/artifacts/material_fonts/roboto-regular.ttf'))
+            '../../bin/cache/artifacts/material_fonts/Roboto-Regular.ttf'))
         .readAsBytes();
     for (final family in ['Roboto', 'Ahem']) {
       await (FontLoader(family)
@@ -229,7 +229,7 @@ void main() {
           .load();
     }
     final icons = await File.fromUri(root.resolve(
-            '../../bin/cache/artifacts/material_fonts/materialicons-regular.otf'))
+            '../../bin/cache/artifacts/material_fonts/MaterialIcons-Regular.otf'))
         .readAsBytes();
     await (FontLoader('MaterialIcons')
           ..addFont(Future.value(ByteData.sublistView(icons))))
@@ -253,8 +253,10 @@ void main() {
     expect(_canAccept(tester), isTrue);
     expect(
         tester.getSize(find.byType(RouteProposalEditor)).height, lessThan(750));
-    await expectLater(find.byType(RouteProposalEditor),
-        matchesGoldenFile('goldens/route_proposal_editor_390.png'));
+    await expectLater(
+        find.byType(RouteProposalEditor),
+        matchesGoldenFile(
+            'goldens/route_proposal_editor_390${Platform.isLinux ? '_linux' : ''}.png'));
     expect(tester.takeException(), isNull);
   });
 

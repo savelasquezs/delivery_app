@@ -1,4 +1,6 @@
 import 'dart:async';
+import '../lunch/employee_lunch.dart';
+import '../lunch/employee_lunch_control.dart';
 import 'package:flutter/foundation.dart';
 
 import 'package:cached_network_image/cached_network_image.dart';
@@ -106,6 +108,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   }
 
   Future<void> _onResumed() async {
+    await ref.read(employeeLunchProvider.notifier).refresh();
     await ref
         .read(authNotifierProvider.notifier)
         .refreshSessionIfNeededAfterResume();
@@ -193,6 +196,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     if (_hubStatus != status) setState(() => _hubStatus = status);
 
     if (status == HubConnectionStatus.connected) {
+      unawaited(ref.read(employeeLunchProvider.notifier).refresh());
       _hubRetryTimer?.cancel();
       _hubRetryTimer = null;
       _hubRetryAttempts = 0;
@@ -247,6 +251,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 
   void _onHubEvent(String event, List<Object?>? args) {
     if (!mounted) return;
+    if (event == 'EmployeeLunchChanged') {
+      unawaited(ref.read(employeeLunchProvider.notifier).refresh());
+      unawaited(ref.read(availableNotifierProvider.notifier).loadRouting(silently: true, ensureFresh: true));
+      return;
+    }
     unawaited(_handleHubEvent(event, args));
   }
 
@@ -533,6 +542,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           ],
         ),
         actions: [
+          const EmployeeLunchButton(),
           ..._branchWhatsAppActions(authState.user),
           _HubStatusIndicator(status: _hubStatus),
           const SizedBox(width: AppTheme.spacingSm),
