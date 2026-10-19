@@ -221,7 +221,7 @@ void main() {
             config.absolute.uri.resolve(flutter['rootUri'] as String))
         .uri;
     final font = await File.fromUri(root.resolve(
-            '../../bin/cache/artifacts/material_fonts/roboto-regular.ttf'))
+            '../../bin/cache/artifacts/material_fonts/Roboto-Regular.ttf'))
         .readAsBytes();
     for (final family in ['Roboto', 'Ahem']) {
       await (FontLoader(family)
@@ -229,7 +229,7 @@ void main() {
           .load();
     }
     final icons = await File.fromUri(root.resolve(
-            '../../bin/cache/artifacts/material_fonts/materialicons-regular.otf'))
+            '../../bin/cache/artifacts/material_fonts/MaterialIcons-Regular.otf'))
         .readAsBytes();
     await (FontLoader('MaterialIcons')
           ..addFont(Future.value(ByteData.sublistView(icons))))
