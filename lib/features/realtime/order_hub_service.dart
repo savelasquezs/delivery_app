@@ -134,6 +134,7 @@ class OrderHubService {
       'OrderModified',
       'DeliveryRoutingPlanChanged',
       'RouteProposalClaimed',
+      'EmployeeLunchChanged',
     ]) {
       _connection!.on(event, (args) {
         for (final listener in _eventListeners) {
