@@ -83,6 +83,24 @@ jobs:
           key: gradle-deps-v1-${{ runner.os }}-${{ runner.arch }}-jdk17-${{ env.FLUTTER_VERSION }}-${{ hashFiles('pubspec.lock', 'android/**/*.gradle*', 'android/gradle/wrapper/gradle-wrapper.properties') }}
           restore-keys: |
             gradle-deps-v1-${{ runner.os }}-${{ runner.arch }}-jdk17-${{ env.FLUTTER_VERSION }}-
+      - name: Free hosted runner disk before Android builds
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Disk usage before cleanup:"
+          df -h /
+          # Match the proven Android SQLite smoke cleanup; retain JDK and Android SDK.
+          for path in /usr/share/dotnet /usr/local/share/powershell /usr/local/share/boost /opt/hostedtoolcache/CodeQL; do
+            if [[ -e "$path" ]]; then sudo rm -rf "$path"; fi
+          done
+          docker system prune -af --volumes >/dev/null 2>&1 || true
+          echo "Disk usage after cleanup:"
+          df -h /
+          available_kb="$(df -Pk / | awk 'NR==2 {print $4}')"
+          if (( available_kb < 6291456 )); then
+            echo "::error::Insufficient free disk for Android compilation and native tests"
+            exit 1
+          fi
       - name: Compile Android integration without distributing
         run: flutter build appbundle --debug
       - name: Native evidence state-machine tests
