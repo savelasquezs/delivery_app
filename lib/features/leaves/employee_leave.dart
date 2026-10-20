@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -9,40 +10,68 @@ import '../auth/presentation/auth_notifier.dart';
 const leaveMaxBytes = 5 * 1024 * 1024;
 const leaveStatuses = <String, String>{
   'pending': 'Pendiente', 'approved': 'Aprobado', 'denied': 'Denegado',
-  'postponed': 'Aplazado', 'cancelled': 'Cancelado',
+  'postponed': 'Por ajustar', 'cancelled': 'Cancelado',
 };
 const leaveSupportStatuses = <String, String>{
-  'not_required': 'No requerido', 'pending': 'Pendiente de adjuntar',
-  'submitted': 'Presentado', 'verified': 'Verificado', 'rejected': 'Rechazado',
+  'not_required': 'No requerido', 'pending': 'Por entregar', 'missing': 'Por entregar',
+  'submitted': 'Por revisar', 'verified': 'Verificado', 'rejected': 'Por corregir',
 };
 final _uuid = RegExp(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$');
 bool isLeaveId(String id) => _uuid.hasMatch(id);
 DateTime leaveColombiaTime(DateTime utc) => utc.toUtc().subtract(const Duration(hours: 5));
 DateTime leaveUtcTime(DateTime local) => DateTime.utc(local.year, local.month, local.day, local.hour, local.minute).add(const Duration(hours: 5));
+DateTime leaveDayStart(DateTime utc) {
+  final civil = leaveColombiaTime(utc);
+  return DateTime.utc(civil.year, civil.month, civil.day, 5);
+}
 String leaveDate(DateTime? value) => value == null ? 'Sin registrar' : DateFormat('dd/MM/yyyy HH:mm').format(leaveColombiaTime(value));
+String leaveDay(DateTime value) => DateFormat('dd/MM/yyyy').format(leaveColombiaTime(value));
 Map<String, dynamic> leaveMap(dynamic value) => Map<String, dynamic>.from(value as Map);
+List<Map<String, dynamic>> leaveEvidence(Map<String, dynamic>? kind) => (kind?['evidence'] as List? ?? []).map(leaveMap).toList();
 
 class LeaveItem {
-  final String id, kind, status, branchName;
+  final String id, kind, status, branchName, supportStatus;
   final int userId, version;
   final DateTime startsAt, endsAt;
-  final bool unread;
+  final bool unread, allDay, periodRecord;
+  final bool? requestedIsPaid, isPaid;
   LeaveItem.fromJson(Map<String, dynamic> json)
       : id = json['publicId'] as String, kind = json['kind'] as String,
         status = json['status'] as String, branchName = json['branchName'] as String? ?? '',
+        supportStatus = json['supportStatus'] as String? ?? 'not_required',
         userId = (json['userId'] as num).toInt(), version = (json['version'] as num).toInt(),
         startsAt = DateTime.parse(json['startsAt'] as String).toUtc(),
-        endsAt = DateTime.parse(json['endsAt'] as String).toUtc(), unread = json['isUnread'] == true {
+        endsAt = DateTime.parse(json['endsAt'] as String).toUtc(), unread = json['isUnread'] == true,
+        allDay = json['isAllDay'] == true, periodRecord = json['isPeriodRecord'] == true,
+        requestedIsPaid = json['requestedIsPaid'] as bool?, isPaid = json['isPaid'] as bool? {
     if (!isLeaveId(id) || version < 1) throw const FormatException('Solicitud no válida.');
+  }
+  String get durationLabel {
+    if (periodRecord) return 'Período de pausas · no es ausencia';
+    final minutes = endsAt.difference(startsAt).inMinutes;
+    if (allDay) { final days = minutes ~/ 1440; return '$days ${days == 1 ? 'día completo' : 'días completos'}'; }
+    final h = minutes ~/ 60, m = minutes % 60;
+    return h > 0 ? '$h ${h == 1 ? 'hora' : 'horas'}${m > 0 ? ' $m min' : ''}' : '$m min';
+  }
+  String get periodLabel {
+    if (!allDay) return '${leaveDate(startsAt)} → ${leaveDate(endsAt)}';
+    final first = leaveDay(startsAt), last = leaveDay(endsAt.subtract(const Duration(milliseconds: 1)));
+    return first == last ? first : '$first al $last';
   }
 }
 
 class LeaveAttachment {
   final int id, size;
-  final String name, contentType;
+  final String name, contentType, evidenceCode, reviewStatus;
+  final String? reviewReason;
+  final DateTime? supersededAt;
+  final int? replacesAttachmentId;
   LeaveAttachment.fromJson(Map<String, dynamic> json)
       : id = (json['id'] as num).toInt(), size = (json['size'] as num).toInt(),
-        name = json['fileName'] as String, contentType = json['contentType'] as String;
+        name = json['fileName'] as String, contentType = json['contentType'] as String,
+        evidenceCode = json['evidenceCode'] as String? ?? 'additional', reviewStatus = json['reviewStatus'] as String? ?? 'submitted',
+        reviewReason = json['reviewReason'] as String?, supersededAt = json['supersededAt'] == null ? null : DateTime.parse(json['supersededAt'] as String),
+        replacesAttachmentId = (json['replacesAttachmentId'] as num?)?.toInt();
 }
 
 class LeaveDetail {
@@ -50,12 +79,13 @@ class LeaveDetail {
   final Map<String, dynamic> fields;
   final List<LeaveAttachment> attachments;
   LeaveDetail.fromJson(Map<String, dynamic> json)
-      : request = LeaveItem.fromJson(leaveMap(json['request'])),
-        fields = Map.unmodifiable(json),
+      : request = LeaveItem.fromJson(leaveMap(json['request'])), fields = Map.unmodifiable(json),
         attachments = List.unmodifiable((json['attachments'] as List).map((x) => LeaveAttachment.fromJson(leaveMap(x))));
   String text(String key) => fields[key] as String? ?? '';
   bool flag(String key) => fields[key] == true;
   DateTime? date(String key) => fields[key] == null ? null : DateTime.parse(fields[key] as String).toUtc();
+  List<Map<String, dynamic>> get evidence => (fields['evidenceRequirements'] as List? ?? []).map(leaveMap).toList();
+  List<LeaveAttachment> get activeAttachments => attachments.where((x) => x.supersededAt == null).toList();
 }
 
 class LeavePage<T> {
@@ -88,9 +118,16 @@ String leaveFileType(String name, List<int> content) {
 class LeaveUpload {
   final String key, name, contentType;
   final Uint8List bytes;
-  LeaveUpload(this.key, this.name, this.bytes) : contentType = leaveFileType(name, bytes);
+  String evidenceCode;
+  final int? replacesAttachmentId;
+  LeaveUpload(this.key, this.name, this.bytes, {this.evidenceCode = 'additional', this.replacesAttachmentId}) : contentType = leaveFileType(name, bytes);
   void dispose() => bytes.fillRange(0, bytes.length, 0);
 }
+List<String> missingLeaveEvidence(List<Map<String, dynamic>> rules, List<LeaveUpload> files, List<LeaveAttachment> existing) =>
+    rules.where((rule) => rule['required'] == true && rule['stage'] == 'before'
+        && !files.any((file) => file.evidenceCode == rule['code'])
+        && !existing.any((file) => file.evidenceCode == rule['code'] && file.supersededAt == null && file.reviewStatus != 'rejected'))
+      .map((rule) => rule['label'] as String).toList();
 
 class EmployeeLeaveRepository {
   final DioClient client;
@@ -101,12 +138,13 @@ class EmployeeLeaveRepository {
     if (!isLeaveId(id)) throw const LeaveFailure('No encontramos esta solicitud.');
     return '/employee-leaves/$id';
   }
-  Future<dynamic> _request(String path, {String method = 'GET', dynamic data, Map<String, dynamic>? query, ResponseType? responseType}) async {
+  Future<dynamic> _request(String path, {String method = 'GET', dynamic data, Map<String, dynamic>? query,
+      ResponseType? responseType, ProgressCallback? onProgress}) async {
     try {
-      return (await client.dio.request<dynamic>(path, data: data, queryParameters: query, cancelToken: _cancel,
+      return (await client.dio.request<dynamic>(path, data: data, queryParameters: query, cancelToken: _cancel, onSendProgress: onProgress,
         options: Options(method: method, responseType: responseType, followRedirects: false,
           contentType: data is FormData ? 'multipart/form-data' : 'application/json',
-          receiveTimeout: const Duration(seconds: 60)))).data;
+          receiveTimeout: const Duration(seconds: 120)))).data;
     } on DioException catch (error) {
       final status = error.response?.statusCode;
       final message = error.error is ApiException ? (error.error as ApiException).message
@@ -116,21 +154,30 @@ class EmployeeLeaveRepository {
       throw LeaveFailure(message, status);
     } finally {
       if (data is Map) data.remove('password');
-      if (data is FormData) data.fields.removeWhere((field) => field.key == 'password');
+      if (data is FormData) data.fields.removeWhere((field) => field.key == 'password' || field.key == 'payload');
     }
   }
-  Future<List<Map<String, dynamic>>> catalog() async =>
-      (await _request('/employee-leaves/catalog') as List).map(leaveMap).toList();
+  Future<List<Map<String, dynamic>>> catalog() async => (await _request('/employee-leaves/catalog') as List).map(leaveMap).toList();
   Future<int> unread() async => (leaveMap(await _request('/employee-leaves/summary'))['unread'] as num).toInt();
-  Future<LeavePage<LeaveItem>> list(int page, String status) async => LeavePage.fromJson(
-      leaveMap(await _request('/employee-leaves', query: {'page': page, 'pageSize': 20, if (status.isNotEmpty) 'status': status})), LeaveItem.fromJson);
+  Future<LeavePage<LeaveItem>> list(int page, String status, {bool? remunerated}) async => LeavePage.fromJson(
+      leaveMap(await _request('/employee-leaves', query: {'page': page, 'pageSize': 20, if (status.isNotEmpty) 'status': status,
+        if (remunerated != null) 'remunerated': remunerated})), LeaveItem.fromJson);
   Future<LeaveDetail> detail(String id) async => LeaveDetail.fromJson(leaveMap(await _request(_path(id))));
   Future<LeavePage<Map<String, dynamic>>> history(String id, int page) async => LeavePage.fromJson(
       leaveMap(await _request('${_path(id)}/history', query: {'page': page, 'pageSize': 25})), (json) => json);
   Future<void> read(LeaveItem leave) async => _request('${_path(leave.id)}/read', method: 'POST', data: {'version': leave.version});
-  Future<String> save(String? id, Map<String, dynamic> fields, String password) async {
-    final result = leaveMap(await _request(id == null ? '/employee-leaves' : _path(id),
-        method: id == null ? 'POST' : 'PUT', data: {...fields, 'password': password}));
+  Future<String> save(String? id, Map<String, dynamic> fields, String password, {List<LeaveUpload> files = const [], ProgressCallback? onProgress}) async {
+    if (id != null) _path(id);
+    if (files.length > 5) throw const LeaveFailure('Se permiten hasta cinco documentos.');
+    final payload = {...fields}..remove('password');
+    final data = FormData();
+    data.fields.addAll([MapEntry('payload', jsonEncode(payload)), MapEntry('password', password),
+      if (id != null) MapEntry('publicId', id),
+      MapEntry('evidence', jsonEncode(files.map((file) => {'uploadKey': file.key, 'evidenceCode': file.evidenceCode}).toList()))]);
+    for (final file in files) {
+      data.files.add(MapEntry('files', MultipartFile.fromBytes(file.bytes, filename: file.name, contentType: DioMediaType.parse(file.contentType))));
+    }
+    final result = leaveMap(await _request('/employee-leaves/submit', method: 'POST', data: data, onProgress: onProgress));
     return result['publicId'] as String;
   }
   Future<void> change(LeaveItem leave, String action, String password, {String reason = ''}) async {
@@ -138,7 +185,8 @@ class EmployeeLeaveRepository {
     await _request('${_path(leave.id)}/$action', method: 'POST', data: {'version': leave.version, 'password': password, 'reason': reason});
   }
   Future<void> upload(LeaveItem leave, LeaveUpload file, String password) async {
-    final data = FormData.fromMap({'version': leave.version, 'password': password, 'uploadKey': file.key,
+    final data = FormData.fromMap({'version': leave.version, 'password': password, 'uploadKey': file.key, 'evidenceCode': file.evidenceCode,
+      if (file.replacesAttachmentId != null) 'replacesAttachmentId': file.replacesAttachmentId,
       'file': MultipartFile.fromBytes(file.bytes, filename: file.name, contentType: DioMediaType.parse(file.contentType))});
     await _request('${_path(leave.id)}/attachments', method: 'POST', data: data);
   }
@@ -153,7 +201,6 @@ class EmployeeLeaveRepository {
     return bytes;
   }
 }
-
 final employeeLeaveRepositoryProvider = Provider.autoDispose<EmployeeLeaveRepository>((ref) {
   ref.watch(authNotifierProvider.select((state) => (state.status, state.user?.id)));
   final repository = EmployeeLeaveRepository(ref.watch(dioClientProvider));
