@@ -138,23 +138,33 @@ class EmployeeLeaveRepository {
     if (!isLeaveId(id)) throw const LeaveFailure('No encontramos esta solicitud.');
     return '/employee-leaves/$id';
   }
+  static void _clearSensitiveBody(dynamic data) {
+    if (data is Map) data.remove('password');
+    if (data is FormData) data.fields.removeWhere((field) => field.key == 'password' || field.key == 'payload');
+  }
   Future<dynamic> _request(String path, {String method = 'GET', dynamic data, Map<String, dynamic>? query,
       ResponseType? responseType, ProgressCallback? onProgress}) async {
+    dynamic completedBody;
     try {
-      return (await client.dio.request<dynamic>(path, data: data, queryParameters: query, cancelToken: _cancel, onSendProgress: onProgress,
+      final response = await client.dio.request<dynamic>(path, data: data, queryParameters: query, cancelToken: _cancel, onSendProgress: onProgress,
         options: Options(method: method, responseType: responseType, followRedirects: false,
           contentType: data is FormData ? 'multipart/form-data' : 'application/json',
-          receiveTimeout: const Duration(seconds: 120)))).data;
+          receiveTimeout: const Duration(seconds: 120)));
+      completedBody = response.requestOptions.data;
+      return response.data;
     } on DioException catch (error) {
+      completedBody = error.requestOptions.data;
       final status = error.response?.statusCode;
       final message = error.error is ApiException ? (error.error as ApiException).message
           : status == 409 ? 'La solicitud cambió. Actualiza el detalle y confirma nuevamente.'
           : 'No se pudo completar la operación. Revisa tu conexión e inténtalo de nuevo.';
+      _clearSensitiveBody(error.response?.requestOptions.data);
       error.requestOptions.data = null;
       throw LeaveFailure(message, status);
     } finally {
-      if (data is Map) data.remove('password');
-      if (data is FormData) data.fields.removeWhere((field) => field.key == 'password' || field.key == 'payload');
+      // JWT refresh may replace consumed FormData with a clone. Clear both objects, on success and failure.
+      _clearSensitiveBody(data);
+      if (!identical(data, completedBody)) _clearSensitiveBody(completedBody);
     }
   }
   Future<List<Map<String, dynamic>>> catalog() async => (await _request('/employee-leaves/catalog') as List).map(leaveMap).toList();
@@ -196,9 +206,11 @@ class EmployeeLeaveRepository {
     if (file.size < 1 || file.size > leaveMaxBytes) throw const LeaveFailure('El tamaño del soporte no es válido.');
     final data = await _request('${_path(leave.id)}/attachments/${file.id}', responseType: ResponseType.bytes);
     final bytes = Uint8List.fromList(List<int>.from(data as List));
-    if (bytes.length != file.size) throw const LeaveFailure('La descarga quedó incompleta. Inténtalo de nuevo.');
-    leaveFileType(file.name, bytes);
-    return bytes;
+    try {
+      if (bytes.length != file.size) throw const LeaveFailure('La descarga quedó incompleta. Inténtalo de nuevo.');
+      leaveFileType(file.name, bytes);
+      return bytes;
+    } catch (_) { bytes.fillRange(0, bytes.length, 0); rethrow; }
   }
 }
 final employeeLeaveRepositoryProvider = Provider.autoDispose<EmployeeLeaveRepository>((ref) {
