@@ -83,15 +83,18 @@ final appRouterProvider = Provider<GoRouter>((ref) {
     routes: [
       GoRoute(path: _routeStarting, builder: (_, __) => const Scaffold(backgroundColor: Color(0xFF121212), body: Center(child: CircularProgressIndicator()))),
       GoRoute(path: routeUpdateRequired, builder: (_, __) => const DeliveryAppUpdateRequiredScreen()),
-      GoRoute(path: _routeHome, builder: (_, __) => const HomeScreen()),
+      // La jerarquía da regreso a bandeja e Inicio incluso al abrir FCM con la app cerrada.
+      GoRoute(path: _routeHome, builder: (_, __) => const HomeScreen(), routes: [
+        GoRoute(path: 'permisos', builder: (_, __) => EmployeeLeavesScreen(key: ValueKey(ref.read(authNotifierProvider).user?.id)), routes: [
+          GoRoute(path: ':publicId', builder: (_, state) {
+            final id = state.pathParameters['publicId'] ?? '';
+            if (!isLeaveId(id)) return const Scaffold(body: Center(child: Text('No encontramos esta solicitud.')));
+            return EmployeeLeaveDetailScreen(publicId: id.toLowerCase(), key: ValueKey('${ref.read(authNotifierProvider).user?.id}:$id'));
+          }),
+        ]),
+      ]),
       GoRoute(path: routeProfile, builder: (_, __) => const ProfileScreen()),
       GoRoute(path: routeBusinessDocuments, builder: (_, __) => const BusinessDocumentsScreen()),
-      GoRoute(path: routeEmployeeLeaves, builder: (_, __) => EmployeeLeavesScreen(key: ValueKey(ref.read(authNotifierProvider).user?.id))),
-      GoRoute(path: '$routeEmployeeLeaves/:publicId', builder: (_, state) {
-        final id = state.pathParameters['publicId'] ?? '';
-        if (!isLeaveId(id)) return const Scaffold(body: Center(child: Text('No encontramos esta solicitud.')));
-        return EmployeeLeaveDetailScreen(publicId: id.toLowerCase(), key: ValueKey('${ref.read(authNotifierProvider).user?.id}:$id'));
-      }),
       GoRoute(path: _routeLogin, builder: (_, __) => const LoginScreen()),
       GoRoute(path: routeForgotPassword, builder: (_, __) => const ForgotPasswordScreen()),
     ],

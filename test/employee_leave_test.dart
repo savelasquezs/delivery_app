@@ -45,6 +45,7 @@ class _Client implements DioClient {
 class _Auth extends StateNotifier<AuthState> implements AuthNotifier {
   _Auth() : super(const AuthState(status: AuthStatus.authenticated,
     user: AuthUser(id: 7, name: 'Persona', email: 'persona@example.com', role: 'deliveryman')));
+  AuthStatus get status => state.status;
   void replace(AuthState value) => state = value;
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
@@ -53,9 +54,7 @@ class _Auth extends StateNotifier<AuthState> implements AuthNotifier {
 void main() {
   tearDown(EmployeeLeaveNotices.clear);
   test('el catálogo, la bandeja y el detalle usan contratos del backend', () async {
-    final client = _Client(), repository = EmployeeLeaveRepository(_Client());
-    repository.dispose();
-    final actual = EmployeeLeaveRepository(client);
+    final client = _Client(); final actual = EmployeeLeaveRepository(client);
     addTearDown(actual.dispose);
     client.response = {'items': [sample], 'page': 2, 'totalPages': 3};
     final page = await actual.list(2, 'pending');
@@ -88,8 +87,7 @@ void main() {
     expect(client.requests.single.data, isNull);
   });
   test('el móvil no ejecuta decisiones administrativas y rechaza identificadores de navegación inválidos', () async {
-    final client = _Client(), repository = EmployeeLeaveRepository(_Client()); repository.dispose();
-    final actual = EmployeeLeaveRepository(client); addTearDown(actual.dispose);
+    final client = _Client(); final actual = EmployeeLeaveRepository(client); addTearDown(actual.dispose);
     await expectLater(actual.change(LeaveItem.fromJson(sample), 'decision', 'secret'), throwsA(isA<LeaveFailure>()));
     await expectLater(actual.detail('../other-user'), throwsA(isA<LeaveFailure>()));
     expect(client.requests, isEmpty);
@@ -159,11 +157,14 @@ void main() {
         }), child: const Text('Abrir')))))));
     await tester.tap(find.text('Abrir')); await tester.pumpAndSettle();
     await tester.enterText(find.byKey(const Key('leave-password')), 'correct-password');
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Confirmar')); await tester.pumpAndSettle();
+    expect(calls, 1);
     expect(find.text('Contraseña incorrecta'), findsOneWidget);
     expect(tester.widget<TextField>(find.byKey(const Key('leave-password'))).controller!.text, isEmpty);
-    expect(auth.state.status, AuthStatus.authenticated);
+    expect(auth.status, AuthStatus.authenticated);
     await tester.enterText(find.byKey(const Key('leave-password')), 'correct-password');
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Confirmar')); await tester.pumpAndSettle();
     expect(calls, 2); expect(find.byType(AlertDialog), findsNothing);
     await tester.pumpWidget(const SizedBox.shrink());
