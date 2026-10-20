@@ -1,6 +1,7 @@
 import 'dart:async';
 import '../lunch/employee_lunch.dart';
 import '../lunch/employee_lunch_control.dart';
+import '../leaves/employee_leaves_screen.dart';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
@@ -538,10 +539,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           children: [
             const AppLogo(size: 28),
             const SizedBox(width: AppTheme.spacingSm),
-            Text(_currentTitle),
+            Expanded(child: Text(_currentTitle, overflow: TextOverflow.ellipsis)),
           ],
         ),
         actions: [
+          const EmployeeLeaveButton(),
           const EmployeeLunchButton(),
           ..._branchWhatsAppActions(authState.user),
           _HubStatusIndicator(status: _hubStatus),
