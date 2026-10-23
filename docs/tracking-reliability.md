@@ -1,5 +1,36 @@
 # Tracking reliability — delivery 1
 
+## Android SQLite contention — 2026-10-23
+
+Build 33 on the connected POCO X7 Pro repeatedly reported `SqfliteDatabaseException`
+and ten-second database-lock warnings while the session screen kept loading.
+Production login requests completed in 331–409 ms; work-session requests completed
+in under 220 ms in the inspected incident window.
+
+The UI and GPS engine open independent native connections to the outbox. Their
+multi-call transactions could compete for SQLite's writer while sqflite's single
+Android worker was also needed to finish the owning transaction. Retrying after
+SQLite reports busy does not prevent this contention.
+
+Outbox schema initialization and every explicit transaction now acquire a separate
+SQLite CAS lease before starting a transaction. Authentication keeps its own lock;
+no HTTP request runs under the outbox lease. The ten-second lease recovers after a
+process exits, renews while active, and is checked before commit. Existing database
+files, pending coordinates, import receipts and ACK ownership remain intact.
+
+Session restore has a 30-second UI deadline and offers retry with saved credentials.
+Late results cannot replace a newer restore attempt. Push-token registration no
+longer delays successful login. Startup logs include phase names and durations,
+without credentials or location data.
+
+`integration_test/android_sqlite_concurrency_test.dart` exercises independent real
+Android connections with concurrent capture, UI reads and auth coordination, then
+checks all 30 points and their ACKs. In an isolated diagnostic app on the same
+phone, the previous implementation failed with `SQLITE_BUSY` at `BEGIN IMMEDIATE`;
+the coordinated implementation passed. The production application was not replaced
+or cleared. Publishing an in-place Google Play update and verifying the full
+production login/GPS flow remain release steps.
+
 ## Changes
 
 - UI and foreground tracking use `SessionRefresher`. A SQLite compare-and-swap lease serializes refresh, token writes and logout across Flutter engines. No SQL transaction spans HTTP. A 20-second cancellation deadline bounds the refresh request. Leases have heartbeats, ownership checks and expiry-based recovery after a process restart.

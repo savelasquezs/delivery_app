@@ -115,6 +115,12 @@ class TrackingSnapshot {
 /// inside a transaction. Removing an ACK cannot overwrite a concurrent capture.
 class TrackingOutbox {
   static final shared = TrackingOutbox();
+  static final _writeMutex = SessionMutex(
+    databasePath: 'sa_tracking_write_mutex.db',
+    leaseDuration: const Duration(seconds: 10),
+    waitTimeout: const Duration(seconds: 15),
+    pollInterval: const Duration(milliseconds: 25),
+  );
   final Future<Database> Function() open;
   Future<Database>? _opening;
   TrackingOutbox({Future<Database> Function()? open}) : open = open ?? _open;
@@ -138,30 +144,33 @@ class TrackingOutbox {
     try {
       // This PRAGMA returns a row; Android rejects it through execute.
       await db.rawQuery('PRAGMA busy_timeout = 1000');
-      await retrySqliteBusy(() => db.transaction((tx) async {
-            await tx.execute(
-                'CREATE TABLE IF NOT EXISTS tracking_context (id INTEGER PRIMARY KEY, value TEXT NOT NULL)');
-            await tx.execute('CREATE TABLE IF NOT EXISTS tracking_outbox ('
-                'id TEXT PRIMARY KEY, kind TEXT NOT NULL, owner_key TEXT NOT NULL, '
-                'work_session INTEGER NOT NULL, payload TEXT NOT NULL, recorded_at INTEGER NOT NULL, '
-                "state TEXT NOT NULL DEFAULT 'pending', reason TEXT, attempts INTEGER NOT NULL DEFAULT 0)");
-            await tx.execute(
-                'CREATE INDEX IF NOT EXISTS tracking_pending ON tracking_outbox(owner_key, state, kind, recorded_at)');
-            await tx.execute('CREATE TABLE IF NOT EXISTS tracking_status ('
-                'owner_key TEXT NOT NULL, work_session INTEGER NOT NULL, captured_at INTEGER, '
-                'accepted_point_at INTEGER, accepted_at INTEGER, heartbeat_at INTEGER, '
-                'capture_issue TEXT, upload_issue TEXT, interval_seconds INTEGER NOT NULL DEFAULT 300, '
-                'PRIMARY KEY(owner_key, work_session))');
-            await tx.execute(
-                'CREATE TABLE IF NOT EXISTS tracking_import (fingerprint TEXT PRIMARY KEY)');
-            await tx.execute('CREATE TABLE IF NOT EXISTS tracking_import_cursor ('
-                'fingerprint TEXT PRIMARY KEY, next_index INTEGER NOT NULL)');
-            await tx.execute(
-                'CREATE TABLE IF NOT EXISTS tracking_communication ('
-                'owner_key TEXT NOT NULL, work_session INTEGER NOT NULL, id TEXT NOT NULL, '
-                'started_at INTEGER NOT NULL, recovered_at INTEGER, acknowledged INTEGER NOT NULL DEFAULT 0, '
-                'PRIMARY KEY(owner_key, work_session))');
-          }));
+      await _writeMutex
+          .protect((lease) => retrySqliteBusy(() => db.transaction((tx) async {
+                await tx.execute(
+                    'CREATE TABLE IF NOT EXISTS tracking_context (id INTEGER PRIMARY KEY, value TEXT NOT NULL)');
+                await tx.execute('CREATE TABLE IF NOT EXISTS tracking_outbox ('
+                    'id TEXT PRIMARY KEY, kind TEXT NOT NULL, owner_key TEXT NOT NULL, '
+                    'work_session INTEGER NOT NULL, payload TEXT NOT NULL, recorded_at INTEGER NOT NULL, '
+                    "state TEXT NOT NULL DEFAULT 'pending', reason TEXT, attempts INTEGER NOT NULL DEFAULT 0)");
+                await tx.execute(
+                    'CREATE INDEX IF NOT EXISTS tracking_pending ON tracking_outbox(owner_key, state, kind, recorded_at)');
+                await tx.execute('CREATE TABLE IF NOT EXISTS tracking_status ('
+                    'owner_key TEXT NOT NULL, work_session INTEGER NOT NULL, captured_at INTEGER, '
+                    'accepted_point_at INTEGER, accepted_at INTEGER, heartbeat_at INTEGER, '
+                    'capture_issue TEXT, upload_issue TEXT, interval_seconds INTEGER NOT NULL DEFAULT 300, '
+                    'PRIMARY KEY(owner_key, work_session))');
+                await tx.execute(
+                    'CREATE TABLE IF NOT EXISTS tracking_import (fingerprint TEXT PRIMARY KEY)');
+                await tx.execute(
+                    'CREATE TABLE IF NOT EXISTS tracking_import_cursor ('
+                    'fingerprint TEXT PRIMARY KEY, next_index INTEGER NOT NULL)');
+                await tx.execute(
+                    'CREATE TABLE IF NOT EXISTS tracking_communication ('
+                    'owner_key TEXT NOT NULL, work_session INTEGER NOT NULL, id TEXT NOT NULL, '
+                    'started_at INTEGER NOT NULL, recovered_at INTEGER, acknowledged INTEGER NOT NULL DEFAULT 0, '
+                    'PRIMARY KEY(owner_key, work_session))');
+                await lease.ensureOwned();
+              })));
       return db;
     } catch (_) {
       await db.close();
@@ -171,7 +180,13 @@ class TrackingOutbox {
 
   Future<T> _transaction<T>(Future<T> Function(Transaction) body) async {
     final db = await _db();
-    return retrySqliteBusy(() => db.transaction(body));
+    return _writeMutex
+        .protect((lease) => retrySqliteBusy(() => db.transaction((tx) async {
+              await lease.ensureOwned();
+              final result = await body(tx);
+              await lease.ensureOwned();
+              return result;
+            })));
   }
 
   Future<TrackingContext?> current() async {
@@ -272,40 +287,39 @@ class TrackingOutbox {
   Future<bool> hasPendingLocationHistory(TrackingContext context) async {
     final db = await _db();
     final rows = await retrySqliteBusy(() => db.query(
-      'tracking_outbox',
-      columns: ['id'],
-      where: "owner_key = ? AND work_session = ? AND state = 'pending' AND kind = 'location'",
-      whereArgs: [context.ownerKey, context.workSessionId],
-      limit: 1,
-    ));
+          'tracking_outbox',
+          columns: ['id'],
+          where:
+              "owner_key = ? AND work_session = ? AND state = 'pending' AND kind = 'location'",
+          whereArgs: [context.ownerKey, context.workSessionId],
+          limit: 1,
+        ));
     return rows.isNotEmpty;
   }
 
   Future<List<OutboxRecord>> pending(TrackingContext context,
       {int limit = 10}) async {
-    final db = await _db();
-    return retrySqliteBusy(() => db.transaction((tx) async {
-          // Latest first, then chronological backfill. The paired API freshness
-          // guard prevents historical points from changing live delivery state.
-          final rows = await tx.query('tracking_outbox',
-              where:
-                  "owner_key = ? AND state = 'pending' AND kind = 'location'",
-              whereArgs: [context.ownerKey],
-              orderBy: 'recorded_at, id',
-              limit: limit - 1);
-          final latest = await tx.query('tracking_outbox',
-              where:
-                  "owner_key = ? AND work_session = ? AND state = 'pending' AND kind = 'location'",
-              whereArgs: [context.ownerKey, context.workSessionId],
-              orderBy: 'recorded_at DESC, id DESC',
-              limit: 1);
-          final ids = latest.map((r) => r['id']).toSet();
-          final selected = [
-            ...latest,
-            ...rows.where((r) => !ids.contains(r['id']))
-          ];
-          return selected.map(OutboxRecord.fromRow).toList();
-        }));
+    return _transaction((tx) async {
+      // Latest first, then chronological backfill. The paired API freshness
+      // guard prevents historical points from changing live delivery state.
+      final rows = await tx.query('tracking_outbox',
+          where: "owner_key = ? AND state = 'pending' AND kind = 'location'",
+          whereArgs: [context.ownerKey],
+          orderBy: 'recorded_at, id',
+          limit: limit - 1);
+      final latest = await tx.query('tracking_outbox',
+          where:
+              "owner_key = ? AND work_session = ? AND state = 'pending' AND kind = 'location'",
+          whereArgs: [context.ownerKey, context.workSessionId],
+          orderBy: 'recorded_at DESC, id DESC',
+          limit: 1);
+      final ids = latest.map((r) => r['id']).toSet();
+      final selected = [
+        ...latest,
+        ...rows.where((r) => !ids.contains(r['id']))
+      ];
+      return selected.map(OutboxRecord.fromRow).toList();
+    });
   }
 
   Future<List<OutboxRecord>> events(TrackingContext context,
@@ -477,34 +491,32 @@ class TrackingOutbox {
       });
 
   Future<TrackingSnapshot> snapshot(TrackingContext context) async {
-    final db = await _db();
-    return retrySqliteBusy(() => db.transaction((tx) async {
-          final rows = await tx.query('tracking_status',
-              where: 'owner_key = ? AND work_session = ?',
-              whereArgs: [context.ownerKey, context.workSessionId]);
-          final row = rows.isEmpty ? <String, Object?>{} : rows.single;
-          final counts = await tx.rawQuery(
-              'SELECT state, count(*) AS count FROM tracking_outbox '
-              'WHERE owner_key = ? GROUP BY state',
-              [context.ownerKey]);
-          int count(String state) => counts
-              .where((r) => r['state'] == state)
-              .fold(0, (n, r) => n + (r['count'] as int));
-          DateTime? date(String key) => row[key] is int
-              ? DateTime.fromMillisecondsSinceEpoch(row[key] as int,
-                  isUtc: true)
-              : null;
-          return TrackingSnapshot(
-              capturedAt: date('captured_at'),
-              acceptedPointAt: date('accepted_point_at'),
-              acceptedAt: date('accepted_at'),
-              heartbeatAt: date('heartbeat_at'),
-              captureIssue: row['capture_issue'] as String?,
-              uploadIssue: row['upload_issue'] as String?,
-              intervalSeconds: row['interval_seconds'] as int? ?? 300,
-              pending: count('pending'),
-              rejected: count('rejected'));
-        }));
+    return _transaction((tx) async {
+      final rows = await tx.query('tracking_status',
+          where: 'owner_key = ? AND work_session = ?',
+          whereArgs: [context.ownerKey, context.workSessionId]);
+      final row = rows.isEmpty ? <String, Object?>{} : rows.single;
+      final counts = await tx.rawQuery(
+          'SELECT state, count(*) AS count FROM tracking_outbox '
+          'WHERE owner_key = ? GROUP BY state',
+          [context.ownerKey]);
+      int count(String state) => counts
+          .where((r) => r['state'] == state)
+          .fold(0, (n, r) => n + (r['count'] as int));
+      DateTime? date(String key) => row[key] is int
+          ? DateTime.fromMillisecondsSinceEpoch(row[key] as int, isUtc: true)
+          : null;
+      return TrackingSnapshot(
+          capturedAt: date('captured_at'),
+          acceptedPointAt: date('accepted_point_at'),
+          acceptedAt: date('accepted_at'),
+          heartbeatAt: date('heartbeat_at'),
+          captureIssue: row['capture_issue'] as String?,
+          uploadIssue: row['upload_issue'] as String?,
+          intervalSeconds: row['interval_seconds'] as int? ?? 300,
+          pending: count('pending'),
+          rejected: count('rejected'));
+    });
   }
 
   /// Process old SharedPreferences queues incrementally without holding a
@@ -515,14 +527,16 @@ class TrackingOutbox {
       {bool rejected = false, int batchSize = 80}) {
     if (batchSize < 1) throw ArgumentError.value(batchSize, 'batchSize');
     return _transaction((tx) async {
-      final fingerprint = const Uuid().v5(_legacyNamespace, '${sourceKey}:${raw}');
+      final fingerprint =
+          const Uuid().v5(_legacyNamespace, '${sourceKey}:${raw}');
       final completed = await tx.query('tracking_import',
           where: 'fingerprint = ?', whereArgs: [fingerprint]);
       if (completed.isNotEmpty) return true;
 
       final progress = await tx.query('tracking_import_cursor',
           columns: ['next_index'],
-          where: 'fingerprint = ?', whereArgs: [fingerprint]);
+          where: 'fingerprint = ?',
+          whereArgs: [fingerprint]);
       final start = progress.isEmpty ? 0 : progress.single['next_index'] as int;
       List<dynamic> items;
       try {
@@ -531,9 +545,8 @@ class TrackingOutbox {
       } catch (_) {
         items = [raw];
       }
-      final end = (start + batchSize < items.length)
-          ? start + batchSize
-          : items.length;
+      final end =
+          (start + batchSize < items.length) ? start + batchSize : items.length;
       for (var i = start; i < end; i++) {
         final item = items[i];
         final payload = item is Map
@@ -552,10 +565,10 @@ class TrackingOutbox {
             DateTime.tryParse(payload['recordedAt']?.toString() ?? '');
         final validTime = parsedTime != null;
         payload['workSessionId'] = session ?? -1;
-        payload['recordedAt'] = (parsedTime ??
-                DateTime.fromMillisecondsSinceEpoch(0, isUtc: true))
-            .toUtc()
-            .toIso8601String();
+        payload['recordedAt'] =
+            (parsedTime ?? DateTime.fromMillisecondsSinceEpoch(0, isUtc: true))
+                .toUtc()
+                .toIso8601String();
         await _insert(tx, bound ? context.ownerKey : 'unbound', kind, payload,
             state: rejected || !bound || !validTime ? 'rejected' : 'pending',
             reason: !bound

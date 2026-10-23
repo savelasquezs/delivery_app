@@ -156,6 +156,15 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                           ),
                           const SizedBox(height: AppTheme.spacingMd),
                         ],
+                        if (authState.canRetrySession)
+                          OutlinedButton(
+                            onPressed: isLoading
+                                ? null
+                                : () => ref
+                                    .read(authNotifierProvider.notifier)
+                                    .restoreSession(),
+                            child: const Text('Reintentar mi sesión guardada'),
+                          ),
                         SizedBox(
                           height: 52,
                           child: ElevatedButton(

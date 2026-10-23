@@ -20,8 +20,11 @@ void main() {
       };
   late Database db;
   late TrackingOutbox box;
-  setUp(() async {
+  setUpAll(() {
     sqfliteFfiInit();
+    databaseFactory = databaseFactoryFfi;
+  });
+  setUp(() async {
     db = await databaseFactoryFfi.openDatabase(inMemoryDatabasePath,
         options: OpenDatabaseOptions(singleInstance: false));
     box = TrackingOutbox(open: () async => db);

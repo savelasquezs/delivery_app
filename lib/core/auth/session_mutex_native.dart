@@ -39,15 +39,11 @@ class SessionMutex {
 
   SessionMutex({
     Future<Database> Function()? open,
+    String databasePath = 'sa_session_mutex.db',
     this.leaseDuration = const Duration(minutes: 2),
     this.waitTimeout = const Duration(seconds: 30),
     this.pollInterval = const Duration(milliseconds: 100),
-  }) : open = open ?? _open;
-
-  static Future<Database> _open() => openDatabase(
-        'sa_session_mutex.db',
-        singleInstance: false,
-      );
+  }) : open = open ?? (() => openDatabase(databasePath, singleInstance: false));
 
   Future<Database> _db() async {
     if (_database != null) return _database!;
