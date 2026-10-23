@@ -25,8 +25,10 @@ const _driver = AuthUser(
 
 String _jwt() {
   final expiration =
-      DateTime.now().add(const Duration(hours: 2)).millisecondsSinceEpoch ~/ 1000;
-  final encoded = base64Url.encode(utf8.encode(jsonEncode({'exp': expiration})))
+      DateTime.now().add(const Duration(hours: 2)).millisecondsSinceEpoch ~/
+          1000;
+  final encoded = base64Url
+      .encode(utf8.encode(jsonEncode({'exp': expiration})))
       .replaceAll('=', '');
   return 'header.$encoded.signature';
 }
@@ -82,6 +84,20 @@ class _WorkRepo extends WorkSessionRepository {
   Future<DeliveryWorkSession> startOrResume() async => session;
 }
 
+class _DelayedVersionRepo extends _AuthRepo {
+  _DelayedVersionRepo(super.client, super.storage);
+  final first = Completer<DeliveryAppVersionPolicy>();
+  int checks = 0;
+  int clears = 0;
+
+  @override
+  Future<DeliveryAppVersionPolicy> checkDeliveryAppVersion() =>
+      checks++ == 0 ? first.future : super.checkDeliveryAppVersion();
+
+  @override
+  Future<void> clearLocalSession() async => clears++;
+}
+
 Future<void> _waitFor(bool Function() predicate) async {
   for (var i = 0; i < 150 && !predicate(); i++) {
     await Future<void>.delayed(const Duration(milliseconds: 5));
@@ -97,13 +113,61 @@ void main() {
 
   DioClient client() => DioClient(
         SecureStorage(),
-        DeliveryAppVersionInfoLoader(load: () async => PackageInfo(
-          appName: 'Señor Arroz',
-          packageName: 'com.senorarroz.delivery_app',
-          version: '1.2.5',
-          buildNumber: '24',
-        )),
+        DeliveryAppVersionInfoLoader(
+            load: () async => PackageInfo(
+                  appName: 'Señor Arroz',
+                  packageName: 'com.senorarroz.delivery_app',
+                  version: '1.2.5',
+                  buildNumber: '24',
+                )),
       );
+
+  test(
+      'blocked restore times out without deleting credentials and retries safely',
+      () async {
+    final dio = client();
+    final repository = _DelayedVersionRepo(dio, SecureStorage());
+    final notifier = AuthNotifier(
+      repository,
+      _WorkRepo(dio, SecureStorage()),
+      dio,
+      sessionRestoreTimeout: const Duration(milliseconds: 50),
+      permissionReader: () async => const LocationPermissionState(
+        serviceEnabled: true,
+        permission: LocationPermission.always,
+        accuracy: LocationAccuracyStatus.precise,
+      ),
+      registerFcm: () async {},
+      trackingStarter: ({
+        required authToken,
+        required baseUrl,
+        required workSession,
+        required versionName,
+        required buildNumber,
+        required packageName,
+      }) async {},
+      isTrackingRunning: () async => true,
+    );
+    addTearDown(notifier.dispose);
+    await notifier.restoreSession();
+    expect(repository.checks, 1);
+    await _waitFor(() => notifier.state.status == AuthStatus.error);
+    expect(notifier.state.canRetrySession, isTrue);
+    expect(repository.clears, 0);
+    await notifier.restoreSession();
+    expect(notifier.state.status, AuthStatus.authenticated);
+    expect(notifier.state.canRetrySession, isFalse);
+
+    repository.first.complete(const DeliveryAppVersionPolicy(
+      requiredVersion: '99.0.0',
+      minimumBuild: 999,
+      playStoreUrl: 'https://example.invalid/play',
+      updateRequired: true,
+    ));
+    await Future<void>.delayed(Duration.zero);
+    expect(notifier.state.status, AuthStatus.authenticated);
+    expect(repository.clears, 0);
+  });
 
   test('restoring a verified session does not await a blocked Android service',
       () async {
@@ -174,7 +238,8 @@ void main() {
       isTrackingRunning: () async => false,
     );
     addTearDown(notifier.dispose);
-    await _waitFor(() => notifier.state.status == AuthStatus.authenticated &&
+    await _waitFor(() =>
+        notifier.state.status == AuthStatus.authenticated &&
         notifier.state.trackingIssue != null &&
         !notifier.state.trackingIssue!.contains('Iniciando'));
     expect(notifier.state.workSession?.id, 123);

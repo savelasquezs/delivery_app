@@ -39,6 +39,7 @@ class AuthState {
   final String? trackingIssue;
   final String? errorMessage;
   final DeliveryAppVersionPolicy? updatePolicy;
+  final bool canRetrySession;
 
   const AuthState({
     this.status = AuthStatus.initial,
@@ -48,6 +49,7 @@ class AuthState {
     this.trackingIssue,
     this.errorMessage,
     this.updatePolicy,
+    this.canRetrySession = false,
   });
 
   AuthState copyWith({
@@ -59,6 +61,7 @@ class AuthState {
     bool clearTrackingIssue = false,
     String? errorMessage,
     DeliveryAppVersionPolicy? updatePolicy,
+    bool? canRetrySession,
   }) =>
       AuthState(
         status: status ?? this.status,
@@ -69,6 +72,7 @@ class AuthState {
             clearTrackingIssue ? null : trackingIssue ?? this.trackingIssue,
         errorMessage: errorMessage,
         updatePolicy: updatePolicy ?? this.updatePolicy,
+        canRetrySession: canRetrySession ?? this.canRetrySession,
       );
 }
 
@@ -100,6 +104,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
   final Future<bool> Function() _isTrackingRunning;
   final Future<LocationPermissionState> Function() _permissionReader;
   final Future<void> Function()? _registerFcm;
+  final Duration sessionRestoreTimeout;
   Future<void>? _resumeInFlight;
   Future<void>? _trackingStartInFlight;
   DeliveryWorkSession? _queuedTrackingSession;
@@ -117,6 +122,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
     Future<bool> Function()? isTrackingRunning,
     Future<LocationPermissionState> Function()? permissionReader,
     Future<void> Function()? registerFcm,
+    this.sessionRestoreTimeout = const Duration(seconds: 30),
   })  : _onUpdateRequiredCleanup = onUpdateRequiredCleanup,
         _trackingStarter =
             trackingStarter ?? LocationTrackingService.startTracking,
@@ -128,7 +134,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
     setAuthSessionInvalidatedHandler(onSessionInvalidatedByApi);
     setDeliveryAppUpdateRequiredHandler(onDeliveryAppUpdateRequired);
     setWorkSessionChangedByPushHandler(onWorkSessionChangedByPush);
-    unawaited(_checkSession());
+    unawaited(restoreSession());
   }
 
   @override
@@ -333,15 +339,52 @@ class AuthNotifier extends StateNotifier<AuthState> {
     }
   }
 
-  Future<void> _checkSession() async {
-    state = state.copyWith(status: AuthStatus.loading);
+  bool _currentAuthAttempt(int generation) =>
+      mounted && _authGeneration == generation;
+
+  Future<void> restoreSession() async {
+    if (state.status == AuthStatus.loading) return;
+    final generation = ++_authGeneration;
+    state = const AuthState(status: AuthStatus.loading);
+    final watch = Stopwatch()..start();
     try {
-      final policy = await _repository.checkDeliveryAppVersion();
+      await _checkSession(generation).timeout(sessionRestoreTimeout);
+    } on TimeoutException {
+      if (!_currentAuthAttempt(generation) ||
+          state.status != AuthStatus.loading) return;
+      _authGeneration++;
+      debugPrint('AuthStartup timeout elapsedMs=${watch.elapsedMilliseconds}');
+      state = const AuthState(
+        status: AuthStatus.error,
+        canRetrySession: true,
+        errorMessage: 'La verificación de sesión tardó demasiado. '
+            'Reintenta sin borrar los datos de la aplicación.',
+      );
+    }
+  }
+
+  Future<T> _authPhase<T>(String phase, Future<T> Function() action) async {
+    final watch = Stopwatch()..start();
+    debugPrint('AuthStartup phase=$phase begin');
+    try {
+      return await action();
+    } finally {
+      debugPrint(
+          'AuthStartup phase=$phase elapsedMs=${watch.elapsedMilliseconds}');
+    }
+  }
+
+  Future<void> _checkSession(int generation) async {
+    try {
+      final policy =
+          await _authPhase('version', _repository.checkDeliveryAppVersion);
+      if (!_currentAuthAttempt(generation)) return;
       if (policy.updateRequired) {
         await _activateUpdateRequired(policy);
         return;
       }
     } catch (error) {
+      if (!_currentAuthAttempt(generation)) return;
       final update = deliveryAppUpdateFromError(error);
       if (update != null) {
         await _activateUpdateRequired(update.policy);
@@ -350,14 +393,19 @@ class AuthNotifier extends StateNotifier<AuthState> {
     }
 
     try {
-      final hasSession = await _repository.hasValidSession();
+      final hasSession =
+          await _authPhase('stored-session', _repository.hasValidSession);
+      if (!_currentAuthAttempt(generation)) return;
       if (!hasSession) {
         state = const AuthState(status: AuthStatus.unauthenticated);
         return;
       }
       final accessToken = await _repository.getStoredAccessToken();
+      if (!_currentAuthAttempt(generation)) return;
       if (JwtExpiration.shouldProactivelyRefresh(accessToken)) {
-        final outcome = await _client.silentRefreshAccessToken();
+        final outcome =
+            await _authPhase('refresh', _client.silentRefreshAccessToken);
+        if (!_currentAuthAttempt(generation)) return;
         if (outcome is RefreshAccessSessionEnded) {
           state = const AuthState(status: AuthStatus.unauthenticated);
           return;
@@ -369,14 +417,18 @@ class AuthNotifier extends StateNotifier<AuthState> {
       }
 
       final user = await _repository.getStoredUser();
+      if (!_currentAuthAttempt(generation)) return;
       if (user == null) {
         state = const AuthState(status: AuthStatus.unauthenticated);
         return;
       }
-      final reconciliation = await _reconcileWorkSession(
-        requestPermission: false,
-        preserveExistingSessionOnIssue: true,
-      );
+      final reconciliation = await _authPhase(
+          'work-session',
+          () => _reconcileWorkSession(
+                requestPermission: false,
+                preserveExistingSessionOnIssue: true,
+              ));
+      if (!_currentAuthAttempt(generation)) return;
       state = AuthState(
         status: AuthStatus.authenticated,
         user: user,
@@ -392,16 +444,19 @@ class AuthNotifier extends StateNotifier<AuthState> {
       }
       unawaited(_registerFcmTokenSafely());
     } catch (e) {
+      if (!_currentAuthAttempt(generation)) return;
       final update = deliveryAppUpdateFromError(e);
       if (update != null) {
         await _activateUpdateRequired(update.policy);
         return;
       }
-      await _recoverWithoutDiscardingCredentials(e);
+      await _recoverWithoutDiscardingCredentials(e, generation: generation);
     }
   }
 
-  Future<void> _recoverWithoutDiscardingCredentials(Object error) async {
+  Future<void> _recoverWithoutDiscardingCredentials(Object error,
+      {int? generation}) async {
+    generation ??= _authGeneration;
     final definitive = error is SessionEndedException ||
         (error is DioException &&
             (error.error is SessionEndedException ||
@@ -417,13 +472,16 @@ class AuthNotifier extends StateNotifier<AuthState> {
         fallback: 'No pudimos verificar la jornada. Vuelve a intentarlo.');
     try {
       final user = state.user ?? await _repository.getStoredUser();
+      if (!_currentAuthAttempt(generation)) return;
       final stored = state.workSession ?? await _workSessions.getStored();
+      if (!_currentAuthAttempt(generation)) return;
       final active = stored != null &&
           stored.isActive &&
           DateTime.now().toUtc().isBefore(stored.autoCloseAt);
       if (!isTransientSessionFailure(error) || !active) {
         await LocationTrackingService.stopTracking(recordEvent: false);
       }
+      if (!_currentAuthAttempt(generation)) return;
       state = AuthState(
         status: user == null ? AuthStatus.error : AuthStatus.authenticated,
         user: user,
@@ -433,6 +491,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
         errorMessage: user == null ? message : null,
       );
     } catch (_) {
+      if (!_currentAuthAttempt(generation)) return;
       // Storage/plugin initialization can itself be transient.
       state = state.copyWith(status: AuthStatus.error, errorMessage: message);
     }
@@ -459,13 +518,6 @@ class AuthNotifier extends StateNotifier<AuthState> {
           'Para iniciar la jornada debes permitir ubicación precisa "Todo el tiempo" en los ajustes de Android.',
         );
       }
-      try {
-        final notificationsGranted = await FcmService.requestPermission();
-        if (notificationsGranted) {
-          await _registerFcmTokenSafely();
-        }
-      } catch (_) {}
-
       final reconciliation = await _reconcileWorkSession(
         requestPermission: false,
         preserveExistingSessionOnIssue: false,
@@ -483,6 +535,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
         trackingIssue: 'Iniciando seguimiento de ubicación...',
       );
       _scheduleTrackingStart(reconciliation.session!);
+      unawaited(_registerFcmTokenSafely(requestPermission: true));
     } catch (e) {
       final update = deliveryAppUpdateFromError(e);
       if (update != null) {
@@ -552,11 +605,12 @@ class AuthNotifier extends StateNotifier<AuthState> {
     return _TrackingReconciliation(session: session);
   }
 
-  Future<void> _registerFcmTokenSafely() async {
+  Future<void> _registerFcmTokenSafely({bool requestPermission = false}) async {
     try {
       if (_registerFcm != null) {
         await _registerFcm!();
       } else {
+        if (requestPermission && !await FcmService.requestPermission()) return;
         await FcmService.registerToken(_client);
       }
     } catch (_) {

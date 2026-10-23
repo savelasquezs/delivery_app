@@ -30,8 +30,11 @@ Map<String, dynamic> point(String id,
 void main() {
   late Database db;
   late TrackingOutbox store;
-  setUp(() async {
+  setUpAll(() {
     sqfliteFfiInit();
+    databaseFactory = databaseFactoryFfi;
+  });
+  setUp(() async {
     db = await databaseFactoryFfi.openDatabase(inMemoryDatabasePath,
         options: OpenDatabaseOptions(singleInstance: false));
     store = TrackingOutbox(open: () async => db);

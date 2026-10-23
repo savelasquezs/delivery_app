@@ -128,4 +128,4 @@ jobs:
           target: google_apis
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
-          script: flutter test integration_test/android_sqlite_startup_test.dart -d emulator-5554 --reporter expanded
+          script: flutter test integration_test/android_sqlite_startup_test.dart integration_test/android_sqlite_concurrency_test.dart -d emulator-5554 --reporter expanded

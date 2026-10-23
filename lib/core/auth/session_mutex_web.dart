@@ -14,20 +14,34 @@ Future<T> retrySqliteBusy<T>(Future<T> Function() operation,
 
 class SessionMutex {
   static final shared = SessionMutex();
+  final String _name;
+
+  SessionMutex({
+    String databasePath = 'sa_session_mutex.db',
+    Duration leaseDuration = const Duration(minutes: 2),
+    Duration waitTimeout = const Duration(seconds: 30),
+    Duration pollInterval = const Duration(milliseconds: 100),
+  }) : _name = databasePath == 'sa_session_mutex.db'
+            ? 'senorarroz-auth'
+            : 'senorarroz-$databasePath';
 
   Future<T> protect<T>(Future<T> Function(SessionLease lease) operation) async {
     late T result;
-    await _locks.request('senorarroz-auth'.toJS,
-      ((JSAny? lock) => (() async {
-        final lease = SessionLease();
-        try {
-          result = await operation(lease);
-        } finally {
-          lease._closed = true;
-        }
-        return null as JSAny?;
-      })().toJS).toJS,
-    ).toDart;
+    await _locks
+        .request(
+          _name.toJS,
+          ((JSAny? lock) => (() async {
+                final lease = SessionLease();
+                try {
+                  result = await operation(lease);
+                } finally {
+                  lease._closed = true;
+                }
+                return null as JSAny?;
+              })()
+                  .toJS).toJS,
+        )
+        .toDart;
     return result;
   }
 }
