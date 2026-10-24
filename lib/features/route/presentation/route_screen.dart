@@ -136,7 +136,11 @@ class _RouteScreenState extends ConsumerState<RouteScreen> {
               neighborhoodName: payload.neighborhoodName,
             );
       },
-      onAfterDelivered: () => ref.read(routeNotifierProvider.notifier).load(),
+    );
+    if (!mounted) return;
+    await ref.read(routeNotifierProvider.notifier).load(
+      silently: true,
+      ensureFresh: true,
     );
   }
 
@@ -308,6 +312,7 @@ class _RouteScreenState extends ConsumerState<RouteScreen> {
                             _RouteReservationBanner(order: order, now: now),
                             OrderCard(
                               order: order,
+                              showFeeAndCashSummary: true,
                               topContent: isNextDelivery
                                   ? const _NextDeliveryMarker()
                                   : null,
