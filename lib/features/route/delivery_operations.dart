@@ -123,21 +123,24 @@ class DeliveryOperations {
     final auth = await storage.readSession();
     if (auth == null) return;
     final key = auth.ownerKey(client.dio.options.baseUrl);
-    final blocked = <int?>{};
+    final blocked = <String>{};
     for (final row in await outbox.operations(key)) {
       if ((await storage.readSession())?.id != auth.id) return;
       final payload = Map<String, dynamic>.from(
           jsonDecode(row['payload'] as String) as Map);
       final orderId = payload['orderId'] as int?;
-      if (blocked.contains(orderId)) continue;
+      final addressId = (jsonDecode(row['display'] as String) as Map)['addressId'];
+      final resources = {'order:$orderId',
+        if (payload['kind'] == 'address' && addressId != null) 'address:$addressId'};
+      if (resources.any(blocked.contains)) continue;
       if (row['state'] == 'conflict') {
-        blocked.add(orderId);
+        blocked.addAll(resources);
         continue;
       }
       final id = row['id'] as String;
       if (!await outbox.claimOperation(
           key, id, DateTime.now().millisecondsSinceEpoch)) {
-        blocked.add(orderId);
+        blocked.addAll(resources);
         continue;
       }
       try {
@@ -157,7 +160,7 @@ class DeliveryOperations {
             status == 422) {
           await outbox.finishOperation(key, id,
               conflict: userFacingErrorMessage(error));
-          blocked.add(orderId);
+          blocked.addAll(resources);
         } else {
           final now = DateTime.now();
           final delay = retryDelay((row['attempts'] as int? ?? 0) + 1,

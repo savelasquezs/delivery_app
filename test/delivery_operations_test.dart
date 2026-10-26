@@ -176,6 +176,24 @@ void main() {
     expect(pending.single['state'], 'conflict');
     expect(jsonDecode(pending.single['payload'] as String)['orderId'], 12);
   });
+  test('address conflict preserves ordering across orders sharing that address', () async {
+    final sharedAddress = Order.fromJson({...order.rawJson, 'addressId': 7});
+    await operations.record(sharedAddress, 'address', changes: {'additionalInfo': 'First'});
+    await operations.record(Order.fromJson({...sharedAddress.rawJson, 'id': 13}),
+        'address', changes: {'additionalInfo': 'Second'});
+    await operations.record(Order.fromJson({...order.rawJson, 'id': 14}), 'deliver');
+    client.respond = () async {
+      if (client.sent.last['kind'] == 'address') {
+        throw DioException(requestOptions: RequestOptions(path: '/operations'),
+          response: Response(requestOptions: RequestOptions(path: '/operations'), statusCode: 409));
+      }
+      return {'context': {'revision': 6, 'orders': []}};
+    };
+    await operations.sync();
+    expect(client.sent.map((p) => p['orderId']), [12, 14]);
+    expect((await operations.pending()).map((p) => p['state']), ['conflict', 'pending']);
+  });
+
   test('permission denial retains an uncertain intent until it can reconcile', () async {
     await operations.record(order, 'deliver');
     client.respond = () async => throw DioException(requestOptions: RequestOptions(path: '/operations'),

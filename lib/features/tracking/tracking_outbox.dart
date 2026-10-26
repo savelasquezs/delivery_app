@@ -139,78 +139,80 @@ class TrackingOutbox {
     }
   }
 
-  Future<Database> _initialize() async {
-    final db = await open();
-    try {
-      // This PRAGMA returns a row; Android rejects it through execute.
-      await db.rawQuery('PRAGMA busy_timeout = 1000');
-      await _writeMutex.protect((lease) async {
-        await lease.ensureOwned();
-        return retrySqliteBusy(() => db.transaction((tx) async {
-              await tx.execute('CREATE TABLE IF NOT EXISTS delivery_cache ('
-                  'owner TEXT NOT NULL, name TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(owner,name))');
-              await tx.execute(
-                  'CREATE TABLE IF NOT EXISTS delivery_operations ('
-                  'id TEXT PRIMARY KEY, owner TEXT NOT NULL, payload TEXT NOT NULL, display TEXT NOT NULL, '
-                  "state TEXT NOT NULL DEFAULT 'pending', reason TEXT, available_at INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0)");
-              if (!(await tx.rawQuery('PRAGMA table_info(delivery_operations)'))
-                  .any((column) => column['name'] == 'attempts')) {
+  Future<Database> _initialize() => _writeMutex.protect((lease) async {
+        final db = await open();
+        try {
+          // This PRAGMA returns a row; Android rejects it through execute.
+          await db.rawQuery('PRAGMA busy_timeout = 1000');
+          await lease.ensureOwned();
+          await retrySqliteBusy(() => db.transaction((tx) async {
+                await tx.execute('CREATE TABLE IF NOT EXISTS delivery_cache ('
+                    'owner TEXT NOT NULL, name TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(owner,name))');
                 await tx.execute(
-                    'ALTER TABLE delivery_operations ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0');
-              }
-              await tx.execute(
-                  'CREATE INDEX IF NOT EXISTS delivery_operations_owner ON delivery_operations(owner,state,available_at)');
-              await tx.execute(
-                  'CREATE TABLE IF NOT EXISTS tracking_context (id INTEGER PRIMARY KEY, value TEXT NOT NULL)');
-              await tx.execute('CREATE TABLE IF NOT EXISTS tracking_outbox ('
-                  'id TEXT PRIMARY KEY, kind TEXT NOT NULL, owner_key TEXT NOT NULL, '
-                  'work_session INTEGER NOT NULL, payload TEXT NOT NULL, recorded_at INTEGER NOT NULL, '
-                  "state TEXT NOT NULL DEFAULT 'pending', reason TEXT, attempts INTEGER NOT NULL DEFAULT 0)");
-              await tx.execute(
-                  'CREATE INDEX IF NOT EXISTS tracking_pending ON tracking_outbox(owner_key, state, kind, recorded_at)');
-              await tx.execute('CREATE TABLE IF NOT EXISTS tracking_status ('
-                  'owner_key TEXT NOT NULL, work_session INTEGER NOT NULL, captured_at INTEGER, '
-                  'accepted_point_at INTEGER, accepted_at INTEGER, heartbeat_at INTEGER, '
-                  'capture_issue TEXT, upload_issue TEXT, interval_seconds INTEGER NOT NULL DEFAULT 300, '
-                  'PRIMARY KEY(owner_key, work_session))');
-              await tx.execute(
-                  'CREATE TABLE IF NOT EXISTS tracking_import (fingerprint TEXT PRIMARY KEY)');
-              await tx.execute(
-                  'CREATE TABLE IF NOT EXISTS tracking_import_cursor ('
-                  'fingerprint TEXT PRIMARY KEY, next_index INTEGER NOT NULL)');
-              await tx.execute(
-                  'CREATE TABLE IF NOT EXISTS tracking_communication ('
-                  'owner_key TEXT NOT NULL, work_session INTEGER NOT NULL, id TEXT NOT NULL, '
-                  'started_at INTEGER NOT NULL, recovered_at INTEGER, acknowledged INTEGER NOT NULL DEFAULT 0, '
-                  'PRIMARY KEY(owner_key, work_session))');
-            }));
+                    'CREATE TABLE IF NOT EXISTS delivery_operations ('
+                    'id TEXT PRIMARY KEY, owner TEXT NOT NULL, payload TEXT NOT NULL, display TEXT NOT NULL, '
+                    "state TEXT NOT NULL DEFAULT 'pending', reason TEXT, available_at INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0)");
+                if (!(await tx
+                        .rawQuery('PRAGMA table_info(delivery_operations)'))
+                    .any((column) => column['name'] == 'attempts')) {
+                  await tx.execute(
+                      'ALTER TABLE delivery_operations ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0');
+                }
+                await tx.execute(
+                    'CREATE INDEX IF NOT EXISTS delivery_operations_owner ON delivery_operations(owner,state,available_at)');
+                await tx.execute(
+                    'CREATE TABLE IF NOT EXISTS tracking_context (id INTEGER PRIMARY KEY, value TEXT NOT NULL)');
+                await tx.execute('CREATE TABLE IF NOT EXISTS tracking_outbox ('
+                    'id TEXT PRIMARY KEY, kind TEXT NOT NULL, owner_key TEXT NOT NULL, '
+                    'work_session INTEGER NOT NULL, payload TEXT NOT NULL, recorded_at INTEGER NOT NULL, '
+                    "state TEXT NOT NULL DEFAULT 'pending', reason TEXT, attempts INTEGER NOT NULL DEFAULT 0)");
+                await tx.execute(
+                    'CREATE INDEX IF NOT EXISTS tracking_pending ON tracking_outbox(owner_key, state, kind, recorded_at)');
+                await tx.execute('CREATE TABLE IF NOT EXISTS tracking_status ('
+                    'owner_key TEXT NOT NULL, work_session INTEGER NOT NULL, captured_at INTEGER, '
+                    'accepted_point_at INTEGER, accepted_at INTEGER, heartbeat_at INTEGER, '
+                    'capture_issue TEXT, upload_issue TEXT, interval_seconds INTEGER NOT NULL DEFAULT 300, '
+                    'PRIMARY KEY(owner_key, work_session))');
+                await tx.execute(
+                    'CREATE TABLE IF NOT EXISTS tracking_import (fingerprint TEXT PRIMARY KEY)');
+                await tx.execute(
+                    'CREATE TABLE IF NOT EXISTS tracking_import_cursor ('
+                    'fingerprint TEXT PRIMARY KEY, next_index INTEGER NOT NULL)');
+                await tx.execute(
+                    'CREATE TABLE IF NOT EXISTS tracking_communication ('
+                    'owner_key TEXT NOT NULL, work_session INTEGER NOT NULL, id TEXT NOT NULL, '
+                    'started_at INTEGER NOT NULL, recovered_at INTEGER, acknowledged INTEGER NOT NULL DEFAULT 0, '
+                    'PRIMARY KEY(owner_key, work_session))');
+              }));
+          return db;
+        } catch (_) {
+          await db.close();
+          rethrow;
+        }
       });
-      return db;
-    } catch (_) {
-      await db.close();
-      rethrow;
-    }
-  }
 
-  Future<T> _transaction<T>(Future<T> Function(Transaction) body) async {
+  // An uncoordinated reader can block Android's only SQLite worker while a
+  // different connection owns a transaction. Open and read under the same lease.
+  Future<T> _access<T>(Future<T> Function(Database) body) async {
     final db = await _db();
     return _writeMutex.protect((lease) async {
       await lease.ensureOwned();
-      // Android shares a SQLite worker: never query the lease database while
-      // an outbox transaction can block another engine on that worker.
-      return retrySqliteBusy(() => db.transaction(body));
+      return retrySqliteBusy(() => body(db));
     });
   }
 
-  Future<Map<String, dynamic>?> cached(String owner, String name) async {
-    final db = await _db();
-    final rows = await retrySqliteBusy(() => db.query('delivery_cache',
-        where: 'owner = ? AND name = ?', whereArgs: [owner, name]));
-    return rows.isEmpty
-        ? null
-        : Map<String, dynamic>.from(
-            jsonDecode(rows.single['value'] as String) as Map);
-  }
+  Future<T> _transaction<T>(Future<T> Function(Transaction) body) =>
+      _access((db) => db.transaction(body));
+
+  Future<Map<String, dynamic>?> cached(String owner, String name) =>
+      _access((db) async {
+        final rows = await db.query('delivery_cache',
+            where: 'owner = ? AND name = ?', whereArgs: [owner, name]);
+        return rows.isEmpty
+            ? null
+            : Map<String, dynamic>.from(
+                jsonDecode(rows.single['value'] as String) as Map);
+      });
 
   Future<void> cache(String owner, String name, Map<String, dynamic> value) =>
       _transaction((tx) async {
@@ -254,11 +256,9 @@ class TrackingOutbox {
             conflictAlgorithm: ConflictAlgorithm.ignore);
       });
 
-  Future<List<Map<String, Object?>>> operations(String owner) async {
-    final db = await _db();
-    return retrySqliteBusy(() => db.query('delivery_operations',
-        where: 'owner = ?', whereArgs: [owner], orderBy: 'rowid'));
-  }
+  Future<List<Map<String, Object?>>> operations(String owner) =>
+      _access((db) => db.query('delivery_operations',
+          where: 'owner = ?', whereArgs: [owner], orderBy: 'rowid'));
 
   Future<bool> claimOperation(String owner, String id, int now) =>
       _transaction((tx) async =>
@@ -293,14 +293,12 @@ class TrackingOutbox {
         }
       });
 
-  Future<TrackingContext?> current() async {
-    final db = await _db();
-    final rows = await retrySqliteBusy(
-        () => db.query('tracking_context', where: 'id = 1'));
-    if (rows.isEmpty) return null;
-    return TrackingContext.fromJson(Map<String, dynamic>.from(
-        jsonDecode(rows.single['value'] as String) as Map));
-  }
+  Future<TrackingContext?> current() => _access((db) async {
+        final rows = await db.query('tracking_context', where: 'id = 1');
+        if (rows.isEmpty) return null;
+        return TrackingContext.fromJson(Map<String, dynamic>.from(
+            jsonDecode(rows.single['value'] as String) as Map));
+      });
 
   Future<void> activate(TrackingContext context, {bool onlyIfAbsent = false}) =>
       _transaction((tx) async {
@@ -388,18 +386,14 @@ class TrackingOutbox {
   }
 
   /// Whether the current workday still has older GPS points to upload.
-  Future<bool> hasPendingLocationHistory(TrackingContext context) async {
-    final db = await _db();
-    final rows = await retrySqliteBusy(() => db.query(
-          'tracking_outbox',
-          columns: ['id'],
-          where:
-              "owner_key = ? AND work_session = ? AND state = 'pending' AND kind = 'location'",
-          whereArgs: [context.ownerKey, context.workSessionId],
-          limit: 1,
-        ));
-    return rows.isNotEmpty;
-  }
+  Future<bool> hasPendingLocationHistory(TrackingContext context) =>
+      _access((db) async => (await db.query('tracking_outbox',
+              columns: ['id'],
+              where:
+                  "owner_key = ? AND work_session = ? AND state = 'pending' AND kind = 'location'",
+              whereArgs: [context.ownerKey, context.workSessionId],
+              limit: 1))
+          .isNotEmpty);
 
   Future<List<OutboxRecord>> pending(TrackingContext context,
       {int limit = 10}) async {
@@ -426,16 +420,14 @@ class TrackingOutbox {
     });
   }
 
-  Future<List<OutboxRecord>> events(TrackingContext context,
-      {int limit = 5}) async {
-    final db = await _db();
-    final rows = await retrySqliteBusy(() => db.query('tracking_outbox',
-        where: "owner_key = ? AND state = 'pending' AND kind = 'event'",
-        whereArgs: [context.ownerKey],
-        orderBy: 'recorded_at, id',
-        limit: limit));
-    return rows.map(OutboxRecord.fromRow).toList();
-  }
+  Future<List<OutboxRecord>> events(TrackingContext context, {int limit = 5}) =>
+      _access((db) async => (await db.query('tracking_outbox',
+              where: "owner_key = ? AND state = 'pending' AND kind = 'event'",
+              whereArgs: [context.ownerKey],
+              orderBy: 'recorded_at, id',
+              limit: limit))
+          .map(OutboxRecord.fromRow)
+          .toList());
 
   Future<void> acknowledge(OutboxRecord record, DateTime now) =>
       _transaction((tx) async {

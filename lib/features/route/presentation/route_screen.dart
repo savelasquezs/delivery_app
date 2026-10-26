@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/maps/open_delivery_destination_maps.dart';
@@ -42,7 +43,8 @@ class _RouteScreenState extends ConsumerState<RouteScreen> {
 
   Future<void> _changeStatus(Order order) async {
     if (order.status == OrderStatus.onTheWay) {
-      await confirmDelivery(context, order, () => ref.read(routeNotifierProvider.notifier).markDelivered(order));
+      await confirmDelivery(context, order,
+          () => ref.read(routeNotifierProvider.notifier).markDelivered(order));
     } else {
       await ref.read(routeNotifierProvider.notifier).markOnTheWay(order.id);
     }
@@ -51,8 +53,11 @@ class _RouteScreenState extends ConsumerState<RouteScreen> {
   Future<void> _reprintOrder(Order order) async {
     if (_reprintingOrderId != null) return;
     setState(() => _reprintingOrderId = order.id);
-    try { await reprintDelivery(context, ref.read(orderRepositoryProvider), order); }
-    finally { if (mounted) setState(() => _reprintingOrderId = null); }
+    try {
+      await reprintDelivery(context, ref.read(orderRepositoryProvider), order);
+    } finally {
+      if (mounted) setState(() => _reprintingOrderId = null);
+    }
   }
 
   Future<void> _openOrderDetail(Order order) async {
@@ -60,7 +65,6 @@ class _RouteScreenState extends ConsumerState<RouteScreen> {
       context: context,
       ref: ref,
       initialOrder: order,
-
     );
     if (!mounted) return;
     await ref.read(routeNotifierProvider.notifier).load(
@@ -158,27 +162,67 @@ class _RouteScreenState extends ConsumerState<RouteScreen> {
   Future<void> _reviewPending(Map<String, Object?> row) async {
     final payload = jsonDecode(row['payload'] as String) as Map;
     final local = payload['changes'] as Map?;
-    final current = payload['orderId'] == null ? Future<Order?>.value(null)
-      : ref.read(orderRepositoryProvider).getOrderWithDetails(payload['orderId'] as int);
-    const labels = {'address': 'Dirección', 'additionalInfo': 'Información adicional',
-      'neighborhoodId': 'Barrio', 'latitude': 'Latitud', 'longitude': 'Longitud'};
-    final discard = await showDialog<bool>(context: context, builder: (dialog) => AlertDialog(
-      title: const Text('Revisar acción pendiente'),
-      content: SingleChildScrollView(child: FutureBuilder<Order?>(future: current, builder: (_, snapshot) => Column(
-        mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start,
-        children: [Text(row['reason'] as String? ?? 'El pedido cambió.'),
-          if (local != null) ...[const SizedBox(height: 12), const Text('Corrección guardada en este celular:'),
-            for (final entry in local.entries) Text('${labels[entry.key] ?? 'Dato editado'}: ${entry.value ?? '—'}')],
-          const SizedBox(height: 12),
-          if (snapshot.connectionState == ConnectionState.waiting) const LinearProgressIndicator()
-          else if (snapshot.hasError) const Text('No pudimos consultar la información actual de la sucursal.')
-          else if (snapshot.data != null) ...[const Text('Última información de la sucursal:'),
-            Text('${snapshot.data!.status.displayName} · ${snapshot.data!.displayAddressLine ?? ''}'),
-            Text(snapshot.data!.addressAdditionalInfo ?? '')],
-          const SizedBox(height: 12), const Text('Descartar elimina solo esta acción local. Puedes conservarla para revisarla después.')],
-      ))), actions: [TextButton(onPressed: () => Navigator.pop(dialog, false), child: const Text('Conservar')),
-        TextButton(onPressed: () => Navigator.pop(dialog, true), child: const Text('Descartar acción local'))],
-    ));
+    final current = payload['orderId'] == null
+        ? Future<Order?>.value(null)
+        : ref
+            .read(orderRepositoryProvider)
+            .getOrderWithDetails(payload['orderId'] as int);
+    const labels = {
+      'address': 'Dirección',
+      'additionalInfo': 'Información adicional',
+      'neighborhoodId': 'Barrio',
+      'latitude': 'Latitud',
+      'longitude': 'Longitud'
+    };
+    final discard = await showDialog<bool>(
+        context: context,
+        builder: (dialog) => AlertDialog(
+              title: const Text('Revisar acción pendiente'),
+              content: SingleChildScrollView(
+                  child: FutureBuilder<Order?>(
+                      future: current,
+                      builder: (_, snapshot) => Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(row['reason'] as String? ??
+                                  'El pedido cambió.'),
+                              if (local != null) ...[
+                                const SizedBox(height: 12),
+                                const Text(
+                                    'Corrección guardada en este celular:'),
+                                for (final entry in local.entries)
+                                  Text(
+                                      '${labels[entry.key] ?? 'Dato editado'}: ${entry.value ?? '—'}')
+                              ],
+                              const SizedBox(height: 12),
+                              if (snapshot.connectionState ==
+                                  ConnectionState.waiting)
+                                const LinearProgressIndicator()
+                              else if (snapshot.hasError)
+                                const Text(
+                                    'No pudimos consultar la información actual de la sucursal.')
+                              else if (snapshot.data != null) ...[
+                                const Text(
+                                    'Última información de la sucursal:'),
+                                Text(
+                                    '${snapshot.data!.status.displayName} · ${snapshot.data!.displayAddressLine ?? ''}'),
+                                Text(snapshot.data!.addressAdditionalInfo ?? '')
+                              ],
+                              const SizedBox(height: 12),
+                              const Text(
+                                  'Descartar elimina solo esta acción local. Puedes conservarla para revisarla después.')
+                            ],
+                          ))),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(dialog, false),
+                    child: const Text('Conservar')),
+                TextButton(
+                    onPressed: () => Navigator.pop(dialog, true),
+                    child: const Text('Descartar acción local'))
+              ],
+            ));
     if (discard == true && mounted) {
       final operations = ref.read(orderRepositoryProvider).operations;
       await operations.outbox.discardOperationConflict(
@@ -261,18 +305,26 @@ class _RouteScreenState extends ConsumerState<RouteScreen> {
                               fontSize: 20, fontWeight: FontWeight.bold)))),
             if (state.error != null)
               SliverToBoxAdapter(
-                child: state.revision >= 0 ? ListTile(
-                  dense: true, leading: const Icon(Icons.cloud_off_outlined),
-                  title: const Text('Mostrando la ruta guardada'),
-                  subtitle: Text(state.error!, maxLines: 2, overflow: TextOverflow.ellipsis),
-                  trailing: IconButton(tooltip: 'Actualizar ruta', icon: const Icon(Icons.sync),
-                    onPressed: () => ref.read(routeNotifierProvider.notifier).load()),
-                ) : ErrorBanner(
-                  title: 'No pudimos cargar tu ruta',
-                  message: state.error!,
-                  onRetry: () =>
-                      ref.read(routeNotifierProvider.notifier).load(),
-                ),
+                child: state.revision >= 0
+                    ? ListTile(
+                        dense: true,
+                        leading: const Icon(Icons.cloud_off_outlined),
+                        title: const Text('Mostrando la ruta guardada'),
+                        subtitle: Text(state.error!,
+                            maxLines: 2, overflow: TextOverflow.ellipsis),
+                        trailing: IconButton(
+                            tooltip: 'Actualizar ruta',
+                            icon: const Icon(Icons.sync),
+                            onPressed: () => ref
+                                .read(routeNotifierProvider.notifier)
+                                .load()),
+                      )
+                    : ErrorBanner(
+                        title: 'No pudimos cargar tu ruta',
+                        message: state.error!,
+                        onRetry: () =>
+                            ref.read(routeNotifierProvider.notifier).load(),
+                      ),
               ),
             if (displayOrders.isNotEmpty)
               SliverToBoxAdapter(
@@ -320,24 +372,21 @@ class _RouteScreenState extends ConsumerState<RouteScreen> {
                             _RouteReservationBanner(order: order, now: now),
                             OrderCard(
                               order: order,
+                              compact: true,
                               showFeeAndCashSummary: true,
                               topContent: isNextDelivery
                                   ? const _NextDeliveryMarker()
                                   : null,
                               onTap: () => _openOrderDetail(order),
                               trailing: _OrderActions(
-                                order: order,
-                                onDetail: () => _openOrderDetail(order),
                                 onOpenMap: () => _openSingleOrderMap(order),
-                                onWhatsApp: isNextDelivery &&
-                                        _hasCustomerPhone(order)
+                                onWhatsApp: _hasCustomerPhone(order)
                                     ? () =>
                                         _contactCustomer(order, whatsapp: true)
                                     : null,
-                                onCall:
-                                    isNextDelivery && _hasCustomerPhone(order)
-                                        ? () => _contactCustomer(order)
-                                        : null,
+                                onCall: _hasCustomerPhone(order)
+                                    ? () => _contactCustomer(order)
+                                    : null,
                                 onStatus: () => _changeStatus(order),
                                 onReprint: order.status == OrderStatus.onTheWay
                                     ? () => _reprintOrder(order)
@@ -563,8 +612,6 @@ class _RouteSummaryBar extends StatelessWidget {
 }
 
 class _OrderActions extends StatelessWidget {
-  final Order order;
-  final VoidCallback onDetail;
   final VoidCallback onOpenMap;
   final VoidCallback? onWhatsApp;
   final VoidCallback? onCall;
@@ -573,8 +620,6 @@ class _OrderActions extends StatelessWidget {
   final bool reprintLoading;
 
   const _OrderActions({
-    required this.order,
-    required this.onDetail,
     required this.onOpenMap,
     this.onWhatsApp,
     this.onCall,
@@ -585,26 +630,45 @@ class _OrderActions extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Wrap(spacing: 8, runSpacing: 6, children: [
-      CompactActionButton(icon: Icons.check_circle_outline, label: 'Entregar',
-        color: AppColors.accentDark, onTap: onStatus, filled: true),
-      CompactActionButton(icon: Icons.receipt_long_outlined, label: 'Ver',
-        color: AppColors.primary, onTap: onDetail),
-      CompactActionButton(icon: Icons.navigation_outlined, label: 'Ir',
-        color: AppColors.primary, onTap: onOpenMap),
-      PopupMenuButton<String>(tooltip: 'Más acciones',
-        onSelected: (action) {
-          switch (action) {
-            case 'whatsapp': onWhatsApp?.call(); break;
-            case 'call': onCall?.call(); break;
-            case 'print': if (!reprintLoading) onReprint?.call(); break;
-          }
-        }, itemBuilder: (_) => [
-          if (onWhatsApp != null) const PopupMenuItem(value: 'whatsapp', child: Text('WhatsApp')),
-          if (onCall != null) const PopupMenuItem(value: 'call', child: Text('Llamar')),
-          if (onReprint != null) PopupMenuItem(value: 'print', enabled: !reprintLoading,
-            child: Text(reprintLoading ? 'Enviando…' : 'Reimprimir ticket')),
-        ]),
-    ]);
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(spacing: 8, children: [
+        CompactActionButton(
+            icon: Icons.task_alt,
+            label: 'Confirmar entrega',
+            color: AppColors.accentDark,
+            onTap: onStatus,
+            filled: true,
+            iconOnly: true),
+        if (onCall != null)
+          CompactActionButton(
+              icon: Icons.call_outlined,
+              label: 'Llamar',
+              color: AppColors.info,
+              onTap: onCall,
+              iconOnly: true),
+        if (onWhatsApp != null)
+          CompactActionButton(
+              leading: const FaIcon(FontAwesomeIcons.whatsapp,
+                  size: 22, color: Color(0xFF25D366)),
+              label: 'WhatsApp',
+              color: const Color(0xFF25D366),
+              onTap: onWhatsApp,
+              iconOnly: true),
+        CompactActionButton(
+            icon: Icons.navigation_outlined,
+            label: 'Abrir mapa',
+            color: AppColors.primary,
+            onTap: onOpenMap,
+            iconOnly: true),
+        if (onReprint != null)
+          CompactActionButton(
+              icon: Icons.print_outlined,
+              label: reprintLoading ? 'Enviando ticket…' : 'Reimprimir ticket',
+              color: AppColors.hint,
+              onTap: reprintLoading ? null : onReprint,
+              iconOnly: true),
+      ]),
+    );
   }
 }
