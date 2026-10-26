@@ -594,7 +594,7 @@ class _OrderTabContentState extends State<_OrderTabContent> {
   void initState() {
     super.initState();
     _urgencyTick = Timer.periodic(const Duration(seconds: 30), (_) {
-      if (mounted) setState(() {});
+      if (mounted && TickerMode.of(context) && WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) setState(() {});
     });
   }
 

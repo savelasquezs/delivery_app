@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../orders/data/order_repository.dart';
@@ -9,26 +11,45 @@ import '../../../core/orders/route_order_helpers.dart';
 
 enum RouteOrderChange { none, added, updated, removed }
 
-typedef RouteOrdersLoader = Future<PagedOrders> Function();
-typedef RouteTrackingSync = Future<void> Function(List<Order> orders);
+typedef RouteTrackingSync = Future<void> Function(
+    int revision, int? routeId, String owner);
 
 class RouteState {
+  final Map<String, dynamic>? lastClosure;
+  final int revision;
+  final int? routeId;
+  final String phase;
+  final List<Map<String, Object?>> pending;
   final List<Order> orders;
   final bool isLoading;
   final String? error;
 
   const RouteState({
+    this.lastClosure,
+    this.revision = -1,
+    this.routeId,
+    this.phase = 'idle',
+    this.pending = const [],
     this.orders = const [],
     this.isLoading = false,
     this.error,
   });
 
   RouteState copyWith({
+    int? revision,
+    int? routeId,
+    String? phase,
+    List<Map<String, Object?>>? pending,
     List<Order>? orders,
     bool? isLoading,
     String? error,
   }) =>
       RouteState(
+        lastClosure: lastClosure,
+        revision: revision ?? this.revision,
+        routeId: routeId ?? this.routeId,
+        phase: phase ?? this.phase,
+        pending: pending ?? this.pending,
         orders: orders ?? this.orders,
         isLoading: isLoading ?? this.isLoading,
         error: error,
@@ -36,33 +57,24 @@ class RouteState {
 }
 
 class RouteNotifier extends StateNotifier<RouteState> {
-  final OrderRepository? _repository;
+  final OrderRepository _repository;
   final int _deliverymanId;
-  final RouteOrdersLoader? _ordersLoader;
   final RouteTrackingSync? _trackingSync;
   final Future<bool> Function()? _canBeginDelivery;
   Future<void>? _loadInFlight;
-  int _ordersRevision = 0;
+  Timer? _syncTimer;
+  int _contextRevision = -1;
   bool _reloadAfterInFlight = false;
 
   RouteNotifier(this._repository, this._deliverymanId,
-      {Future<bool> Function()? canBeginDelivery})
-      : _ordersLoader = null,
-        _trackingSync = null,
+      {Future<bool> Function()? canBeginDelivery,
+      RouteTrackingSync? syncTracking})
+      : _trackingSync = syncTracking,
         _canBeginDelivery = canBeginDelivery,
-        super(const RouteState());
-
-  RouteNotifier.withLoader({
-    required int deliverymanId,
-    required RouteOrdersLoader loadOrders,
-    RouteTrackingSync? syncTracking,
-    Future<bool> Function()? canBeginDelivery,
-  })  : _repository = null,
-        _deliverymanId = deliverymanId,
-        _ordersLoader = loadOrders,
-        _trackingSync = syncTracking,
-        _canBeginDelivery = canBeginDelivery,
-        super(const RouteState());
+        super(const RouteState()) {
+    _syncTimer = Timer.periodic(
+        const Duration(seconds: 15), (_) => unawaited(_syncPending()));
+  }
 
   Future<void> load({bool silently = false, bool ensureFresh = false}) {
     final current = _loadInFlight;
@@ -87,40 +99,102 @@ class RouteNotifier extends StateNotifier<RouteState> {
 
   Future<void> _load({required bool silently}) async {
     if (!mounted) return;
-    final readRevision = _ordersRevision;
-    if (!silently) {
-      state = state.copyWith(isLoading: true, error: null);
-    }
+    final operations = _repository.operations;
+    if (!silently && state.revision < 0)
+      state = state.copyWith(isLoading: true);
     try {
-      final result = await _fetchOrders();
-      if (!mounted) return;
-      if (readRevision != _ordersRevision || _reloadAfterInFlight) {
-        // Retain realtime changes, then reconcile other already-assigned
-        // orders with one authoritative read rather than losing them.
-        _reloadAfterInFlight = true;
-        if (state.isLoading) state = state.copyWith(isLoading: false);
-        return;
-      }
-      final unchanged = routeOrdersHaveSameContent(state.orders, result.items);
-      if (!unchanged || state.isLoading || state.error != null) {
+      final cached = await operations.cachedContext();
+      if (cached != null) await _applyContext(cached);
+      await operations.sync();
+      await _applyContext(await operations.refresh());
+    } catch (error) {
+      if (mounted)
         state = state.copyWith(
-          orders: unchanged ? state.orders : result.items,
-          isLoading: false,
-          error: null,
-        );
-      }
-      await _syncTracking(result.items);
-    } catch (e) {
-      if (!mounted) return;
-      if (silently) return;
-      state = state.copyWith(
-        isLoading: false,
-        error: userFacingErrorMessage(
-          e,
-          fallback: 'No pudimos cargar tu ruta.',
-        ),
-      );
+            isLoading: false,
+            error: userFacingErrorMessage(error,
+                fallback: 'Sin conexión. Mostrando la última ruta conocida.'));
     }
+  }
+
+  Future<void> _syncPending() async {
+    try {
+      if ((await _repository.operations.pending()).isEmpty) return;
+      await _repository.operations.sync();
+      final cached = await _repository.operations.cachedContext();
+      if (cached != null) await _applyContext(cached);
+    } catch (_) {}
+  }
+
+  Future<void> _applyContext(Map<String, dynamic> context) async {
+    if (!mounted) return;
+    final owner = await _repository.operations.owner();
+    final revision = (context['revision'] as num?)?.toInt() ?? 0;
+    if (revision < _contextRevision) return;
+    final pending = await _repository.operations.pending();
+    if (!mounted || revision < _contextRevision) return;
+    _contextRevision = revision;
+    final delivered = <int>{};
+    final corrections = <int, Map>{};
+    for (final row in pending) {
+      final value = jsonDecode(row['payload'] as String) as Map;
+      if (value['kind'] == 'deliver') delivered.add(value['orderId'] as int);
+      if (value['kind'] == 'address')
+        corrections[value['orderId'] as int] = value['changes'] as Map;
+    }
+    final orders = (context['orders'] as List? ?? [])
+        .map((raw) {
+          final json = Map<String, dynamic>.from(raw as Map);
+          final changes = corrections[json['id']];
+          if (changes != null) {
+            for (final key in changes.keys)
+              json[key == 'address'
+                  ? 'addressDescription'
+                  : key == 'additionalInfo'
+                      ? 'addressAdditionalInfo'
+                      : key as String] = changes[key];
+            if (changes.containsKey('neighborhoodId')) {
+              final matches = (context['neighborhoods'] as List? ?? []).where((n) => n['id'] == changes['neighborhoodId']);
+              json['neighborhoodName'] = matches.isEmpty ? null : matches.first['name'];
+            }
+          }
+          return Order.fromJson(json);
+        })
+        .where((order) =>
+            order.deliveryManId == _deliverymanId &&
+            order.status == OrderStatus.onTheWay &&
+            !delivered.contains(order.id))
+        .toList();
+    state = RouteState(
+        lastClosure: context['lastClosure'] == null
+            ? null
+            : Map<String, dynamic>.from(context['lastClosure'] as Map),
+        revision: revision,
+        orders: orders,
+        routeId: context['routeId'] as int?,
+        phase: context['phase'] as String? ?? 'idle',
+        pending: pending);
+    if (_trackingSync != null) {
+      await _trackingSync!(revision, state.routeId, owner);
+    } else {
+      unawaited(LocationTrackingService.applyRouteContext(revision, state.routeId,
+          baseUrl: _repository.operations.client.dio.options.baseUrl,
+          expectedOwner: owner).catchError((Object error) {
+            debugPrint('Route tracking update deferred: ${error.runtimeType}');
+          }));
+    }
+  }
+
+  Future<void> correctAddress(Order order, Map<String, dynamic> changes) async {
+    await _repository.operations.record(order, 'address', changes: changes);
+    final cached = await _repository.operations.cachedContext();
+    if (cached != null) await _applyContext(cached);
+    unawaited(load(silently: true));
+  }
+
+  @override
+  void dispose() {
+    _syncTimer?.cancel();
+    super.dispose();
   }
 
   Future<RouteOrderChange> applyRealtimeOrder(Order order) async {
@@ -128,68 +202,30 @@ class RouteNotifier extends StateNotifier<RouteState> {
     return changes.isEmpty ? RouteOrderChange.none : changes.single;
   }
 
-  /// Apply a batch atomically: one state update and one GPS mode sync.
-  Future<List<RouteOrderChange>> applyRealtimeOrders(Iterable<Order> incoming) async {
+  Future<List<RouteOrderChange>> applyRealtimeOrders(
+      Iterable<Order> incoming) async {
     if (!mounted) return const [];
-    final next = [...state.orders];
-    final changes = <RouteOrderChange>[];
-
-    for (final order in incoming) {
-      final index = next.indexWhere((item) => item.id == order.id);
-      final belongsToMe = order.status == OrderStatus.onTheWay &&
-          order.deliveryManId == _deliverymanId;
-      if (!belongsToMe) {
-        if (index >= 0) {
-          next.removeAt(index);
-          changes.add(RouteOrderChange.removed);
-        }
-      } else if (index < 0) {
-        next.add(order);
-        changes.add(RouteOrderChange.added);
-      } else if (!routeOrderHasSameContent(next[index], order)) {
-        next[index] = order;
-        changes.add(RouteOrderChange.updated);
-      }
-    }
-
-    if (changes.isEmpty) return changes;
-    _ordersRevision++;
-    state = state.copyWith(orders: next, isLoading: false, error: null);
-    try {
-      await _syncTracking(next);
-    } catch (error) {
-      // The server has already committed the assignment: never report it
-      // as failed solely because local GPS mode synchronization failed.
-      debugPrint('Delivery tracking sync after assignment failed: $error');
-    }
-    return changes;
+    final before = {for (final order in state.orders) order.id: order};
+    await load(silently: true, ensureFresh: true);
+    if (!mounted) return const [];
+    final after = {for (final order in state.orders) order.id: order};
+    return incoming.map((event) {
+      final old = before[event.id], current = after[event.id];
+      if (old == null && current != null) return RouteOrderChange.added;
+      if (old != null && current == null) return RouteOrderChange.removed;
+      if (old != null &&
+          current != null &&
+          !routeOrdersHaveSameContent([old], [current]))
+        return RouteOrderChange.updated;
+      return RouteOrderChange.none;
+    }).toList();
   }
 
-  /// Starts or stops location tracking based on whether there are onTheWay orders.
-  Future<void> _syncTracking(List<Order> orders) async {
-    final trackingSync = _trackingSync;
-    if (trackingSync != null) {
-      await trackingSync(orders);
-      return;
-    }
-    final hasActiveOrders = orders.isNotEmpty;
-    if (hasActiveOrders) {
-      int? routeId;
-      for (final order in orders) {
-        if (order.deliveryRouteId != null) {
-          routeId = order.deliveryRouteId;
-          break;
-        }
-      }
-      await LocationTrackingService.setActiveDeliveryMode(routeId: routeId);
-    }
-    // Sin pedidos OnTheWay la ruta puede seguir activa durante el regreso a
-    // sucursal. El backend ordena volver a modo liviano al confirmar la llegada.
-  }
-
-  Future<void> markDelivered(int orderId) async {
-    await _repository!.updateOrderStatus(orderId, OrderStatus.delivered);
-    await load(); // load() already calls _syncTracking
+  Future<void> markDelivered(Order order) async {
+    await _repository.operations.record(order, 'deliver');
+    final context = await _repository.operations.cachedContext();
+    if (context != null) await _applyContext(context);
+    unawaited(load(silently: true));
   }
 
   Future<void> markOnTheWay(int orderId) async {
@@ -198,53 +234,11 @@ class RouteNotifier extends StateNotifier<RouteState> {
         'No se puede iniciar el domicilio hasta confirmar el seguimiento de ubicación.',
       );
     }
-    await _repository!.updateOrderStatus(orderId, OrderStatus.onTheWay);
+    await _repository.updateOrderStatus(orderId, OrderStatus.onTheWay);
     await load();
   }
 
-  /// Actualización optimista tras editar dirección (misma firma que el front).
-  void applyAddressPatch({
-    required int orderId,
-    String? addressDescription,
-    String? addressAdditionalInfo,
-    double? latitude,
-    double? longitude,
-    int? neighborhoodId,
-    String? neighborhoodName,
-  }) {
-    if (!mounted) return;
-    final next = state.orders.map((o) {
-      if (o.id != orderId) return o;
-      return o.copyWithAddressFields(
-        addressDescription: addressDescription,
-        addressAdditionalInfo: addressAdditionalInfo,
-        latitude: latitude,
-        longitude: longitude,
-        neighborhoodId: neighborhoodId,
-        neighborhoodName: neighborhoodName,
-      );
-    }).toList();
-    state = state.copyWith(orders: next);
-  }
 
-  String _todayString() {
-    final now = DateTime.now();
-    return '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
-  }
-
-  Future<PagedOrders> _fetchOrders() {
-    final ordersLoader = _ordersLoader;
-    if (ordersLoader != null) return ordersLoader();
-    final today = _todayString();
-    return _repository!.getAssignedOrders(
-      deliverymanId: _deliverymanId,
-      fromDate: today,
-      toDate: today,
-      status: 'OnTheWay',
-      type: 'Delivery',
-      pageSize: 100,
-    );
-  }
 }
 
 final routeNotifierProvider =

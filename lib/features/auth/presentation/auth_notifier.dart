@@ -56,6 +56,7 @@ class AuthState {
     AuthStatus? status,
     AuthUser? user,
     DeliveryWorkSession? workSession,
+    bool clearWorkSession = false,
     bool? trackingActive,
     String? trackingIssue,
     bool clearTrackingIssue = false,
@@ -66,7 +67,7 @@ class AuthState {
       AuthState(
         status: status ?? this.status,
         user: user ?? this.user,
-        workSession: workSession ?? this.workSession,
+        workSession: clearWorkSession ? null : workSession ?? this.workSession,
         trackingActive: trackingActive ?? this.trackingActive,
         trackingIssue:
             clearTrackingIssue ? null : trackingIssue ?? this.trackingIssue,
@@ -106,6 +107,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
   final Future<void> Function()? _registerFcm;
   final Duration sessionRestoreTimeout;
   Future<void>? _resumeInFlight;
+  Future<void>? _versionInFlight;
   Future<void>? _trackingStartInFlight;
   DeliveryWorkSession? _queuedTrackingSession;
   int? _startingTrackingSessionId;
@@ -160,12 +162,14 @@ class AuthNotifier extends StateNotifier<AuthState> {
   }
 
   /// Coalesces lifecycle, push and route refreshes into one reconciliation.
-  Future<void> refreshSessionIfNeededAfterResume() async {
+  Future<void> refreshSessionIfNeededAfterResume(
+      {bool requestPermission = false}) async {
     if (state.status != AuthStatus.authenticated) return;
     final current = _resumeInFlight;
     if (current != null) return current;
 
-    final refresh = _refreshSessionInternal();
+    final refresh =
+        _refreshSessionInternal(requestPermission: requestPermission);
     _resumeInFlight = refresh;
     try {
       await refresh;
@@ -281,25 +285,34 @@ class AuthNotifier extends StateNotifier<AuthState> {
     }
   }
 
-  Future<void> _refreshSessionInternal() async {
+  Future<void> _verifyVersion(int generation) => _versionInFlight ??=
+      _loadVersion(generation).whenComplete(() => _versionInFlight = null);
+
+  Future<void> _loadVersion(int generation) async {
     try {
-      final policy = await _repository.checkDeliveryAppVersion();
-      if (policy.updateRequired) {
+      final policy = await _repository
+          .checkDeliveryAppVersion()
+          .timeout(const Duration(seconds: 8));
+      if (_currentAuthAttempt(generation) && policy.updateRequired)
         await _activateUpdateRequired(policy);
-        return;
-      }
     } catch (error) {
       final update = deliveryAppUpdateFromError(error);
-      if (update != null) {
+      if (_currentAuthAttempt(generation) && update != null)
         await _activateUpdateRequired(update.policy);
-        return;
-      }
     }
+  }
+
+  Future<void> _refreshSessionInternal({bool requestPermission = false}) async {
+    final generation = _authGeneration;
+    unawaited(_verifyVersion(generation));
 
     try {
+      if (!_currentAuthAttempt(generation)) return;
       final accessToken = await _repository.getStoredAccessToken();
+      if (!_currentAuthAttempt(generation)) return;
       if (JwtExpiration.shouldProactivelyRefresh(accessToken)) {
         final outcome = await _client.silentRefreshAccessToken();
+        if (!_currentAuthAttempt(generation)) return;
         if (outcome is RefreshAccessSessionEnded) {
           await _endLocalSession();
           return;
@@ -311,31 +324,38 @@ class AuthNotifier extends StateNotifier<AuthState> {
       }
 
       final reconciliation = await _reconcileWorkSession(
-        requestPermission: false,
+        requestPermission: requestPermission,
         preserveExistingSessionOnIssue: true,
       );
-      final session = reconciliation.session ?? state.workSession;
+      if (!_currentAuthAttempt(generation)) return;
+      final session = reconciliation.session;
       final ready = state.trackingActive &&
           state.workSession?.id == session?.id &&
           reconciliation.issue == null;
       state = state.copyWith(
         workSession: session,
+        clearWorkSession: session == null,
         trackingActive: ready,
         trackingIssue: reconciliation.issue ??
-            (ready ? null : 'Iniciando seguimiento de ubicación...'),
+            (session == null
+                ? 'No hay una jornada activa.'
+                : ready
+                    ? null
+                    : 'Iniciando seguimiento de ubicación...'),
         clearTrackingIssue: ready,
       );
       if (session != null && reconciliation.issue == null && !ready) {
         _scheduleTrackingStart(session);
       }
-      unawaited(_registerFcmTokenSafely());
+      unawaited(_registerFcmTokenSafely(requestPermission: requestPermission));
     } catch (e) {
+      if (!_currentAuthAttempt(generation)) return;
       final update = deliveryAppUpdateFromError(e);
       if (update != null) {
         await _activateUpdateRequired(update.policy);
         return;
       }
-      await _recoverWithoutDiscardingCredentials(e);
+      await _recoverWithoutDiscardingCredentials(e, generation: generation);
     }
   }
 
@@ -347,6 +367,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
     final generation = ++_authGeneration;
     state = const AuthState(status: AuthStatus.loading);
     final watch = Stopwatch()..start();
+    unawaited(_verifyVersion(generation));
     try {
       await _checkSession(generation).timeout(sessionRestoreTimeout);
     } on TimeoutException {
@@ -363,94 +384,31 @@ class AuthNotifier extends StateNotifier<AuthState> {
     }
   }
 
-  Future<T> _authPhase<T>(String phase, Future<T> Function() action) async {
-    final watch = Stopwatch()..start();
-    debugPrint('AuthStartup phase=$phase begin');
-    try {
-      return await action();
-    } finally {
-      debugPrint(
-          'AuthStartup phase=$phase elapsedMs=${watch.elapsedMilliseconds}');
-    }
-  }
-
   Future<void> _checkSession(int generation) async {
+    final localRead = Stopwatch()..start();
     try {
-      final policy =
-          await _authPhase('version', _repository.checkDeliveryAppVersion);
-      if (!_currentAuthAttempt(generation)) return;
-      if (policy.updateRequired) {
-        await _activateUpdateRequired(policy);
-        return;
-      }
-    } catch (error) {
-      if (!_currentAuthAttempt(generation)) return;
-      final update = deliveryAppUpdateFromError(error);
-      if (update != null) {
-        await _activateUpdateRequired(update.policy);
-        return;
-      }
-    }
-
-    try {
-      final hasSession =
-          await _authPhase('stored-session', _repository.hasValidSession);
-      if (!_currentAuthAttempt(generation)) return;
-      if (!hasSession) {
-        state = const AuthState(status: AuthStatus.unauthenticated);
-        return;
-      }
-      final accessToken = await _repository.getStoredAccessToken();
-      if (!_currentAuthAttempt(generation)) return;
-      if (JwtExpiration.shouldProactivelyRefresh(accessToken)) {
-        final outcome =
-            await _authPhase('refresh', _client.silentRefreshAccessToken);
-        if (!_currentAuthAttempt(generation)) return;
-        if (outcome is RefreshAccessSessionEnded) {
-          state = const AuthState(status: AuthStatus.unauthenticated);
-          return;
-        }
-        if (outcome is RefreshAccessUpdateRequired) {
-          await _activateUpdateRequired(outcome.policy);
-          return;
-        }
-      }
-
-      final user = await _repository.getStoredUser();
-      if (!_currentAuthAttempt(generation)) return;
+      final user = await _repository.getAuthenticatedUser();
       if (user == null) {
-        state = const AuthState(status: AuthStatus.unauthenticated);
+        if (_currentAuthAttempt(generation)) {
+          state = const AuthState(status: AuthStatus.unauthenticated);
+        }
         return;
       }
-      final reconciliation = await _authPhase(
-          'work-session',
-          () => _reconcileWorkSession(
-                requestPermission: false,
-                preserveExistingSessionOnIssue: true,
-              ));
+      final session = await _workSessions.getStored();
       if (!_currentAuthAttempt(generation)) return;
       state = AuthState(
         status: AuthStatus.authenticated,
         user: user,
-        workSession: reconciliation.session,
-        trackingActive: false,
-        trackingIssue: reconciliation.issue ??
-            (reconciliation.session == null
-                ? 'No hay una jornada activa.'
-                : 'Iniciando seguimiento de ubicación...'),
+        workSession: session,
+        trackingIssue: 'Comprobando jornada y seguimiento...',
       );
-      if (reconciliation.session != null && reconciliation.issue == null) {
-        _scheduleTrackingStart(reconciliation.session!);
+      debugPrint('AuthStartup localIdentityMs=${localRead.elapsedMilliseconds}');
+      unawaited(refreshSessionIfNeededAfterResume());
+    } catch (error) {
+      if (_currentAuthAttempt(generation)) {
+        await _recoverWithoutDiscardingCredentials(error,
+            generation: generation);
       }
-      unawaited(_registerFcmTokenSafely());
-    } catch (e) {
-      if (!_currentAuthAttempt(generation)) return;
-      final update = deliveryAppUpdateFromError(e);
-      if (update != null) {
-        await _activateUpdateRequired(update.policy);
-        return;
-      }
-      await _recoverWithoutDiscardingCredentials(e, generation: generation);
     }
   }
 
@@ -498,56 +456,30 @@ class AuthNotifier extends StateNotifier<AuthState> {
   }
 
   Future<void> login(String email, String password) async {
-    _authGeneration++;
+    if (state.status == AuthStatus.loading) return;
+    final generation = ++_authGeneration;
     _trackingRetryTimer?.cancel();
     state = const AuthState(status: AuthStatus.loading);
     try {
-      final user = await _repository.login(
-        LoginRequest(email: email, password: password),
-      );
-      if (kIsWeb) {
-        state = AuthState(
-            status: AuthStatus.authenticated,
-            user: user,
-            trackingIssue:
-                'Vista web: seguimiento y entregas disponibles en Android.');
-        return;
-      }
-      if (!await _requestLocationPermissions()) {
-        throw StateError(
-          'Para iniciar la jornada debes permitir ubicación precisa "Todo el tiempo" en los ajustes de Android.',
-        );
-      }
-      final reconciliation = await _reconcileWorkSession(
-        requestPermission: false,
-        preserveExistingSessionOnIssue: false,
-      );
-      if (reconciliation.issue != null || reconciliation.session == null) {
-        throw StateError(
-          reconciliation.issue ?? 'No se pudo iniciar la jornada.',
-        );
-      }
+      final user = await _repository
+          .login(LoginRequest(email: email, password: password));
+      if (!_currentAuthAttempt(generation)) return;
       state = AuthState(
         status: AuthStatus.authenticated,
         user: user,
-        workSession: reconciliation.session,
-        trackingActive: false,
-        trackingIssue: 'Iniciando seguimiento de ubicación...',
+        trackingIssue: 'Preparando jornada y seguimiento...',
       );
-      _scheduleTrackingStart(reconciliation.session!);
-      unawaited(_registerFcmTokenSafely(requestPermission: true));
-    } catch (e) {
-      final update = deliveryAppUpdateFromError(e);
+      unawaited(refreshSessionIfNeededAfterResume(requestPermission: true));
+    } catch (error) {
+      if (!_currentAuthAttempt(generation)) return;
+      final update = deliveryAppUpdateFromError(error);
       if (update != null) {
         await _activateUpdateRequired(update.policy);
-        return;
+      } else {
+        await _endLocalSession(
+            errorMessage: userFacingErrorMessage(error,
+                fallback: 'No pudimos iniciar sesión. Inténtalo de nuevo.'));
       }
-      await _endLocalSession(
-        errorMessage: userFacingErrorMessage(
-          e,
-          fallback: 'No pudimos iniciar sesión. Inténtalo de nuevo.',
-        ),
-      );
     }
   }
 
@@ -560,9 +492,10 @@ class AuthNotifier extends StateNotifier<AuthState> {
           session: null,
           issue: 'Vista web: seguimiento y entregas disponibles en Android.');
     }
-    final permission = requestPermission
-        ? await _requestLocationPermissionState()
-        : await _permissionReader();
+    var permission = await _permissionReader();
+    if (requestPermission && !permission.canTrackInBackground) {
+      permission = await _requestLocationPermissionState();
+    }
     final stored = await _workSessions.getStored();
     final storedIsActive = stored != null &&
         stored.isActive &&
@@ -584,7 +517,15 @@ class AuthNotifier extends StateNotifier<AuthState> {
       throw StateError(permission.issueMessage);
     }
 
-    final session = await _workSessions.startOrResume();
+    final session = requestPermission
+        ? await _workSessions.startOrResume()
+        : await _workSessions.current();
+    if (session == null) {
+      await LocationTrackingService.stopTracking(
+          recordEvent: false, discardPending: false);
+      return const _TrackingReconciliation(
+          session: null, issue: 'No hay una jornada activa.');
+    }
     final owner = await _repository.getStoredUser();
     if (owner == null ||
         owner.id != session.deliverymanId ||
@@ -618,6 +559,10 @@ class AuthNotifier extends StateNotifier<AuthState> {
     }
   }
 
+  Future<void> startWorkSession() async {
+    await refreshSessionIfNeededAfterResume(requestPermission: true);
+  }
+
   /// No delivery may be started while Android tracking has not been
   /// confirmed for the authenticated, active work session.
   Future<bool> canBeginDelivery() async {
@@ -642,7 +587,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
     _authGeneration++;
     _trackingRetryTimer?.cancel();
     _queuedTrackingSession = null;
-    await LocationTrackingService.stopTracking();
+    await LocationTrackingService.stopTracking(discardPending: false);
     await FcmService.clearTrackingReviewNotices();
     try {
       await FcmService.unregisterToken(_client);
@@ -716,11 +661,6 @@ class AuthNotifier extends StateNotifier<AuthState> {
   Future<void> updateSessionUser(AuthUser user) async {
     await _repository.persistUser(user);
     state = state.copyWith(user: user);
-  }
-
-  Future<bool> _requestLocationPermissions() async {
-    final state = await _requestLocationPermissionState();
-    return state.canTrackInBackground;
   }
 
   Future<LocationPermissionState> _requestLocationPermissionState() async {

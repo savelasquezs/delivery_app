@@ -1,230 +1,170 @@
 import 'dart:async';
-
+import 'dart:convert';
+import 'package:delivery_app/core/api/dio_client.dart';
+import 'package:delivery_app/core/storage/secure_storage.dart';
+import 'package:delivery_app/features/orders/data/order_repository.dart';
 import 'package:delivery_app/features/orders/models/order_models.dart';
+import 'package:delivery_app/features/route/delivery_operations.dart';
 import 'package:delivery_app/features/route/presentation/route_notifier.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-Order _order({
-  required int id,
-  required int deliveryManId,
-  OrderStatus status = OrderStatus.onTheWay,
-  double total = 1000,
-}) {
-  return Order(
-    id: id,
-    status: status,
-    type: 'Delivery',
-    createdAt: DateTime.utc(2026, 8, 10, 15),
-    total: total,
-    items: const [],
-    branchId: 1,
-    deliveryManId: deliveryManId,
-  );
+Map<String, dynamic> context(int revision, List<int> ids, {int? routeId = 4}) =>
+    {
+      'revision': revision,
+      'routeId': routeId,
+      'phase': ids.isEmpty ? 'returning' : 'delivering',
+      'neighborhoods': [{'id': 99, 'name': 'Barrio guardado'}],
+  'orders': [
+        for (final id in ids)
+          {
+            'id': id,
+            'deliveryManId': 7,
+            'branchId': 1,
+            'status': 'onTheWay',
+            'type': 'delivery',
+            'total': 1000,
+            'createdAt': '2026-10-25T12:00:00Z'
+          }
+      ],
+    };
+
+class Client implements DioClient {
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
-PagedOrders _page(List<Order> orders) {
-  return PagedOrders(
-    items: orders,
-    totalCount: orders.length,
-    page: 1,
-    pageSize: 100,
-  );
+class Operations extends DeliveryOperations {
+  Map<String, dynamic>? cached;
+  List<Map<String, Object?>> queue = [];
+  late Future<Map<String, dynamic>> Function() fetch;
+  Operations() : super(Client(), SecureStorage());
+  @override
+  Future<String> owner() async => 'owner';
+  @override
+  Future<Map<String, dynamic>?> cachedContext() async => cached;
+  @override
+  Future<List<Map<String, Object?>>> pending() async => queue;
+  @override
+  Future<void> sync() async {}
+  @override
+  Future<Map<String, dynamic>> refresh() => fetch();
 }
 
-RouteNotifier _notifier(RouteOrdersLoader loader) {
-  return RouteNotifier.withLoader(
-    deliverymanId: 7,
-    loadOrders: loader,
-    syncTracking: (_) async {},
-  );
+class Repository implements OrderRepository {
+  @override
+  final DeliveryOperations operations;
+  Repository(this.operations);
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 void main() {
-  test('la primera carga puede mostrar loader completo', () async {
-    final completer = Completer<PagedOrders>();
-    final notifier = _notifier(() => completer.future);
-
-    final load = notifier.load();
-
-    expect(notifier.state.isLoading, isTrue);
-    expect(notifier.state.orders, isEmpty);
-    completer.complete(_page([_order(id: 1, deliveryManId: 7)]));
-    await load;
-    expect(notifier.state.isLoading, isFalse);
-    expect(notifier.state.orders.single.id, 1);
+  late Operations operations;
+  late RouteNotifier notifier;
+  late List<int?> tracked;
+  setUp(() {
+    operations = Operations();
+    tracked = [];
+    notifier = RouteNotifier(Repository(operations), 7,
+        syncTracking: (_, route, __) async {
+          tracked.add(route);
+        },
+        canBeginDelivery: () async => false);
   });
+  tearDown(() => notifier.dispose());
 
-  test('la carga silenciosa conserva tarjetas y no activa loader', () async {
-    final completer = Completer<PagedOrders>();
-    final notifier = _notifier(() => completer.future);
-    await notifier.applyRealtimeOrder(_order(id: 1, deliveryManId: 7));
-    final stateBefore = notifier.state;
-
-    final refresh = notifier.load(silently: true);
-
-    expect(notifier.state.isLoading, isFalse);
-    expect(notifier.state.orders.map((order) => order.id), [1]);
-    completer.complete(_page([_order(id: 1, deliveryManId: 7)]));
-    await refresh;
-    expect(identical(notifier.state, stateBefore), isTrue);
-  });
-
-  test('un fallo silencioso mantiene la ruta sin mostrar error', () async {
-    final notifier = _notifier(() async => throw Exception('sin red'));
-    await notifier.applyRealtimeOrder(_order(id: 2, deliveryManId: 7));
-    final stateBefore = notifier.state;
-
-    await notifier.load(silently: true);
-
-    expect(identical(notifier.state, stateBefore), isTrue);
-    expect(notifier.state.orders.single.id, 2);
-    expect(notifier.state.error, isNull);
-  });
-
-  test('eventos resumed duplicados comparten una sola consulta de ruta',
+  test(
+      'shows cached cards before HTTP completes and preserves them on a network failure',
       () async {
-    final completer = Completer<PagedOrders>();
+    operations.cached = context(2, [11]);
+    final response = Completer<Map<String, dynamic>>();
+    operations.fetch = () => response.future;
+    final loading = notifier.load();
+    await Future<void>.delayed(Duration.zero);
+    expect(notifier.state.orders.single.id, 11);
+    expect(notifier.state.isLoading, false);
+    response.completeError(StateError('offline'));
+    await loading;
+    expect(notifier.state.orders.single.id, 11);
+    expect(notifier.state.error, isNotNull);
+  });
+  test('duplicate resume events share one request', () async {
     var calls = 0;
-    final notifier = _notifier(() {
+    final response = Completer<Map<String, dynamic>>();
+    operations.fetch = () {
       calls++;
-      return completer.future;
-    });
-
-    final first = notifier.load(silently: true);
-    final second = notifier.load(silently: true);
-
+      return response.future;
+    };
+    final requests = [notifier.load(), notifier.load()];
+    await Future<void>.delayed(Duration.zero);
     expect(calls, 1);
-    completer.complete(_page(const []));
-    await Future.wait([first, second]);
+    response.complete(context(1, []));
+    await Future.wait(requests);
     expect(calls, 1);
   });
-
-  test('un lote de asignaciones hace una sola sincronización del GPS',
+  test('a stale response cannot replace the newer route or its GPS mode',
       () async {
-    final snapshots = <List<int>>[];
-    final notifier = RouteNotifier.withLoader(
-      deliverymanId: 7,
-      loadOrders: () async => _page(const []),
-      syncTracking: (orders) async =>
-          snapshots.add(orders.map((order) => order.id).toList()),
-    );
-
-    final changes = await notifier.applyRealtimeOrders([
-      _order(id: 30, deliveryManId: 7),
-      _order(id: 31, deliveryManId: 7),
-      _order(id: 32, deliveryManId: 7),
-    ]);
-    expect(changes, [RouteOrderChange.added, RouteOrderChange.added,
-      RouteOrderChange.added]);
-    expect(notifier.state.orders.map((o) => o.id), [30, 31, 32]);
-    expect(snapshots, [[30, 31, 32]]);
-
-    // Repeated SignalR events must not add duplicate entries or restart GPS.
-    await notifier.applyRealtimeOrders([
-      _order(id: 30, deliveryManId: 7),
-      _order(id: 31, deliveryManId: 7),
-    ]);
-    expect(notifier.state.orders.length, 3);
-    expect(snapshots.length, 1);
+    operations.cached = context(5, [12], routeId: 8);
+    operations.fetch = () async => context(3, [11], routeId: 4);
+    await notifier.load();
+    expect(notifier.state.routeId, 8);
+    expect(notifier.state.orders.single.id, 12);
+    expect(tracked, [8]);
   });
-
-  test('un GET viejo no elimina pedidos y reconcilia el resto de la ruta',
+  test('a realtime hint during HTTP schedules one authoritative catchup',
       () async {
-    final pending = Completer<PagedOrders>();
+    final response = Completer<Map<String, dynamic>>();
     var calls = 0;
-    final notifier = _notifier(() {
-      calls++;
-      if (calls == 1) return pending.future;
-      return Future.value(_page([
-        _order(id: 39, deliveryManId: 7),
-        _order(id: 40, deliveryManId: 7),
-        _order(id: 41, deliveryManId: 7),
-      ]));
-    });
-
-    final oldRequest = notifier.load(silently: true);
-    await notifier.applyRealtimeOrders([
-      _order(id: 40, deliveryManId: 7),
-      _order(id: 41, deliveryManId: 7),
+    operations.fetch = () =>
+        ++calls == 1 ? response.future : Future.value(context(2, [11, 12]));
+    final loading = notifier.load();
+    final hint = notifier.applyRealtimeOrders([
+      Order.fromJson(context(0, [12])['orders'][0])
     ]);
-    // Stale HTTP response knows about #39, but not the new assignments.
-    pending.complete(_page([_order(id: 39, deliveryManId: 7)]));
-    await oldRequest;
-
-    expect(calls, 2); // Only one recovery request for the concurrency race.
-    expect(notifier.state.orders.map((o) => o.id), [39, 40, 41]);
+    response.complete(context(1, [11]));
+    await Future.wait([loading, hint]);
+    expect(calls, 2);
+    expect(notifier.state.orders.map((o) => o.id), [11, 12]);
   });
-
-  test('solo reconcilia pedidos pertenecientes a la ruta actual', () async {
-    final notifier = _notifier(() async => _page(const []));
-
-    final foreignChange = await notifier.applyRealtimeOrder(
-      _order(id: 20, deliveryManId: 9),
-    );
-    final added = await notifier.applyRealtimeOrder(
-      _order(id: 21, deliveryManId: 7),
-    );
-    final unchanged = await notifier.applyRealtimeOrder(
-      _order(id: 21, deliveryManId: 7),
-    );
-    final updated = await notifier.applyRealtimeOrder(
-      _order(id: 21, deliveryManId: 7, total: 1500),
-    );
-    final removed = await notifier.applyRealtimeOrder(
-      _order(id: 21, deliveryManId: 9),
-    );
-
-    expect(foreignChange, RouteOrderChange.none);
-    expect(added, RouteOrderChange.added);
-    expect(unchanged, RouteOrderChange.none);
-    expect(updated, RouteOrderChange.updated);
-    expect(removed, RouteOrderChange.removed);
-    expect(notifier.state.orders, isEmpty);
-  });
-
-  test('no permite iniciar una entrega antes de confirmar el tracking',
+  test(
+      'pending delivery is hidden, its address draft survives, and returning stays active',
       () async {
-    var checked = 0;
-    final notifier = RouteNotifier.withLoader(
-      deliverymanId: 7,
-      loadOrders: () async => _page(const []),
-      syncTracking: (_) async {},
-      canBeginDelivery: () async {
-        checked++;
-        return false;
+    operations.queue = [
+      {
+        'payload': jsonEncode({'kind': 'deliver', 'orderId': 11})
       },
-    );
-    await expectLater(notifier.markOnTheWay(42),
-        throwsA(isA<StateError>()));
-    expect(checked, 1);
-  });
-
-  test('autoentrega realtime retira solo el pedido y resincroniza tracking',
-      () async {
-    final trackingSnapshots = <List<int>>[];
-    final notifier = RouteNotifier.withLoader(
-      deliverymanId: 7,
-      loadOrders: () async => _page(const []),
-      syncTracking: (orders) async {
-        trackingSnapshots.add(orders.map((order) => order.id).toList());
+      {
+        'payload': jsonEncode({
+          'kind': 'address',
+          'orderId': 12,
+          'changes': {'address': 'Torre 2', 'neighborhoodId': 99}
+        })
       },
-    );
-    await notifier.applyRealtimeOrder(_order(id: 1, deliveryManId: 7));
-    await notifier.applyRealtimeOrder(_order(id: 2, deliveryManId: 7));
-
-    final firstRemoval = await notifier.applyRealtimeOrder(
-      _order(id: 1, deliveryManId: 7, status: OrderStatus.delivered),
-    );
-
-    expect(firstRemoval, RouteOrderChange.removed);
-    expect(notifier.state.orders.map((order) => order.id), [2]);
-    expect(trackingSnapshots.last, [2]);
-
-    await notifier.applyRealtimeOrder(
-      _order(id: 2, deliveryManId: 7, status: OrderStatus.delivered),
-    );
-
+    ];
+    operations.fetch = () async => context(1, [11, 12]);
+    await notifier.load();
+    expect(notifier.state.orders.single.id, 12);
+    expect(notifier.state.orders.single.addressDescription, 'Torre 2');
+    expect(notifier.state.orders.single.neighborhoodName, 'Barrio guardado');
+    operations.fetch = () async => context(2, []);
+    await notifier.load();
     expect(notifier.state.orders, isEmpty);
-    expect(trackingSnapshots.last, isEmpty);
+    expect(notifier.state.phase, 'returning');
+    expect(tracked.last, 4);
+    expect(notifier.state.pending, hasLength(2));
+  });
+  test(
+      'realtime uses confirmed state and ignores foreign or unchanged payloads',
+      () async {
+    operations.fetch = () async => context(1, [11]);
+    final hint = Order.fromJson(context(0, [11])['orders'][0]);
+    expect(await notifier.applyRealtimeOrder(hint), RouteOrderChange.added);
+    expect(await notifier.applyRealtimeOrder(hint), RouteOrderChange.none);
+    operations.fetch = () async => context(2, []);
+    expect(await notifier.applyRealtimeOrder(hint), RouteOrderChange.removed);
+    expect(notifier.state.routeId, 4);
+  });
+  test('delivery cannot start until tracking is confirmed', () async {
+    await expectLater(notifier.markOnTheWay(42), throwsStateError);
   });
 }

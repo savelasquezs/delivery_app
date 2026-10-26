@@ -89,10 +89,11 @@ class AuthRepository {
     }
   }
 
-  Future<bool> hasValidSession() async {
+  Future<AuthUser?> getAuthenticatedUser() async {
     final token = await _storage.getAuthToken();
+    if (token == null) return null;
     final user = await getStoredUser();
-    return token != null && user != null && user.isDeliveryman;
+    return user?.isDeliveryman == true ? user : null;
   }
 
   Future<String?> getStoredAccessToken() => _storage.getAuthToken();

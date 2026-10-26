@@ -1,9 +1,12 @@
+import '../../helpers/delivery_actions.dart';
+import 'dart:async';
+import '../route_notifier.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:intl/intl.dart';
-import 'package:url_launcher/url_launcher.dart';
 import '../../../../core/errors/user_facing_error.dart';
+import '../../../../core/whatsapp/open_whatsapp.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/widgets/error_banner.dart';
@@ -17,37 +20,11 @@ import '../../../orders/models/order_models.dart';
 final _money =
     NumberFormat.currency(locale: 'es_CO', symbol: '\$', decimalDigits: 0);
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Payload de salida cuando se actualiza la dirección
-// ─────────────────────────────────────────────────────────────────────────────
-class DeliveryAddressUpdatedPayload {
-  final int orderId;
-  final String? addressDescription;
-  final String? addressAdditionalInfo;
-  final double? lat;
-  final double? lng;
-  final int? neighborhoodId;
-  final String? neighborhoodName;
-
-  const DeliveryAddressUpdatedPayload({
-    required this.orderId,
-    this.addressDescription,
-    this.addressAdditionalInfo,
-    this.lat,
-    this.lng,
-    this.neighborhoodId,
-    this.neighborhoodName,
-  });
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Punto de entrada público
-// ─────────────────────────────────────────────────────────────────────────────
 Future<void> showDeliveryOrderDetailSheet({
   required BuildContext context,
   required WidgetRef ref,
   required Order initialOrder,
-  void Function(DeliveryAddressUpdatedPayload)? onAddressUpdated,
+  VoidCallback? onAddressUpdated,
   Future<void> Function()? onAfterDelivered,
   bool allowMarkDelivered = true,
 }) async {
@@ -74,7 +51,7 @@ Future<void> showDeliveryOrderDetailSheet({
 // ─────────────────────────────────────────────────────────────────────────────
 class _DeliveryOrderDetailBody extends ConsumerStatefulWidget {
   final Order initialOrder;
-  final void Function(DeliveryAddressUpdatedPayload)? onAddressUpdated;
+  final VoidCallback? onAddressUpdated;
   final Future<void> Function()? onAfterDelivered;
   final bool allowMarkDelivered;
 
@@ -128,7 +105,9 @@ class _DeliveryOrderDetailBodyState
     }
   }
 
-  bool get _isDelivery => _order.type.toLowerCase() == 'delivery';
+  bool get _isDelivery =>
+      _order.type.toLowerCase() == 'delivery' ||
+      (_order.type.toLowerCase() == 'reservation' && _order.addressId != null);
 
   bool get _hasCoords =>
       _isDelivery &&
@@ -138,85 +117,18 @@ class _DeliveryOrderDetailBodyState
       _order.longitude != 0;
 
   Future<void> _confirmDelivered() async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('¿Marcar como entregado?'),
-        content: Text(
-          'Confirma que el pedido #${_order.id} fue entregado correctamente.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancelar'),
-          ),
-          FilledButton.icon(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: FilledButton.styleFrom(
-              backgroundColor: AppColors.accent,
-            ),
-            icon: const Icon(Icons.check_circle_outline, size: 18),
-            label: const Text('Confirmar'),
-          ),
-        ],
-      ),
-    );
-    if (ok != true || !mounted) return;
-
-    try {
-      await ref
-          .read(orderRepositoryProvider)
-          .updateOrderStatus(_order.id, OrderStatus.delivered);
-      if (!mounted) return;
-      final messenger = ScaffoldMessenger.maybeOf(context);
+    if (await confirmDelivery(context, _order,
+        () => ref.read(routeNotifierProvider.notifier).markDelivered(_order)) && mounted) {
       Navigator.pop(context);
-      await widget.onAfterDelivered?.call();
-      messenger?.showSnackBar(
-        SnackBar(
-          content: Text('Pedido #${_order.id} marcado como entregado ✓'),
-          backgroundColor: AppColors.accentContainer,
-        ),
-      );
-    } catch (e) {
-      if (mounted) {
-        ErrorBanner.show(
-          context,
-          e,
-          fallback: 'No pudimos marcar el pedido como entregado.',
-        );
-      }
+      unawaited(widget.onAfterDelivered?.call());
     }
   }
 
   Future<void> _reprintTicket() async {
     if (_reprintLoading) return;
     setState(() => _reprintLoading = true);
-    try {
-      final result =
-          await ref.read(orderRepositoryProvider).enqueueDeliveryPrintJob(
-        branchId: _order.branchId,
-        orderIds: [_order.id],
-      );
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Impresión recibida por la sucursal · solicitud #${result.jobId}',
-          ),
-          backgroundColor: AppColors.accentContainer,
-        ),
-      );
-    } catch (e) {
-      if (mounted) {
-        ErrorBanner.show(
-          context,
-          e,
-          fallback: 'No pudimos solicitar la impresión del pedido.',
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _reprintLoading = false);
-    }
+    try { await reprintDelivery(context, ref.read(orderRepositoryProvider), _order); }
+    finally { if (mounted) setState(() => _reprintLoading = false); }
   }
 
   Future<void> _editAddress() async {
@@ -234,8 +146,6 @@ class _DeliveryOrderDetailBodyState
       MaterialPageRoute(
         builder: (_) => _EditAddressPage(
           order: _order,
-          customerId: cid,
-          addressId: aid,
         ),
         fullscreenDialog: true,
       ),
@@ -255,23 +165,12 @@ class _DeliveryOrderDetailBodyState
       );
     });
 
-    widget.onAddressUpdated?.call(
-      DeliveryAddressUpdatedPayload(
-        orderId: _order.id,
-        addressDescription: result.address,
-        addressAdditionalInfo:
-            result.additionalInfo.isEmpty ? null : result.additionalInfo,
-        lat: result.latitude,
-        lng: result.longitude,
-        neighborhoodId: result.neighborhoodId,
-        neighborhoodName: result.neighborhoodName,
-      ),
-    );
+    widget.onAddressUpdated?.call();
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Dirección actualizada correctamente ✓'),
+          content: Text('Dirección guardada; pendiente de sincronizar'),
           backgroundColor: AppColors.accentContainer,
         ),
       );
@@ -354,275 +253,263 @@ class _DeliveryOrderDetailBodyState
           ),
           const Divider(height: 1),
 
-          if (_loading)
-            const Expanded(
-              child: Center(
-                child: CircularProgressIndicator(color: AppColors.primary),
-              ),
-            )
-          else
-            Expanded(
-              child: ListView(
-                controller: scrollCtrl,
-                padding: EdgeInsets.fromLTRB(20, 12, 20, 20 + bottom),
-                children: [
-                  // ── Error de carga ─────────────────────────────
-                  if (_error != null)
-                    ErrorBanner(
-                      title: 'No cargamos todos los detalles',
-                      message: _error!,
-                      margin: EdgeInsets.zero,
-                      onRetry: _fetch,
-                    ),
+          if (_loading) const LinearProgressIndicator(minHeight: 2),
+          Expanded(
+            child: ListView(
+              controller: scrollCtrl,
+              padding: EdgeInsets.fromLTRB(20, 12, 20, 20 + bottom),
+              children: [
+                // ── Error de carga ─────────────────────────────
+                if (_error != null)
+                  ListTile(dense: true, contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.cloud_off_outlined),
+                    title: const Text('Mostrando los datos guardados'),
+                    subtitle: Text(_error!, maxLines: 2, overflow: TextOverflow.ellipsis),
+                    trailing: IconButton(tooltip: 'Actualizar detalle', onPressed: _fetch, icon: const Icon(Icons.sync))),
 
-                  // ── Advertencia de ruta ────────────────────────
-                  if (_order.deliveryRoutePlanningWarnings != null &&
-                      _order.deliveryRoutePlanningWarnings!.trim().isNotEmpty)
-                    _WarningCard(text: _order.deliveryRoutePlanningWarnings!),
+                // ── Advertencia de ruta ────────────────────────
+                if (_order.deliveryRoutePlanningWarnings != null &&
+                    _order.deliveryRoutePlanningWarnings!.trim().isNotEmpty)
+                  _WarningCard(text: _order.deliveryRoutePlanningWarnings!),
 
-                  // ── Cliente ────────────────────────────────────
-                  if (_order.customer != null) ...[
-                    _SectionHeader('CLIENTE'),
-                    _InfoCard(
-                      child: _IconRow(
-                        icon: Icons.person_outline,
-                        iconColor: AppColors.primaryLight,
-                        children: [
-                          Text(
-                            _order.customer!.name,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w600,
-                              fontSize: 15,
-                            ),
-                          ),
-                          if (_order.customer!.phone != null) ...[
-                            Text(
-                              _order.customer!.phone!,
-                              style: const TextStyle(
-                                  color: AppColors.hint, fontSize: 13),
-                            ),
-                            const SizedBox(height: 8),
-                            _PhoneActions(phone: _order.customer!.phone!),
-                          ],
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                  ],
-
-                  // ── Dirección ──────────────────────────────────
-                  if (_isDelivery) ...[
-                    _SectionHeader('DIRECCIÓN DE ENTREGA'),
-                    _InfoCard(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _IconRow(
-                            icon: Icons.location_on_outlined,
-                            iconColor: AppColors.primaryLight,
-                            children: [
-                              Text(
-                                _order.displayAddressLine ??
-                                    'Sin dirección registrada',
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 14,
-                                ),
-                              ),
-                              if (_order.addressAdditionalInfo != null &&
-                                  _order.addressAdditionalInfo!
-                                      .trim()
-                                      .isNotEmpty)
-                                Text(
-                                  _order.addressAdditionalInfo!,
-                                  style: const TextStyle(
-                                      color: AppColors.hint, fontSize: 12),
-                                ),
-                              if (_order.neighborhoodName != null)
-                                Text(
-                                  _order.neighborhoodName!,
-                                  style: const TextStyle(
-                                    color: AppColors.primaryLight,
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                            ],
-                          ),
-                          if (_hasCoords) ...[
-                            const SizedBox(height: 6),
-                            Text(
-                              '${_order.latitude!.toStringAsFixed(6)}, ${_order.longitude!.toStringAsFixed(6)}',
-                              style: const TextStyle(
-                                color: AppColors.hint,
-                                fontSize: 11,
-                                fontFamily: 'monospace',
-                              ),
-                            ),
-                          ],
-                          const SizedBox(height: 10),
-                          // ── Botón editar dirección ───────────────
-                          _ActionChip(
-                            icon: Icons.edit_location_alt_outlined,
-                            label: 'Editar dirección',
-                            onTap: _editAddress,
-                            color: AppColors.primary,
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                  ],
-
-                  // ── Productos ──────────────────────────────────
-                  _SectionHeader('PRODUCTOS'),
-                  _ProductList(order: _order, money: _money),
-                  const SizedBox(height: 12),
-
-                  // ── Totales ────────────────────────────────────
+                // ── Cliente ────────────────────────────────────
+                if (_order.customer != null) ...[
+                  _SectionHeader('CLIENTE'),
                   _InfoCard(
-                    child: Column(
+                    child: _IconRow(
+                      icon: Icons.person_outline,
+                      iconColor: AppColors.primaryLight,
                       children: [
-                        if (_order.deliveryFee != null &&
-                            _order.deliveryFee != 0)
-                          _TotalRow(
-                            label: 'Domicilio',
-                            value: _money.format(_order.deliveryFee),
-                            subtle: true,
+                        Text(
+                          _order.customer!.name,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 15,
                           ),
-                        _TotalRow(
-                          label: 'TOTAL',
-                          value: _money.format(_order.total),
-                          highlight: true,
                         ),
-                        if (_order.total > Order.kPaymentCoverTolerance) ...[
-                          if (_order.showYaPagoMessage) ...[
-                            const SizedBox(height: 12),
-                            Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.symmetric(
-                                vertical: 18,
-                                horizontal: 16,
-                              ),
-                              decoration: BoxDecoration(
-                                color: AppColors.accentContainer,
-                                borderRadius:
-                                    BorderRadius.circular(AppTheme.radiusMd),
-                                border: Border.all(
-                                  color:
-                                      AppColors.accent.withValues(alpha: 0.45),
-                                  width: 1.5,
-                                ),
-                              ),
-                              child: Row(
-                                children: [
-                                  Icon(
-                                    Icons.verified_rounded,
-                                    size: 36,
-                                    color: AppColors.accentLight
-                                        .withValues(alpha: 0.95),
-                                  ),
-                                  const SizedBox(width: 14),
-                                  Expanded(
-                                    child: Text(
-                                      'Ya pagó',
-                                      style: TextStyle(
-                                        color: AppColors.accentLight
-                                            .withValues(alpha: 0.98),
-                                        fontSize: 26,
-                                        fontWeight: FontWeight.w800,
-                                        height: 1.1,
-                                        letterSpacing: -0.5,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ] else if (_order.cashToCollectOnDelivery >
-                              Order.kPaymentCoverTolerance) ...[
-                            const SizedBox(height: 12),
-                            _TotalRow(
-                              label: 'A cobrar (efectivo)',
-                              value:
-                                  _money.format(_order.cashToCollectOnDelivery),
-                              highlight: true,
-                            ),
-                          ],
+                        if (_order.customer!.phone != null) ...[
+                          Text(
+                            _order.customer!.phone!,
+                            style: const TextStyle(
+                                color: AppColors.hint, fontSize: 13),
+                          ),
+                          const SizedBox(height: 8),
+                          _PhoneActions(phone: _order.customer!.phone!),
                         ],
                       ],
                     ),
                   ),
-
-                  // ── Notas ──────────────────────────────────────
-                  if (_order.notes != null &&
-                      _order.notes!.trim().isNotEmpty) ...[
-                    const SizedBox(height: 12),
-                    _SectionHeader('NOTAS'),
-                    _InfoCard(
-                      child: Text(
-                        _order.notes!,
-                        style: const TextStyle(
-                            color: AppColors.onSurface, fontSize: 14),
-                      ),
-                    ),
-                  ],
-
-                  // ── CTA: Reimprimir / Marcar entregado ───────
-                  if (_isDelivery && _order.status == OrderStatus.onTheWay) ...[
-                    const SizedBox(height: 20),
-                    SizedBox(
-                      width: double.infinity,
-                      child: OutlinedButton.icon(
-                        onPressed: _reprintLoading ? null : _reprintTicket,
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: AppColors.onSurface,
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                          shape: RoundedRectangleBorder(
-                            borderRadius:
-                                BorderRadius.circular(AppTheme.radiusMd),
-                          ),
-                        ),
-                        icon: _reprintLoading
-                            ? const SizedBox(
-                                width: 20,
-                                height: 20,
-                                child:
-                                    CircularProgressIndicator(strokeWidth: 2),
-                              )
-                            : const Icon(Icons.print_outlined, size: 20),
-                        label: Text(
-                          _reprintLoading ? 'Enviando…' : 'Reimprimir ticket',
-                        ),
-                      ),
-                    ),
-                  ],
-                  if (widget.allowMarkDelivered &&
-                      _order.status == OrderStatus.onTheWay) ...[
-                    const SizedBox(height: 12),
-                    SizedBox(
-                      width: double.infinity,
-                      child: FilledButton.icon(
-                        onPressed: _confirmDelivered,
-                        style: FilledButton.styleFrom(
-                          backgroundColor: AppColors.accent,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                          shape: RoundedRectangleBorder(
-                            borderRadius:
-                                BorderRadius.circular(AppTheme.radiusMd),
-                          ),
-                          textStyle: const TextStyle(
-                              fontSize: 15, fontWeight: FontWeight.w700),
-                        ),
-                        icon: const Icon(Icons.check_circle_outline, size: 20),
-                        label: const Text('Marcar como entregado'),
-                      ),
-                    ),
-                  ],
+                  const SizedBox(height: 12),
                 ],
-              ),
+
+                // ── Dirección ──────────────────────────────────
+                if (_isDelivery) ...[
+                  _SectionHeader('DIRECCIÓN DE ENTREGA'),
+                  _InfoCard(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _IconRow(
+                          icon: Icons.location_on_outlined,
+                          iconColor: AppColors.primaryLight,
+                          children: [
+                            Text(
+                              _order.displayAddressLine ??
+                                  'Sin dirección registrada',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                                fontSize: 14,
+                              ),
+                            ),
+                            if (_order.addressAdditionalInfo != null &&
+                                _order.addressAdditionalInfo!.trim().isNotEmpty)
+                              Text(
+                                _order.addressAdditionalInfo!,
+                                style: const TextStyle(
+                                    color: AppColors.hint, fontSize: 12),
+                              ),
+                            if (_order.neighborhoodName != null)
+                              Text(
+                                _order.neighborhoodName!,
+                                style: const TextStyle(
+                                  color: AppColors.primaryLight,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                          ],
+                        ),
+                        if (_hasCoords) ...[
+                          const SizedBox(height: 6),
+                          Text(
+                            '${_order.latitude!.toStringAsFixed(6)}, ${_order.longitude!.toStringAsFixed(6)}',
+                            style: const TextStyle(
+                              color: AppColors.hint,
+                              fontSize: 11,
+                              fontFamily: 'monospace',
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 10),
+                        // ── Botón editar dirección ───────────────
+                        _ActionChip(
+                          icon: Icons.edit_location_alt_outlined,
+                          label: 'Editar dirección',
+                          onTap: _editAddress,
+                          color: AppColors.primary,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+
+                // ── Productos ──────────────────────────────────
+                _SectionHeader('PRODUCTOS'),
+                _ProductList(order: _order, money: _money),
+                const SizedBox(height: 12),
+
+                // ── Totales ────────────────────────────────────
+                _InfoCard(
+                  child: Column(
+                    children: [
+                      if (_order.deliveryFee != null && _order.deliveryFee != 0)
+                        _TotalRow(
+                          label: 'Domicilio',
+                          value: _money.format(_order.deliveryFee),
+                          subtle: true,
+                        ),
+                      _TotalRow(
+                        label: 'TOTAL',
+                        value: _money.format(_order.total),
+                        highlight: true,
+                      ),
+                      if (_order.total > Order.kPaymentCoverTolerance) ...[
+                        if (_order.showYaPagoMessage) ...[
+                          const SizedBox(height: 12),
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.symmetric(
+                              vertical: 18,
+                              horizontal: 16,
+                            ),
+                            decoration: BoxDecoration(
+                              color: AppColors.accentContainer,
+                              borderRadius:
+                                  BorderRadius.circular(AppTheme.radiusMd),
+                              border: Border.all(
+                                color: AppColors.accent.withValues(alpha: 0.45),
+                                width: 1.5,
+                              ),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.verified_rounded,
+                                  size: 36,
+                                  color: AppColors.accentLight
+                                      .withValues(alpha: 0.95),
+                                ),
+                                const SizedBox(width: 14),
+                                Expanded(
+                                  child: Text(
+                                    'Ya pagó',
+                                    style: TextStyle(
+                                      color: AppColors.accentLight
+                                          .withValues(alpha: 0.98),
+                                      fontSize: 26,
+                                      fontWeight: FontWeight.w800,
+                                      height: 1.1,
+                                      letterSpacing: -0.5,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ] else if (_order.cashToCollectOnDelivery >
+                            Order.kPaymentCoverTolerance) ...[
+                          const SizedBox(height: 12),
+                          _TotalRow(
+                            label: 'A cobrar (efectivo)',
+                            value:
+                                _money.format(_order.cashToCollectOnDelivery),
+                            highlight: true,
+                          ),
+                        ],
+                      ],
+                    ],
+                  ),
+                ),
+
+                // ── Notas ──────────────────────────────────────
+                if (_order.notes != null &&
+                    _order.notes!.trim().isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  _SectionHeader('NOTAS'),
+                  _InfoCard(
+                    child: Text(
+                      _order.notes!,
+                      style: const TextStyle(
+                          color: AppColors.onSurface, fontSize: 14),
+                    ),
+                  ),
+                ],
+
+                // ── CTA: Reimprimir / Marcar entregado ───────
+                if (_isDelivery && _order.status == OrderStatus.onTheWay) ...[
+                  const SizedBox(height: 20),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: _reprintLoading ? null : _reprintTicket,
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.onSurface,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius:
+                              BorderRadius.circular(AppTheme.radiusMd),
+                        ),
+                      ),
+                      icon: _reprintLoading
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.print_outlined, size: 20),
+                      label: Text(
+                        _reprintLoading ? 'Enviando…' : 'Reimprimir ticket',
+                      ),
+                    ),
+                  ),
+                ],
+                if (widget.allowMarkDelivered &&
+                    _order.status == OrderStatus.onTheWay) ...[
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: _confirmDelivered,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: AppColors.accent,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius:
+                              BorderRadius.circular(AppTheme.radiusMd),
+                        ),
+                        textStyle: const TextStyle(
+                            fontSize: 15, fontWeight: FontWeight.w700),
+                      ),
+                      icon: const Icon(Icons.check_circle_outline, size: 20),
+                      label: const Text('Marcar como entregado'),
+                    ),
+                  ),
+                ],
+              ],
             ),
+          ),
         ],
       ),
     );
@@ -652,13 +539,9 @@ class _AddressEditResult {
 
 class _EditAddressPage extends ConsumerStatefulWidget {
   final Order order;
-  final int customerId;
-  final int addressId;
 
   const _EditAddressPage({
     required this.order,
-    required this.customerId,
-    required this.addressId,
   });
 
   @override
@@ -708,12 +591,6 @@ class _EditAddressPageState extends ConsumerState<_EditAddressPage> {
       setState(() {
         _neighborhoods = list;
         _loadingNeighborhoods = false;
-        // Si el barrio actual no está en la lista, selecciona el primero
-        if (list.isNotEmpty &&
-            (_neighborhoodId == null ||
-                !list.any((n) => n.id == _neighborhoodId))) {
-          _neighborhoodId = list.first.id;
-        }
       });
     } catch (e) {
       if (mounted) {
@@ -815,31 +692,24 @@ class _EditAddressPageState extends ConsumerState<_EditAddressPage> {
       );
       return;
     }
-    if (_latitude == null || _longitude == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content:
-                Text('Selecciona la ubicación en el mapa antes de guardar.')),
-      );
-      return;
-    }
 
     setState(() => _saving = true);
     try {
-      await ref.read(customerRepositoryProvider).updateCustomerAddress(
-        customerId: widget.customerId,
-        addressId: widget.addressId,
-        body: {
-          'neighborhoodId': nid,
+      final changes = <String, dynamic>{
+        if (_addressCtrl.text.trim() != widget.order.displayAddressLine)
           'address': _addressCtrl.text.trim(),
+        if (_infoCtrl.text.trim() != (widget.order.addressAdditionalInfo ?? ''))
           'additionalInfo':
               _infoCtrl.text.trim().isEmpty ? null : _infoCtrl.text.trim(),
-          'latitude': _latitude,
-          'longitude': _longitude,
-          'isPrimary': false,
-          'deliveryFee': widget.order.deliveryFee?.round() ?? 0,
-        },
-      );
+        if (nid != widget.order.neighborhoodId) 'neighborhoodId': nid,
+        if (_latitude != widget.order.latitude) 'latitude': _latitude,
+        if (_longitude != widget.order.longitude) 'longitude': _longitude,
+      };
+      if (changes.isNotEmpty) {
+        await ref
+            .read(routeNotifierProvider.notifier)
+            .correctAddress(widget.order, changes);
+      }
       if (!mounted) return;
       Navigator.pop(
         context,
@@ -1593,101 +1463,26 @@ class _PhoneActions extends StatelessWidget {
   final String phone;
   const _PhoneActions({required this.phone});
 
-  String get _cleanPhone => phone.replaceAll(RegExp(r'[\s\-\(\)]'), '');
-
-  bool get _isColombian {
-    final n = _cleanPhone.replaceAll('+', '');
-    return RegExp(r'^(57)?[36]\d{9}$').hasMatch(n);
-  }
-
-  String get _waNumber {
-    final n = _cleanPhone;
-    if (n.startsWith('+57')) return n.replaceAll('+', '');
-    if (n.startsWith('57') && n.length == 12) return n;
-    if (n.startsWith('3') && n.length == 10) return '57$n';
-    return n.replaceAll('+', '');
-  }
-
-  Future<void> _call(BuildContext ctx) async {
-    final tel = _cleanPhone.startsWith('+') ? _cleanPhone : '+57$_cleanPhone';
-    try {
-      await launchUrl(Uri.parse('tel:$tel'),
-          mode: LaunchMode.externalApplication);
-    } catch (_) {
-      if (ctx.mounted) {
-        ErrorBanner.show(ctx, 'No pudimos iniciar la llamada.');
-      }
-    }
-  }
-
-  Future<void> _whatsapp(BuildContext ctx) async {
-    try {
-      await launchUrl(Uri.parse('https://wa.me/$_waNumber'),
-          mode: LaunchMode.externalApplication);
-    } catch (_) {
-      if (ctx.mounted) {
-        ErrorBanner.show(ctx, 'No pudimos abrir WhatsApp.');
-      }
-    }
+  Future<void> _open(BuildContext context, bool whatsapp) async {
+    final opened =
+        whatsapp ? await openWhatsAppChat(phone) : await openPhoneCall(phone);
+    if (!opened && context.mounted)
+      ErrorBanner.show(
+          context,
+          whatsapp
+              ? 'No pudimos abrir WhatsApp.'
+              : 'No pudimos iniciar la llamada.');
   }
 
   @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        _ContactBtn(
-          icon: Icons.phone_outlined,
-          label: 'Llamar',
-          color: AppColors.accent,
-          onTap: () => _call(context),
-        ),
-        if (_isColombian) ...[
-          const SizedBox(width: 8),
-          _ContactBtn(
-            icon: Icons.chat_outlined,
-            label: 'WhatsApp',
-            color: const Color(0xFF25D366),
-            onTap: () => _whatsapp(context),
-          ),
-        ],
-      ],
-    );
-  }
-}
-
-class _ContactBtn extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final Color color;
-  final VoidCallback onTap;
-  const _ContactBtn({
-    required this.icon,
-    required this.label,
-    required this.color,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) => InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(AppTheme.radiusSm),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(AppTheme.radiusSm),
-            border: Border.all(color: color.withValues(alpha: 0.35)),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: 13, color: color),
-              const SizedBox(width: 4),
-              Text(label,
-                  style: TextStyle(
-                      color: color, fontSize: 12, fontWeight: FontWeight.w600)),
-            ],
-          ),
-        ),
-      );
+  Widget build(BuildContext context) => Wrap(spacing: 8, children: [
+        OutlinedButton.icon(
+            onPressed: () => _open(context, false),
+            icon: const Icon(Icons.call_outlined, size: 18),
+            label: const Text('Llamar')),
+        OutlinedButton.icon(
+            onPressed: () => _open(context, true),
+            icon: const Icon(Icons.chat_outlined, size: 18),
+            label: const Text('WhatsApp')),
+      ]);
 }

@@ -277,6 +277,7 @@ class AnalyticsState {
 // ─────────────────────────────────────────────────────────────────────────────
 
 class AnalyticsNotifier extends StateNotifier<AnalyticsState> {
+  int _generation = 0;
   final DioClient _client;
   final Ref _ref;
 
@@ -299,6 +300,7 @@ class AnalyticsNotifier extends StateNotifier<AnalyticsState> {
 
   Future<void> load({DateTime? from, DateTime? to}) async {
     if (!mounted) return;
+    final generation = ++_generation;
     final fromD = from ?? state.fromDate;
     final toD = to ?? state.toDate;
     final userId = _ref.read(authNotifierProvider).user?.id;
@@ -339,7 +341,7 @@ class AnalyticsNotifier extends StateNotifier<AnalyticsState> {
           );
           return UserPayrollInsights.fromJson(j);
         } catch (e) {
-          if (mounted) {
+          if (mounted && generation == _generation) {
             state = state.copyWith(
               payrollError: userFacingErrorMessage(
                 e,
@@ -357,7 +359,7 @@ class AnalyticsNotifier extends StateNotifier<AnalyticsState> {
         loadPayroll(),
       ]);
 
-      if (!mounted) return;
+      if (!mounted || generation != _generation) return;
       final dash = results[0]! as Map<String, dynamic>;
       final dayJson = results[1]! as Map<String, dynamic>;
       final payroll = results[2] as UserPayrollInsights?;
@@ -370,7 +372,7 @@ class AnalyticsNotifier extends StateNotifier<AnalyticsState> {
         isLoading: false,
       );
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || generation != _generation) return;
       state = state.copyWith(
         isLoading: false,
         error: userFacingErrorMessage(
@@ -380,11 +382,12 @@ class AnalyticsNotifier extends StateNotifier<AnalyticsState> {
       );
     }
 
-    await _loadAdvances();
+    if (mounted && generation == _generation) await _loadAdvances();
   }
 
   Future<void> _loadAdvances() async {
     if (!mounted) return;
+    final generation = _generation;
     final fromD = state.advancesFromDate;
     final toD = state.advancesToDate;
     state = state.copyWith(isLoadingAdvances: true, clearAdvancesError: true);
@@ -405,10 +408,10 @@ class AnalyticsNotifier extends StateNotifier<AnalyticsState> {
               .toList();
         },
       );
-      if (!mounted) return;
+      if (!mounted || generation != _generation) return;
       state = state.copyWith(advances: list, isLoadingAdvances: false);
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || generation != _generation) return;
       state = state.copyWith(
         isLoadingAdvances: false,
         advancesError: userFacingErrorMessage(

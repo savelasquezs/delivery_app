@@ -101,6 +101,17 @@ class SecureStorage {
   Future<void> saveWorkSessionData(String jsonData) =>
       _storage.write(key: _kWorkSessionData, value: jsonData);
 
+  Future<bool> updateWorkSessionData(String? jsonData, String expectedSessionId) =>
+      withSessionLock((store) async {
+        if ((await store.readSession())?.id != expectedSessionId) return false;
+        if (jsonData == null) {
+          await store.deleteWorkSessionData();
+        } else {
+          await store.saveWorkSessionData(jsonData);
+        }
+        return true;
+      });
+
   Future<void> deleteWorkSessionData() =>
       _storage.delete(key: _kWorkSessionData);
 

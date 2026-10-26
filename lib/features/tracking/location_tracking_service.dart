@@ -1,4 +1,6 @@
 import 'dart:async';
+import '../route/delivery_operations.dart';
+import '../../core/api/dio_client.dart';
 import 'dart:convert';
 
 import 'package:battery_plus/battery_plus.dart';
@@ -48,6 +50,7 @@ const _modeLight = 'light';
 const _modeActiveDelivery = 'active_delivery';
 const _batteryLowThresholdPercent = 15;
 const _uuid = Uuid();
+DeliveryOperations? _cachedDeliveryOperations;
 TrackingHttpClient? _cachedTrackingClient;
 String? _cachedTrackingBaseUrl;
 TrackingContext? _cachedTrackingContext;
@@ -297,6 +300,8 @@ class LocationTaskHandler extends TaskHandler {
     _cachedTrackingClient?.dio.close(force: true);
     _cachedTrackingClient?.auth.dio.close(force: true);
     _cachedTrackingClient = null;
+    _cachedDeliveryOperations?.client.dio.close(force: true);
+    _cachedDeliveryOperations = null;
   }
 
   Future<TrackingContext?> _active() async {
@@ -390,6 +395,12 @@ class LocationTaskHandler extends TaskHandler {
     }
     final baseUrl = await FlutterForegroundTask.getData<String>(key: _kBaseUrl);
     if (baseUrl == null || !await _isCurrent(context)) return;
+    final operations = _cachedDeliveryOperations ??= DeliveryOperations(
+        DioClient(SecureStorage(), DeliveryAppVersionInfoLoader(),
+            baseUrl: baseUrl),
+        SecureStorage());
+    unawaited(operations.sync().catchError((Object error) =>
+        debugPrint('Operational sync deferred: ${error.runtimeType}')));
     final locations = await _outbox.pending(context);
     // Small event passes cannot monopolize GPS upload; both share HTTP cooldown.
     final records = [...locations, ...await _outbox.events(context, limit: 3)];
@@ -471,25 +482,12 @@ class LocationTaskHandler extends TaskHandler {
       dynamic data, TrackingContext context) async {
     if (data is! Map || !await _isCurrent(context)) return;
     final routeId = int.tryParse(data['deliveryRouteId']?.toString() ?? '');
-    final savedRouteId =
-        await FlutterForegroundTask.getData<int>(key: _kDeliveryRouteId);
-    final savedMode =
-        await FlutterForegroundTask.getData<String>(key: _kTrackingMode);
-    if (data['continueActiveTracking'] == true && routeId != null) {
-      if (savedMode != _modeActiveDelivery || savedRouteId != routeId) {
-        await LocationTrackingService.setActiveDeliveryMode(routeId: routeId);
-      }
-    } else if (savedMode != _modeLight || savedRouteId != null) {
-      await LocationTrackingService.setLightMode();
-    }
-
-    if (data['returnReview'] is Map &&
-        !await _outbox.hasPendingLocationHistory(context)) {
-      FlutterForegroundTask.sendDataToMain({
-        'type': 'route_return_review',
-        'sessionId': context.authSessionId,
-        'review': data['returnReview'],
-      });
+    final revision = (data['contextRevision'] as num?)?.toInt();
+    if (revision != null) {
+      await LocationTrackingService.applyRouteContext(
+          revision, data['continueActiveTracking'] == true ? routeId : null);
+      FlutterForegroundTask.sendDataToMain(
+          {'type': 'delivery_context_changed', 'revision': revision});
     }
   }
 }
@@ -608,6 +606,7 @@ class LocationTrackingService {
     required String buildNumber,
     required String packageName,
   }) async {
+    await detectUnexpectedStop();
     if (kIsWeb)
       throw UnsupportedError(
           'El seguimiento en segundo plano requiere Android.');
@@ -626,9 +625,9 @@ class LocationTrackingService {
         await FlutterForegroundTask.getData<int>(key: _kWorkSessionId);
     final previousMode =
         await FlutterForegroundTask.getData<String>(key: _kTrackingMode);
-    final previousRouteId =
+    var previousRouteId =
         await FlutterForegroundTask.getData<int>(key: _kDeliveryRouteId);
-    final resumeActive = shouldResumeActiveTracking(
+    var resumeActive = shouldResumeActiveTracking(
       previousWorkSessionId: previousSessionId,
       workSessionId: workSessionId,
       previousMode: previousMode,
@@ -647,6 +646,12 @@ class LocationTrackingService {
 
     final authSession = await SecureStorage().readSession();
     if (authSession == null) throw const SessionEndedException();
+    final routeContext =
+        await _outbox.cached(authSession.ownerKey(baseUrl), 'route');
+    if (routeContext != null) {
+      previousRouteId = routeContext['routeId'] as int?;
+      resumeActive = previousRouteId != null;
+    }
     await FlutterForegroundTask.saveData(
         key: _kAuthSessionId, value: authSession.id);
     await FlutterForegroundTask.saveData(
@@ -751,6 +756,36 @@ class LocationTrackingService {
       }
     });
   }
+
+  static Future<void> applyRouteContext(int revision, int? routeId,
+          {String? baseUrl, String? expectedOwner}) =>
+      _enqueue(() async {
+        final auth = await SecureStorage().readSession();
+        if (auth == null) return;
+        final url = baseUrl ??
+            await FlutterForegroundTask.getData<String>(key: _kBaseUrl);
+        if (url == null) return;
+        final owner = auth.ownerKey(url);
+        if (expectedOwner != null && expectedOwner != owner) return;
+        final oldOwner =
+            await FlutterForegroundTask.getData<String>(key: 'sa_route_owner');
+        final saved = oldOwner == owner
+            ? (await FlutterForegroundTask.getData<int>(
+                    key: 'sa_route_revision') ??
+                -1)
+            : -1;
+        await FlutterForegroundTask.saveData(
+            key: 'sa_route_owner', value: owner);
+        if (revision <= saved) return;
+        if (!await FlutterForegroundTask.isRunningService) return;
+        if (routeId == null) {
+          await _setLightMode();
+        } else {
+          await _setActiveDeliveryMode(routeId: routeId);
+        }
+        await FlutterForegroundTask.saveData(
+            key: 'sa_route_revision', value: revision);
+      });
 
   static Future<void> setLightMode() => _enqueue(_setLightMode);
 

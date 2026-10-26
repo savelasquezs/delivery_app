@@ -35,6 +35,7 @@ class SessionMutex {
   final Duration leaseDuration;
   final Duration waitTimeout;
   final Duration pollInterval;
+  final bool reclaimPreviousProcess;
   Future<Database>? _database;
 
   SessionMutex({
@@ -43,7 +44,9 @@ class SessionMutex {
     this.leaseDuration = const Duration(minutes: 2),
     this.waitTimeout = const Duration(seconds: 30),
     this.pollInterval = const Duration(milliseconds: 100),
-  }) : open = open ?? (() => openDatabase(databasePath, singleInstance: false));
+    bool? reclaimPreviousProcess,
+  }) : reclaimPreviousProcess = reclaimPreviousProcess ?? Platform.isAndroid,
+       open = open ?? (() => openDatabase(databasePath, singleInstance: false));
 
   Future<Database> _db() async {
     if (_database != null) return _database!;
@@ -69,6 +72,13 @@ class SessionMutex {
           'INSERT OR IGNORE INTO session_mutex '
           '(name, owner, expires_at) VALUES (?, NULL, 0)',
           ['auth']));
+      // Android UI, FCM and GPS engines share the application process.
+      // A different PID belongs to a terminated application incarnation.
+      if (reclaimPreviousProcess) {
+        await retrySqliteBusy(() => db.rawUpdate(
+          'UPDATE session_mutex SET owner = NULL, expires_at = 0 '
+          'WHERE name = ? AND owner IS NOT NULL AND owner NOT LIKE ?', ['auth', '$pid:%']));
+      }
       return db;
     } catch (_) {
       await db.close();

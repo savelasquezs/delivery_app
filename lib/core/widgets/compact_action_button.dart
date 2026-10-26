@@ -34,6 +34,7 @@ class CompactActionButton extends StatelessWidget {
       child: Opacity(
         opacity: enabled ? 1 : 0.55,
         child: Container(
+          constraints: const BoxConstraints(minHeight: 48, minWidth: 48),
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
           decoration: BoxDecoration(
             color: filled ? color : color.withValues(alpha: 0.12),

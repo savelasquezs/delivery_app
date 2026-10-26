@@ -19,11 +19,14 @@ class WorkSessionRepository {
   const WorkSessionRepository(this._client, this._storage);
 
   Future<DeliveryWorkSession> startOrResume() async {
+    final auth = await _storage.readSession();
+    if (auth == null) throw const SessionEndedException();
     final installationId = await _storage.getOrCreateInstallationId();
     final package = await PackageInfo.fromPlatform();
     try {
       final response = await _client.post<Map<String, dynamic>>(
         ApiConstants.myWorkSession,
+        options: Options(extra: {'_sessionId': auth.id}),
         data: {
           'deviceInstallationId': installationId,
           'devicePlatform': kIsWeb ? 'web' : Platform.operatingSystem,
@@ -35,7 +38,9 @@ class WorkSessionRepository {
         fromJson: (data) => Map<String, dynamic>.from(data as Map),
       );
       final session = DeliveryWorkSession.fromJson(response);
-      await _storage.saveWorkSessionData(jsonEncode(session.toJson()));
+      if (!await _storage.updateWorkSessionData(
+          jsonEncode(session.toJson()), auth.id))
+        throw const SessionEndedException();
       return session;
     } on DioException catch (error) {
       final stored = await getStored();
@@ -47,6 +52,33 @@ class WorkSessionRepository {
       }
       rethrow;
     }
+  }
+
+  Future<DeliveryWorkSession?> current() async {
+    final auth = await _storage.readSession();
+    if (auth == null) throw const SessionEndedException();
+    DeliveryWorkSession? result;
+    try {
+      result = await _client.get<DeliveryWorkSession?>(
+          ApiConstants.myWorkSession,
+          options: Options(extra: {'_sessionId': auth.id}),
+          fromJson: (value) => value == null || value == ''
+              ? null
+              : DeliveryWorkSession.fromJson(
+                  Map<String, dynamic>.from(value as Map)));
+    } on DioException catch (error) {
+      final cached = await getStored();
+      if (isTransientSessionFailure(error) &&
+          (await _storage.readSession())?.id == auth.id &&
+          cached != null &&
+          cached.isActive &&
+          DateTime.now().toUtc().isBefore(cached.autoCloseAt)) return cached;
+      rethrow;
+    }
+    if (!await _storage.updateWorkSessionData(
+        result == null ? null : jsonEncode(result.toJson()), auth.id))
+      throw const SessionEndedException();
+    return result;
   }
 
   Future<DeliveryWorkSession?> getStored() async {

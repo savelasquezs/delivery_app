@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:async';
 import 'dart:isolate';
 
 import 'package:delivery_app/core/auth/session_mutex.dart';
@@ -28,6 +29,22 @@ Future<void> contender(String path) async {
 Future<void> runContender(String path) => Isolate.run(() => contender(path));
 
 void main() {
+  test('Android restart recovers the previous process without stealing a live engine lease', () async {
+    sqfliteFfiInit();
+    final db = await databaseFactoryFfi.openDatabase(inMemoryDatabasePath,
+      options: OpenDatabaseOptions(singleInstance: false));
+    try {
+      await SessionMutex(open: () async => db).protect((_) async {});
+      final expires = DateTime.now().add(const Duration(minutes: 2)).millisecondsSinceEpoch;
+      await db.rawUpdate('UPDATE session_mutex SET owner = ?, expires_at = ?', ['-1:terminated', expires]);
+      final recovered = SessionMutex(open: () async => db, reclaimPreviousProcess: true);
+      await recovered.protect((lease) => lease.ensureOwned()).timeout(const Duration(seconds: 2));
+      await db.rawUpdate('UPDATE session_mutex SET owner = ?, expires_at = ?', ['$pid:live-engine', expires]);
+      final contender = SessionMutex(open: () async => db, reclaimPreviousProcess: true,
+        waitTimeout: const Duration(milliseconds: 50), pollInterval: const Duration(milliseconds: 5));
+      await expectLater(contender.protect((_) async {}), throwsA(isA<TimeoutException>()));
+    } finally { await db.close(); }
+  });
   test('SQLite CAS excludes contenders from separate Dart isolates', () async {
     sqfliteFfiInit();
     final directory = await Directory.systemTemp.createTemp('tracking-lock-');

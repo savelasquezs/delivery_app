@@ -54,6 +54,7 @@ class HistoryState {
 }
 
 class HistoryNotifier extends StateNotifier<HistoryState> {
+  int _generation = 0;
   final OrderRepository _repository;
   final int _deliverymanId;
 
@@ -70,6 +71,7 @@ class HistoryNotifier extends StateNotifier<HistoryState> {
 
   Future<void> load({String? fromDate, String? toDate}) async {
     if (!mounted) return;
+    final generation = ++_generation;
     final from = fromDate ?? state.fromDate;
     final to = toDate ?? state.toDate;
 
@@ -77,6 +79,7 @@ class HistoryNotifier extends StateNotifier<HistoryState> {
       isLoading: true,
       error: null,
       currentPage: 1,
+      isLoadingMore: false,
       fromDate: from,
       toDate: to,
     );
@@ -99,7 +102,7 @@ class HistoryNotifier extends StateNotifier<HistoryState> {
         includeOnsiteActiveInHistory: true,
       );
 
-      if (!mounted) return;
+      if (!mounted || generation != _generation) return;
       state = state.copyWith(
         orders: result.items,
         branchSummaries: summaries,
@@ -107,7 +110,7 @@ class HistoryNotifier extends StateNotifier<HistoryState> {
         isLoading: false,
       );
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || generation != _generation) return;
       state = state.copyWith(
         isLoading: false,
         error: userFacingErrorMessage(
@@ -122,6 +125,7 @@ class HistoryNotifier extends StateNotifier<HistoryState> {
     if (!mounted) return;
     if (!state.hasMore || state.isLoadingMore) return;
     final nextPage = state.currentPage + 1;
+    final generation = _generation;
     state = state.copyWith(isLoadingMore: true);
     try {
       final result = await _repository.getAssignedOrders(
@@ -133,14 +137,14 @@ class HistoryNotifier extends StateNotifier<HistoryState> {
         page: nextPage,
         pageSize: 20,
       );
-      if (!mounted) return;
+      if (!mounted || generation != _generation) return;
       state = state.copyWith(
         orders: [...state.orders, ...result.items],
         currentPage: nextPage,
         isLoadingMore: false,
       );
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || generation != _generation) return;
       state = state.copyWith(
         isLoadingMore: false,
         error: userFacingErrorMessage(

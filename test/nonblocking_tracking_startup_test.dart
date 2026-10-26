@@ -10,6 +10,8 @@ import 'package:delivery_app/features/auth/presentation/auth_notifier.dart';
 import 'package:delivery_app/features/tracking/location_tracking_policy.dart';
 import 'package:delivery_app/features/tracking/work_session_models.dart';
 import 'package:delivery_app/features/tracking/work_session_repository.dart';
+import 'package:dio/dio.dart';
+import 'package:delivery_app/core/auth/token_session.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:geolocator/geolocator.dart';
@@ -57,6 +59,19 @@ DeliveryWorkSession _activeSession() {
   );
 }
 
+class _SessionStore extends SecureStorage {
+  String? cached = 'old work session';
+  @override
+  Future<TokenSession?> readSession() async => const TokenSession(
+      id: 'current-login', accessToken: 'token', refreshToken: 'refresh');
+  @override
+  Future<bool> updateWorkSessionData(String? value, String expectedSessionId) async {
+    expect(expectedSessionId, 'current-login');
+    cached = value;
+    return true;
+  }
+}
+
 class _AuthRepo extends AuthRepository {
   _AuthRepo(super.client, super.storage);
   @override
@@ -68,7 +83,7 @@ class _AuthRepo extends AuthRepository {
         updateRequired: false,
       );
   @override
-  Future<bool> hasValidSession() async => true;
+  Future<AuthUser?> getAuthenticatedUser() async => _driver;
   @override
   Future<String?> getStoredAccessToken() async => _jwt();
   @override
@@ -82,6 +97,10 @@ class _WorkRepo extends WorkSessionRepository {
   Future<DeliveryWorkSession?> getStored() async => session;
   @override
   Future<DeliveryWorkSession> startOrResume() async => session;
+  @override
+  Future<DeliveryWorkSession?> current() async => session;
+  @override
+  Future<void> clearLocal() async {}
 }
 
 class _DelayedVersionRepo extends _AuthRepo {
@@ -122,51 +141,39 @@ void main() {
                 )),
       );
 
-  test(
-      'blocked restore times out without deleting credentials and retries safely',
-      () async {
+  test('absent work session accepts the empty HTTP 204 body and clears stale cache', () async {
+    final storage = _SessionStore();
+    final dio = DioClient(storage, DeliveryAppVersionInfoLoader(load: () async =>
+        PackageInfo(appName: 'Delivery', packageName: 'delivery', version: '1', buildNumber: '1')));
+    dio.dio.interceptors.add(InterceptorsWrapper(onRequest: (options, handler) =>
+        handler.resolve(Response(requestOptions: options, statusCode: 204, data: ''))));
+    expect(await WorkSessionRepository(dio, storage).current(), isNull);
+    expect(storage.cached, isNull);
+  });
+
+  test('version HTTP does not block restore or preparation and still enforces an update', () async {
     final dio = client();
     final repository = _DelayedVersionRepo(dio, SecureStorage());
-    final notifier = AuthNotifier(
-      repository,
-      _WorkRepo(dio, SecureStorage()),
-      dio,
-      sessionRestoreTimeout: const Duration(milliseconds: 50),
+    final notifier = AuthNotifier(repository, _WorkRepo(dio, SecureStorage()), dio,
+      onUpdateRequiredCleanup: () async {}, registerFcm: () async {},
       permissionReader: () async => const LocationPermissionState(
-        serviceEnabled: true,
-        permission: LocationPermission.always,
-        accuracy: LocationAccuracyStatus.precise,
-      ),
-      registerFcm: () async {},
-      trackingStarter: ({
-        required authToken,
-        required baseUrl,
-        required workSession,
-        required versionName,
-        required buildNumber,
-        required packageName,
-      }) async {},
+        serviceEnabled: true, permission: LocationPermission.always,
+        accuracy: LocationAccuracyStatus.precise),
       isTrackingRunning: () async => true,
-    );
+      trackingStarter: ({required authToken, required baseUrl, required workSession,
+        required versionName, required buildNumber, required packageName}) async {});
     addTearDown(notifier.dispose);
-    await notifier.restoreSession();
-    expect(repository.checks, 1);
-    await _waitFor(() => notifier.state.status == AuthStatus.error);
-    expect(notifier.state.canRetrySession, isTrue);
+    await _waitFor(() => notifier.state.status == AuthStatus.authenticated);
+    await _waitFor(() => repository.checks == 1);
+    expect(notifier.state.user?.id, _driver.id);
+    await _waitFor(() => notifier.state.trackingActive);
+    expect(await notifier.canBeginDelivery(), isTrue);
     expect(repository.clears, 0);
-    await notifier.restoreSession();
-    expect(notifier.state.status, AuthStatus.authenticated);
-    expect(notifier.state.canRetrySession, isFalse);
-
     repository.first.complete(const DeliveryAppVersionPolicy(
-      requiredVersion: '99.0.0',
-      minimumBuild: 999,
-      playStoreUrl: 'https://example.invalid/play',
-      updateRequired: true,
-    ));
-    await Future<void>.delayed(Duration.zero);
-    expect(notifier.state.status, AuthStatus.authenticated);
-    expect(repository.clears, 0);
+      requiredVersion: '99.0.0', minimumBuild: 999,
+      playStoreUrl: 'https://example.invalid/play', updateRequired: true));
+    await _waitFor(() => notifier.state.status == AuthStatus.updateRequired);
+    expect(repository.clears, 1);
   });
 
   test('restoring a verified session does not await a blocked Android service',

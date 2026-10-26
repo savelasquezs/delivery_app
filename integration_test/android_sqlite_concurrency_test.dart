@@ -33,6 +33,10 @@ void main() {
       await ui.activate(context);
       await gps.current();
       await mutex.protect((lease) => lease.ensureOwned());
+      await auth.rawUpdate('UPDATE session_mutex SET owner = ?, expires_at = ?',
+        ['-1:terminated-process', DateTime.now().add(const Duration(minutes: 2)).millisecondsSinceEpoch]);
+      await SessionMutex(open: () async => auth).protect((lease) => lease.ensureOwned())
+        .timeout(const Duration(seconds: 2));
       final watch = Stopwatch()..start();
       await Future.wait([
         () async {
