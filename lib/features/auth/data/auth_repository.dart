@@ -89,10 +89,11 @@ class AuthRepository {
     }
   }
 
-  Future<bool> hasValidSession() async {
+  Future<AuthUser?> getAuthenticatedUser() async {
     final token = await _storage.getAuthToken();
+    if (token == null) return null;
     final user = await getStoredUser();
-    return token != null && user != null && user.isDeliveryman;
+    return user?.isDeliveryman == true ? user : null;
   }
 
   Future<String?> getStoredAccessToken() => _storage.getAuthToken();
@@ -116,18 +117,28 @@ class AuthRepository {
     }
   }
 
-  Future<void> logout() async {
-    final refreshToken = await _storage.getRefreshToken();
+  Future<String?> getStoredSessionId() async =>
+      (await _storage.readSession())?.id;
+
+  Future<void> logout({String? expectedSessionId}) async {
+    final session = await _storage.readSession();
+    if (expectedSessionId != null && session?.id != expectedSessionId) {
+      return;
+    }
     try {
-      if (refreshToken != null && refreshToken.isNotEmpty) {
-        await _client.post<void>(
+      if (session != null) {
+        await _client.closeSessionResource(
           ApiConstants.logout,
-          data: {'refreshToken': refreshToken},
-          fromJson: (_) {},
+          sessionId: session.id,
+          data: {'refreshToken': session.refreshToken},
         );
       }
     } finally {
-      await _storage.clearAll();
+      await _storage.withSessionLock((locked) async {
+        if ((await locked.readSession())?.id == session?.id) {
+          await locked.clearAll();
+        }
+      });
     }
   }
 

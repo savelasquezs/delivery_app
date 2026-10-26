@@ -11,6 +11,7 @@ import 'package:delivery_app/core/version/delivery_app_version.dart';
 import 'package:delivery_app/features/auth/presentation/auth_notifier.dart';
 import 'package:delivery_app/features/auth/presentation/delivery_app_update_required_screen.dart';
 import 'package:delivery_app/features/auth/data/auth_repository.dart';
+import 'package:delivery_app/features/auth/data/auth_models.dart';
 import 'package:delivery_app/features/tracking/work_session_repository.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -97,7 +98,7 @@ void main() {
     );
   });
 
-  test('startup incompatibility clears a stored session before restore',
+  test('startup incompatibility clears a stored session despite concurrent local reads',
       () async {
     final storage = _FakeSecureStorage();
     final client = DioClient(storage, _versionLoader());
@@ -122,7 +123,7 @@ void main() {
     expect(repository.clearCount, 1);
     expect(workSessions.clearCount, 1);
     expect(trackingCleanupCount, 1);
-    expect(repository.sessionRestoreAttempted, isFalse);
+    expect(notifier.state.status, AuthStatus.updateRequired);
     notifier.dispose();
   });
 
@@ -232,9 +233,9 @@ class _StartupAuthRepository extends AuthRepository {
       );
 
   @override
-  Future<bool> hasValidSession() async {
+  Future<AuthUser?> getAuthenticatedUser() async {
     sessionRestoreAttempted = true;
-    return true;
+    return null;
   }
 
   @override

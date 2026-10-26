@@ -15,7 +15,7 @@ class _LunchClient implements DioClient {
   @override
   Future<T> get<T>(String path,
       {Map<String, dynamic>? queryParameters,
-      T Function(dynamic)? fromJson}) async {
+      T Function(dynamic)? fromJson, Options? options}) async {
     if (offline) throw StateError('Sin conexión');
     return fromJson!({
       'serverTimeUtc': '2026-10-19T17:00:00Z',

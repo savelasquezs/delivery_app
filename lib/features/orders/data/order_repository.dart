@@ -1,3 +1,5 @@
+import '../../route/delivery_operations.dart';
+import '../../../core/storage/secure_storage.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/api/api_constants.dart';
 import '../../../core/api/api_exception.dart';
@@ -7,23 +9,13 @@ import '../models/print_job_models.dart';
 
 class OrderRepository {
   final DioClient _client;
+  late final operations = DeliveryOperations(_client, SecureStorage());
   final PrintJobRequestCoordinator _printCoordinator;
 
   OrderRepository(
     this._client, {
     PrintJobRequestCoordinator? printCoordinator,
   }) : _printCoordinator = printCoordinator ?? PrintJobRequestCoordinator();
-
-  Future<void> confirmReturnedOrders({
-    required int routeId,
-    required int returnLocationId,
-    required List<int> orderIds,
-  }) async {
-    await _client.post<dynamic>(
-      ApiConstants.confirmRouteReturn(routeId),
-      data: {'returnLocationId': returnLocationId, 'orderIds': orderIds},
-    );
-  }
 
   Future<List<Order>> getAvailableOrders({int? branchId}) async {
     final params = <String, dynamic>{};
@@ -101,19 +93,13 @@ class OrderRepository {
     bool modifiedProposal = false,
     String? selectionFingerprint,
   }) async {
-    return _client.post<List<Order>>(
-      ApiConstants.deliverySelfAssign,
-      data: {
-        'orderIds': orderIds,
-        if (proposalId != null) 'proposalId': proposalId,
-        if (expectedPlanVersion != null)
-          'expectedPlanVersion': expectedPlanVersion,
-        if (modifiedProposal) 'modifiedProposal': true,
-        if (selectionFingerprint != null)
-          'selectionFingerprint': selectionFingerprint,
-      },
-      fromJson: _parseOrderList,
-    );
+    return operations.take({
+      'orderIds': orderIds,
+      if (proposalId != null) 'proposalId': proposalId,
+      if (expectedPlanVersion != null) 'expectedPlanVersion': expectedPlanVersion,
+      if (modifiedProposal) 'modifiedProposal': true,
+      if (selectionFingerprint != null) 'selectionFingerprint': selectionFingerprint,
+    });
   }
 
   /// Encola reimpresión de ticket de domicilio (`kind: delivery`).

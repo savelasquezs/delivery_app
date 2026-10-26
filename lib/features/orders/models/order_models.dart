@@ -137,6 +137,9 @@ class OrderLineSummary {
 }
 
 class Order {
+  final Map<String, dynamic> rawJson;
+  int get managementVersion => (rawJson['managementVersion'] as num?)?.toInt() ?? 0;
+  String? get addressVersion => rawJson['addressVersion'] as String?;
   /// Tolerancia COP al comparar total vs pagos (decimales / redondeo).
   static const double kPaymentCoverTolerance = 0.5;
 
@@ -186,6 +189,7 @@ class Order {
   final Map<String, DateTime> statusTimes;
 
   const Order({
+    this.rawJson = const {},
     required this.id,
     required this.status,
     required this.type,
@@ -346,6 +350,7 @@ class Order {
     final details = json['orderDetails'] as List<dynamic>? ?? [];
 
     return Order(
+      rawJson: Map<String, dynamic>.unmodifiable(json),
       id: json['id'] as int,
       status: OrderStatus.fromApi(json['status'] as String? ?? 'taken'),
       type: json['type'] as String? ?? 'delivery',
@@ -422,6 +427,9 @@ class Order {
     }
 
     return Order(
+      rawJson: {...rawJson, 'addressDescription': nextDesc, 'addressAdditionalInfo': nextInfo,
+        'latitude': nextLat, 'longitude': nextLng, 'neighborhoodId': nextNeighborhoodId,
+        'neighborhoodName': nextNeighborhoodName},
       id: id,
       status: status,
       type: type,

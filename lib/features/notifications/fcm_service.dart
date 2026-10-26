@@ -1,3 +1,4 @@
+import '../../core/storage/secure_storage.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -9,7 +10,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/api/api_constants.dart';
 import '../../core/api/dio_client.dart';
 import '../../core/auth/auth_session_bridge.dart';
-import '../tracking/location_tracking_service.dart';
 import '../leaves/employee_leave_notices.dart';
 
 (String? title, String? body) _titleBodyFromRemoteMessage(RemoteMessage message) {
@@ -123,8 +123,17 @@ class FcmService {
   static Stream<DeliveryTrackingReviewNotice> get trackingReviewNotices => _trackingReviewController.stream;
 
   /// Inicializa Firebase + FCM + canales locales antes de runApp.
-  static Future<void> initialize() async {
+  static Future<void>? _initializing;
+  static Future<void> initialize() =>
+      _initializing ??= _initialize().catchError((Object error) {
+        _initializing = null;
+        _initialized = false;
+        throw error;
+      });
+
+  static Future<void> _initialize() async {
     if (kIsWeb || _initialized) return;
+    await Firebase.initializeApp();
     _initialized = true;
     for (final channel in [_orderChannel, _trackingReviewChannel, _employeeLeaveChannel]) {
       await _localNotifications.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()?.createNotificationChannel(channel);
@@ -137,10 +146,6 @@ class FcmService {
     );
     final launch = await _localNotifications.getNotificationAppLaunchDetails();
     if (launch?.didNotificationLaunchApp == true) _openLeavePayload(launch?.notificationResponse?.payload);
-    if (Platform.isAndroid) {
-      final granted = await _localNotifications.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()?.requestNotificationsPermission();
-      debugPrint('FCM: flutter_local_notifications requestNotificationsPermission => $granted');
-    }
     FirebaseMessaging.onMessage.listen(_showForegroundNotification);
     FirebaseMessaging.onMessageOpenedApp.listen((message) {
       EmployeeLeaveNotices.receive(message.data, opened: true);
@@ -200,11 +205,14 @@ class FcmService {
   }
   static Future<bool> requestPermission() async {
     if (kIsWeb) return false;
+    await initialize();
     final settings = await FirebaseMessaging.instance.requestPermission(alert: true, badge: true, sound: true);
     return settings.authorizationStatus == AuthorizationStatus.authorized || settings.authorizationStatus == AuthorizationStatus.provisional;
   }
   static Future<String?> getToken() async {
-    try { return await FirebaseMessaging.instance.getToken(); }
+    try {
+      await initialize();
+      return await FirebaseMessaging.instance.getToken(); }
     catch (e) { debugPrint('FCM: error obteniendo token: $e'); return null; }
   }
   static Future<void> registerToken(DioClient client) async {
@@ -226,16 +234,16 @@ class FcmService {
       debugPrint('FCM: token registrado en backend');
     } catch (e) { debugPrint('FCM: error registrando token: $e'); }
   }
-  static Future<void> unregisterToken(DioClient client) async {
+  static Future<void> unregisterToken(DioClient client, {String? expectedSessionId}) async {
     if (kIsWeb) return;
-    final token = await getToken();
-    if (token != null) {
-      try { await client.delete<void>(ApiConstants.myDeviceToken, data: {'token': token}); debugPrint('FCM: token eliminado del backend'); }
-      catch (e) { debugPrint('FCM: error eliminando token: $e'); }
-    }
-    _authenticatedClient = null;
-    await _tokenRefreshSubscription?.cancel(); _tokenRefreshSubscription = null;
+    final subscription = _tokenRefreshSubscription;
+    _tokenRefreshSubscription = null; _authenticatedClient = null;
+    await subscription?.cancel();
+    final token = await getToken().timeout(const Duration(seconds: 2), onTimeout: () => null);
+    if (token != null) await client.closeSessionResource(ApiConstants.myDeviceToken,
+      method: 'DELETE', sessionId: expectedSessionId, data: {'token': token});
   }
+
   static void _showForegroundNotification(RemoteMessage message) {
     debugPrint('FCM onMessage: messageId=${message.messageId} dataKeys=${message.data.keys.join(",")}');
     EmployeeLeaveNotices.receive(message.data);
@@ -252,14 +260,18 @@ class FcmService {
 
 Future<void> _applyWorkSessionCommand(Map<String, dynamic> data, {bool notifyUi = true}) async {
   final type = data['type']?.toString();
-  if (type == 'work_session_closed') {
-    await LocationTrackingService.stopTracking();
-    if (notifyUi) notifyAuthSessionInvalidatedByApi();
+  if (type != 'work_session_closed' && type != 'work_session_updated') return;
+  final raw = await SecureStorage().getWorkSessionData();
+  if (raw == null) return;
+  final session = jsonDecode(raw) as Map;
+  final auth = await SecureStorage().readSession();
+  if (auth == null) return;
+  final owner = jsonDecode(auth.ownerKey('')) as List;
+  if (data['tenantId'] != null && data['tenantId'].toString() != owner[1]) return;
+  if (data['workSessionId'] != null &&
+      data['workSessionId'].toString() != session['id'].toString()) return;
+  if (data['deliverymanId'] != null &&
+      data['deliverymanId'].toString() != session['deliverymanId'].toString())
     return;
-  }
-  if (type != 'work_session_updated') return;
-  final autoCloseAt = DateTime.tryParse(data['autoCloseAt']?.toString() ?? '');
-  if (autoCloseAt == null) return;
-  await LocationTrackingService.updateAutoCloseAt(autoCloseAt);
   if (notifyUi) notifyWorkSessionChangedByPush();
 }

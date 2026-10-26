@@ -89,7 +89,7 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
       context: context,
       ref: ref,
       initialOrder: order,
-      onAddressUpdated: (_) {
+      onAddressUpdated: () {
         ref.read(historyNotifierProvider.notifier).load();
       },
       onAfterDelivered: () => ref.read(historyNotifierProvider.notifier).load(),

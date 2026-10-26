@@ -13,6 +13,7 @@ class OrderCard extends StatelessWidget {
   final VoidCallback? onTap;
   final Widget? topContent;
   final Widget? trailing;
+  final bool compact;
 
   /// Muestra domicilio y efectivo a cobrar / «Ya pagó» (p. ej. historial).
   final bool showFeeAndCashSummary;
@@ -23,6 +24,7 @@ class OrderCard extends StatelessWidget {
     this.onTap,
     this.topContent,
     this.trailing,
+    this.compact = false,
     this.showFeeAndCashSummary = false,
   });
 
@@ -33,58 +35,76 @@ class OrderCard extends StatelessWidget {
         onTap: onTap,
         borderRadius: BorderRadius.circular(AppTheme.radiusMd),
         child: Padding(
-          padding: const EdgeInsets.all(AppTheme.spacingMd),
+          padding: EdgeInsets.all(compact ? 10 : AppTheme.spacingMd),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               if (topContent != null) ...[
                 topContent!,
-                const SizedBox(height: AppTheme.spacingSm),
+                SizedBox(height: compact ? 4 : AppTheme.spacingSm),
               ],
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _OrderIdBadge(orderId: order.id),
-                  const SizedBox(width: AppTheme.spacingSm),
-                  StatusBadge(status: order.status),
-                  const Spacer(),
+                  if (compact)
+                    Expanded(
+                        child: Wrap(spacing: 8, runSpacing: 4, children: [
+                      _OrderIdBadge(orderId: order.id),
+                      StatusBadge(status: order.status),
+                    ]))
+                  else ...[
+                    _OrderIdBadge(orderId: order.id),
+                    const SizedBox(width: AppTheme.spacingSm),
+                    StatusBadge(status: order.status),
+                    const Spacer(),
+                  ],
                   if (showFeeAndCashSummary)
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        Text(
-                          'A cobrar',
-                          style: TextStyle(
-                            color: AppColors.hint.withValues(alpha: 0.9),
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            letterSpacing: 0.2,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          _currencyFormat.format(order.cashToCollectOnDelivery),
-                          style: const TextStyle(
-                            color: AppColors.primary,
-                            fontWeight: FontWeight.w800,
-                            fontSize: 24,
-                            height: 1.05,
-                          ),
-                        ),
-                        if (order.showYaPagoMessage) ...[
-                          const SizedBox(height: 4),
-                          Text(
-                            'Ya pagó',
-                            style: TextStyle(
-                              color:
-                                  AppColors.accentLight.withValues(alpha: 0.98),
-                              fontSize: 14,
-                              fontWeight: FontWeight.w800,
+                    Flexible(
+                        flex: compact ? 1 : 0,
+                        fit: compact ? FlexFit.tight : FlexFit.loose,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Text(
+                              'A cobrar',
+                              style: TextStyle(
+                                color: AppColors.hint.withValues(alpha: 0.9),
+                                fontSize: compact ? 10 : 12,
+                                fontWeight: FontWeight.w600,
+                                letterSpacing: 0.2,
+                              ),
                             ),
-                          ),
-                        ],
-                      ],
-                    )
+                            const SizedBox(height: 2),
+                            Text(
+                              _currencyFormat
+                                  .format(order.cashToCollectOnDelivery),
+                              style: TextStyle(
+                                color: AppColors.primary,
+                                fontWeight: FontWeight.w800,
+                                fontSize: compact ? 18 : 24,
+                                height: 1.05,
+                              ),
+                            ),
+                            if (compact &&
+                                order.total != order.cashToCollectOnDelivery)
+                              Text(
+                                  'Total ${_currencyFormat.format(order.total)}',
+                                  style: const TextStyle(
+                                      fontSize: 11, color: AppColors.hint)),
+                            if (order.showYaPagoMessage) ...[
+                              const SizedBox(height: 4),
+                              Text(
+                                'Ya pagó',
+                                style: TextStyle(
+                                  color: AppColors.accentLight
+                                      .withValues(alpha: 0.98),
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ))
                   else
                     Text(
                       _currencyFormat.format(order.total),
@@ -97,6 +117,7 @@ class OrderCard extends StatelessWidget {
                 ],
               ),
               if (showFeeAndCashSummary &&
+                  !compact &&
                   ((order.deliveryFee != null &&
                           order.deliveryFee! > Order.kPaymentCoverTolerance) ||
                       (order.total > Order.kPaymentCoverTolerance))) ...[
@@ -129,7 +150,7 @@ class OrderCard extends StatelessWidget {
                 ),
               ],
               if (order.customer != null) ...[
-                const SizedBox(height: AppTheme.spacingSm),
+                SizedBox(height: compact ? 4 : AppTheme.spacingSm),
                 Row(
                   children: [
                     const Icon(Icons.person_outline,
@@ -143,7 +164,7 @@ class OrderCard extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                    if (order.customer!.phone != null)
+                    if (!compact && order.customer!.phone != null)
                       Text(
                         order.customer!.phone!,
                         style: Theme.of(context).textTheme.bodySmall,
@@ -203,7 +224,7 @@ class OrderCard extends StatelessWidget {
                   ],
                 ),
               ],
-              const SizedBox(height: AppTheme.spacingSm),
+              SizedBox(height: compact ? 4 : AppTheme.spacingSm),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -232,13 +253,21 @@ class OrderCard extends StatelessWidget {
                       ],
                     ),
                   ),
+                  if (compact && (order.deliveryFee ?? 0) > 0) ...[
+                    Text(
+                        'Dom. ${_currencyFormat.format(order.deliveryFee ?? 0)}',
+                        style: const TextStyle(
+                            color: AppColors.hint, fontSize: 11)),
+                    const SizedBox(width: 8),
+                  ],
                   Text(
                     DateFormat('HH:mm').format(order.createdAt.toLocal()),
                     style: const TextStyle(color: AppColors.hint, fontSize: 11),
                   ),
                 ],
               ),
-              if (order.branchName != null &&
+              if (!compact &&
+                  order.branchName != null &&
                   order.branchName!.trim().isNotEmpty) ...[
                 const SizedBox(height: 4),
                 Row(
@@ -261,9 +290,9 @@ class OrderCard extends StatelessWidget {
                 ),
               ],
               if (trailing != null) ...[
-                const SizedBox(height: AppTheme.spacingSm),
-                const Divider(height: 1),
-                const SizedBox(height: AppTheme.spacingSm),
+                SizedBox(height: compact ? 4 : AppTheme.spacingSm),
+                if (!compact) const Divider(height: 1),
+                SizedBox(height: compact ? 4 : AppTheme.spacingSm),
                 trailing!,
               ],
             ],

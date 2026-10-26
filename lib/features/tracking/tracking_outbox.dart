@@ -139,13 +139,27 @@ class TrackingOutbox {
     }
   }
 
-  Future<Database> _initialize() async {
-    final db = await open();
-    try {
-      // This PRAGMA returns a row; Android rejects it through execute.
-      await db.rawQuery('PRAGMA busy_timeout = 1000');
-      await _writeMutex
-          .protect((lease) => retrySqliteBusy(() => db.transaction((tx) async {
+  Future<Database> _initialize() => _writeMutex.protect((lease) async {
+        final db = await open();
+        try {
+          // This PRAGMA returns a row; Android rejects it through execute.
+          await db.rawQuery('PRAGMA busy_timeout = 1000');
+          await lease.ensureOwned();
+          await retrySqliteBusy(() => db.transaction((tx) async {
+                await tx.execute('CREATE TABLE IF NOT EXISTS delivery_cache ('
+                    'owner TEXT NOT NULL, name TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(owner,name))');
+                await tx.execute(
+                    'CREATE TABLE IF NOT EXISTS delivery_operations ('
+                    'id TEXT PRIMARY KEY, owner TEXT NOT NULL, payload TEXT NOT NULL, display TEXT NOT NULL, '
+                    "state TEXT NOT NULL DEFAULT 'pending', reason TEXT, available_at INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0)");
+                if (!(await tx
+                        .rawQuery('PRAGMA table_info(delivery_operations)'))
+                    .any((column) => column['name'] == 'attempts')) {
+                  await tx.execute(
+                      'ALTER TABLE delivery_operations ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0');
+                }
+                await tx.execute(
+                    'CREATE INDEX IF NOT EXISTS delivery_operations_owner ON delivery_operations(owner,state,available_at)');
                 await tx.execute(
                     'CREATE TABLE IF NOT EXISTS tracking_context (id INTEGER PRIMARY KEY, value TEXT NOT NULL)');
                 await tx.execute('CREATE TABLE IF NOT EXISTS tracking_outbox ('
@@ -169,34 +183,122 @@ class TrackingOutbox {
                     'owner_key TEXT NOT NULL, work_session INTEGER NOT NULL, id TEXT NOT NULL, '
                     'started_at INTEGER NOT NULL, recovered_at INTEGER, acknowledged INTEGER NOT NULL DEFAULT 0, '
                     'PRIMARY KEY(owner_key, work_session))');
-                await lease.ensureOwned();
-              })));
-      return db;
-    } catch (_) {
-      await db.close();
-      rethrow;
-    }
+              }));
+          return db;
+        } catch (_) {
+          await db.close();
+          rethrow;
+        }
+      });
+
+  // An uncoordinated reader can block Android's only SQLite worker while a
+  // different connection owns a transaction. Open and read under the same lease.
+  Future<T> _access<T>(Future<T> Function(Database) body) async {
+    final db = await _db();
+    return _writeMutex.protect((lease) async {
+      await lease.ensureOwned();
+      return retrySqliteBusy(() => body(db));
+    });
   }
 
-  Future<T> _transaction<T>(Future<T> Function(Transaction) body) async {
-    final db = await _db();
-    return _writeMutex
-        .protect((lease) => retrySqliteBusy(() => db.transaction((tx) async {
-              await lease.ensureOwned();
-              final result = await body(tx);
-              await lease.ensureOwned();
-              return result;
-            })));
-  }
+  Future<T> _transaction<T>(Future<T> Function(Transaction) body) =>
+      _access((db) => db.transaction(body));
 
-  Future<TrackingContext?> current() async {
-    final db = await _db();
-    final rows = await retrySqliteBusy(
-        () => db.query('tracking_context', where: 'id = 1'));
-    if (rows.isEmpty) return null;
-    return TrackingContext.fromJson(Map<String, dynamic>.from(
-        jsonDecode(rows.single['value'] as String) as Map));
-  }
+  Future<Map<String, dynamic>?> cached(String owner, String name) =>
+      _access((db) async {
+        final rows = await db.query('delivery_cache',
+            where: 'owner = ? AND name = ?', whereArgs: [owner, name]);
+        return rows.isEmpty
+            ? null
+            : Map<String, dynamic>.from(
+                jsonDecode(rows.single['value'] as String) as Map);
+      });
+
+  Future<void> cache(String owner, String name, Map<String, dynamic> value) =>
+      _transaction((tx) async {
+        if (name == 'route') {
+          final rows = await tx.query('delivery_cache',
+              where: 'owner = ? AND name = ?', whereArgs: [owner, name]);
+          if (rows.isNotEmpty &&
+              ((jsonDecode(rows.single['value'] as String)['revision']
+                          as num?) ??
+                      0) >
+                  ((value['revision'] as num?) ?? 0)) return;
+        }
+        await tx.insert('delivery_cache',
+            {'owner': owner, 'name': name, 'value': jsonEncode(value)},
+            conflictAlgorithm: ConflictAlgorithm.replace);
+      });
+
+  Future<void> enqueueOperation(String owner, Map<String, dynamic> payload,
+          Map<String, dynamic> display) =>
+      _transaction((tx) async {
+        final existing = await tx.query('delivery_operations',
+            columns: ['id', 'payload'], where: 'owner = ?', whereArgs: [owner]);
+        if (existing.any((row) =>
+            row['id'] == payload['operationId'] &&
+            row['payload'] == jsonEncode(payload))) return;
+        if (existing.any((row) {
+          final saved = jsonDecode(row['payload'] as String) as Map;
+          return saved['kind'] == payload['kind'] &&
+              saved['orderId'] == payload['orderId'];
+        }))
+          throw StateError(
+              'Este pedido ya tiene una acción pendiente. Revisa su sincronización.');
+        await tx.insert(
+            'delivery_operations',
+            {
+              'id': payload['operationId'],
+              'owner': owner,
+              'payload': jsonEncode(payload),
+              'display': jsonEncode(display)
+            },
+            conflictAlgorithm: ConflictAlgorithm.ignore);
+      });
+
+  Future<List<Map<String, Object?>>> operations(String owner) =>
+      _access((db) => db.query('delivery_operations',
+          where: 'owner = ?', whereArgs: [owner], orderBy: 'rowid'));
+
+  Future<bool> claimOperation(String owner, String id, int now) =>
+      _transaction((tx) async =>
+          await tx.rawUpdate(
+              "UPDATE delivery_operations SET available_at = ?, attempts = attempts + 1 WHERE owner = ? AND id = ? AND state = 'pending' AND available_at <= ?",
+              [now + 120000, owner, id, now]) ==
+          1);
+
+  Future<void> discardOperationConflict(String owner, String id) =>
+      _transaction((tx) async {
+        await tx.delete('delivery_operations',
+            where: "owner = ? AND id = ? AND state = 'conflict'",
+            whereArgs: [owner, id]);
+      });
+
+  Future<void> finishOperation(String owner, String id,
+          {String? conflict, int? retryAt}) =>
+      _transaction((tx) async {
+        if (conflict == null && retryAt == null) {
+          await tx.delete('delivery_operations',
+              where: 'owner = ? AND id = ?', whereArgs: [owner, id]);
+        } else {
+          await tx.update(
+              'delivery_operations',
+              {
+                'state': conflict == null ? 'pending' : 'conflict',
+                'reason': conflict,
+                'available_at': retryAt ?? 0
+              },
+              where: 'owner = ? AND id = ?',
+              whereArgs: [owner, id]);
+        }
+      });
+
+  Future<TrackingContext?> current() => _access((db) async {
+        final rows = await db.query('tracking_context', where: 'id = 1');
+        if (rows.isEmpty) return null;
+        return TrackingContext.fromJson(Map<String, dynamic>.from(
+            jsonDecode(rows.single['value'] as String) as Map));
+      });
 
   Future<void> activate(TrackingContext context, {bool onlyIfAbsent = false}) =>
       _transaction((tx) async {
@@ -284,18 +386,14 @@ class TrackingOutbox {
   }
 
   /// Whether the current workday still has older GPS points to upload.
-  Future<bool> hasPendingLocationHistory(TrackingContext context) async {
-    final db = await _db();
-    final rows = await retrySqliteBusy(() => db.query(
-          'tracking_outbox',
-          columns: ['id'],
-          where:
-              "owner_key = ? AND work_session = ? AND state = 'pending' AND kind = 'location'",
-          whereArgs: [context.ownerKey, context.workSessionId],
-          limit: 1,
-        ));
-    return rows.isNotEmpty;
-  }
+  Future<bool> hasPendingLocationHistory(TrackingContext context) =>
+      _access((db) async => (await db.query('tracking_outbox',
+              columns: ['id'],
+              where:
+                  "owner_key = ? AND work_session = ? AND state = 'pending' AND kind = 'location'",
+              whereArgs: [context.ownerKey, context.workSessionId],
+              limit: 1))
+          .isNotEmpty);
 
   Future<List<OutboxRecord>> pending(TrackingContext context,
       {int limit = 10}) async {
@@ -322,16 +420,14 @@ class TrackingOutbox {
     });
   }
 
-  Future<List<OutboxRecord>> events(TrackingContext context,
-      {int limit = 5}) async {
-    final db = await _db();
-    final rows = await retrySqliteBusy(() => db.query('tracking_outbox',
-        where: "owner_key = ? AND state = 'pending' AND kind = 'event'",
-        whereArgs: [context.ownerKey],
-        orderBy: 'recorded_at, id',
-        limit: limit));
-    return rows.map(OutboxRecord.fromRow).toList();
-  }
+  Future<List<OutboxRecord>> events(TrackingContext context, {int limit = 5}) =>
+      _access((db) async => (await db.query('tracking_outbox',
+              where: "owner_key = ? AND state = 'pending' AND kind = 'event'",
+              whereArgs: [context.ownerKey],
+              orderBy: 'recorded_at, id',
+              limit: limit))
+          .map(OutboxRecord.fromRow)
+          .toList());
 
   Future<void> acknowledge(OutboxRecord record, DateTime now) =>
       _transaction((tx) async {
@@ -593,60 +689,10 @@ class TrackingOutbox {
     });
   }
 
-  /// A commit receipt makes a crash between SQL commit and preference removal
-  /// harmless, including after an acknowledged imported point has been deleted.
   Future<void> importLegacy(
-          String sourceKey, String raw, String kind, TrackingContext context,
-          {bool rejected = false}) =>
-      _transaction((tx) async {
-        final fingerprint =
-            const Uuid().v5(_legacyNamespace, '$sourceKey:$raw');
-        if ((await tx.query('tracking_import',
-                where: 'fingerprint = ?', whereArgs: [fingerprint]))
-            .isNotEmpty) return;
-        List<dynamic> items;
-        try {
-          final decoded = jsonDecode(raw);
-          items = decoded is List ? decoded : [decoded];
-        } catch (_) {
-          items = [raw];
-        }
-        for (var i = 0; i < items.length; i++) {
-          final item = items[i];
-          final payload = item is Map
-              ? Map<String, dynamic>.from(
-                  item['payload'] is Map ? item['payload'] as Map : item)
-              : <String, dynamic>{'raw': item};
-          payload[kind == 'location' ? 'clientPointId' : 'clientEventId'] ??=
-              const Uuid().v5(_legacyNamespace, '$fingerprint:$i');
-          final session =
-              int.tryParse(payload['workSessionId']?.toString() ?? '');
-          final bound = session != null &&
-              (session == context.workSessionId ||
-                  payload['_authSessionId'] == context.authSessionId ||
-                  payload['_ownerKey'] == context.ownerKey);
-          final parsedTime =
-              DateTime.tryParse(payload['recordedAt']?.toString() ?? '');
-          final validTime = parsedTime != null;
-          payload['workSessionId'] = session ?? -1;
-          payload['recordedAt'] = (parsedTime ??
-                  DateTime.fromMillisecondsSinceEpoch(0, isUtc: true))
-              .toUtc()
-              .toIso8601String();
-          if (!validTime)
-            payload['recordedAt'] =
-                DateTime.fromMillisecondsSinceEpoch(0, isUtc: true)
-                    .toIso8601String();
-          await _insert(tx, bound ? context.ownerKey : 'unbound', kind, payload,
-              state: rejected || !bound || !validTime ? 'rejected' : 'pending',
-              reason: !bound
-                  ? 'legacy_owner_unverified'
-                  : !validTime
-                      ? 'invalid_recorded_at'
-                      : rejected
-                          ? 'legacy_rejected'
-                          : null);
-        }
-        await tx.insert('tracking_import', {'fingerprint': fingerprint});
-      });
+      String sourceKey, String raw, String kind, TrackingContext context,
+      {bool rejected = false}) async {
+    while (!await importLegacyBatch(sourceKey, raw, kind, context,
+        rejected: rejected)) {}
+  }
 }

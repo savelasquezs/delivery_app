@@ -18,6 +18,7 @@ void main() {
     final auth = await openDatabase(
         '${await getDatabasesPath()}/auth_concurrency_probe.db',
         singleInstance: false);
+    Database? reopeningDb;
     final ui = TrackingOutbox(open: () async => first);
     final gps = TrackingOutbox(open: () async => second);
     final mutex = SessionMutex(open: () async => auth);
@@ -33,6 +34,36 @@ void main() {
       await ui.activate(context);
       await gps.current();
       await mutex.protect((lease) => lease.ensureOwned());
+      await auth
+          .rawUpdate('UPDATE session_mutex SET owner = ?, expires_at = ?', [
+        '-1:terminated-process',
+        DateTime.now().add(const Duration(minutes: 2)).millisecondsSinceEpoch
+      ]);
+      await SessionMutex(open: () async => auth)
+          .protect((lease) => lease.ensureOwned())
+          .timeout(const Duration(seconds: 2));
+      final reopening = TrackingOutbox(
+          open: () async =>
+              reopeningDb ??= await openDatabase(path, singleInstance: false));
+      late Future<List<Object?>> readers;
+      await SessionMutex(databasePath: 'sa_tracking_write_mutex.db')
+          .protect((lease) async {
+        await lease.ensureOwned();
+        await first.transaction((tx) async {
+          await tx.rawQuery('SELECT count(*) FROM tracking_context');
+          readers = Future.wait<Object?>([
+            gps.current(),
+            gps.cached('probe-owner', 'route'),
+            gps.operations('probe-owner'),
+            gps.events(context),
+            gps.hasPendingLocationHistory(context),
+            reopening.current(),
+          ]);
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+          await tx.rawQuery('SELECT count(*) FROM tracking_context');
+        });
+      }).timeout(const Duration(seconds: 3));
+      await readers.timeout(const Duration(seconds: 3));
       final watch = Stopwatch()..start();
       await Future.wait([
         () async {
@@ -49,6 +80,9 @@ void main() {
           for (var i = 0; i < 30; i++) {
             await ui.snapshot(context);
             await ui.pending(context);
+            await ui.current();
+            await ui.cached('probe-owner', 'route');
+            await ui.operations('probe-owner');
           }
         }(),
         () async {
@@ -68,6 +102,7 @@ void main() {
       await first.close();
       await second.close();
       await auth.close();
+      await reopeningDb?.close();
       await deleteDatabase(path);
       await deleteDatabase(
           '${await getDatabasesPath()}/auth_concurrency_probe.db');

@@ -20,11 +20,10 @@ import '../available/presentation/available_notifier.dart';
 import '../available/presentation/available_screen.dart';
 import '../route/presentation/route_notifier.dart';
 import '../route/presentation/route_screen.dart';
-import '../history/presentation/history_notifier.dart';
 import '../history/presentation/history_screen.dart';
-import '../analytics/presentation/analytics_notifier.dart';
 import '../analytics/presentation/analytics_screen.dart';
 import '../orders/models/order_models.dart';
+import '../orders/data/order_repository.dart';
 import '../profile/data/profile_image_url.dart';
 import '../realtime/order_hub_event.dart';
 import '../realtime/order_hub_service.dart';
@@ -41,6 +40,8 @@ class HomeScreen extends ConsumerStatefulWidget {
 class _HomeScreenState extends ConsumerState<HomeScreen>
     with WidgetsBindingObserver {
   int _currentIndex = 0;
+  final _visitedTabs = <int>{0};
+  bool _initialTabResolved = false;
   HubConnectionStatus _hubStatus = HubConnectionStatus.disconnected;
   OrderHubService? _hubService;
   bool _signalRListenersAttached = false;
@@ -82,6 +83,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted)
+        unawaited(
+            ref.read(routeNotifierProvider.notifier).load(silently: true));
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       // Un frame más para que el árbol y `ref` queden listos antes de SignalR.
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -125,7 +131,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     }
     await _connectSignalR();
     if (!mounted) return;
-    unawaited(ref.read(availableNotifierProvider.notifier)
+    unawaited(ref.read(routeNotifierProvider.notifier).load(silently: true));
+    unawaited(ref
+        .read(availableNotifierProvider.notifier)
         .loadRouting(silently: true, ensureFresh: true));
     final catchUp = _catchUpInFlight;
     if (catchUp != null) {
@@ -180,7 +188,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     // El grupo de sucursal lo determina el JWT autenticado.
     ref.read(availableNotifierProvider.notifier).setRoutingActive(
         WidgetsBinding.instance.lifecycleState == null ||
-        WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed);
+            WidgetsBinding.instance.lifecycleState ==
+                AppLifecycleState.resumed);
     await _hubService!.connect();
     final latest = ref.read(authNotifierProvider);
     if (!shouldConnectOrderHub(
@@ -248,11 +257,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     final current = _catchUpInFlight;
     if (current != null) return current;
     final operation = Future.wait([
-      ref.read(availableNotifierProvider.notifier)
+      ref
+          .read(availableNotifierProvider.notifier)
           .load(silently: true, ensureFresh: true),
-      ref.read(availableNotifierProvider.notifier)
+      ref
+          .read(availableNotifierProvider.notifier)
           .loadRouting(silently: true, ensureFresh: true),
-      ref.read(routeNotifierProvider.notifier)
+      ref
+          .read(routeNotifierProvider.notifier)
           .load(silently: true, ensureFresh: true),
     ]).then((_) {});
     _catchUpInFlight = operation;
@@ -265,7 +277,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     if (!mounted) return;
     if (event == 'EmployeeLunchChanged') {
       unawaited(ref.read(employeeLunchProvider.notifier).refresh());
-      unawaited(ref.read(availableNotifierProvider.notifier).loadRouting(silently: true, ensureFresh: true));
+      unawaited(ref
+          .read(availableNotifierProvider.notifier)
+          .loadRouting(silently: true, ensureFresh: true));
       return;
     }
     unawaited(_handleHubEvent(event, args));
@@ -277,7 +291,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     final kind = classifyOrderHubEvent(event);
 
     if (kind == OrderHubEventKind.routing) {
-      await available.routingPlanChanged(routingPlanVersionFromHubEvent(event, args));
+      await available
+          .routingPlanChanged(routingPlanVersionFromHubEvent(event, args));
       return;
     }
     if (kind == OrderHubEventKind.ignored) return;
@@ -285,10 +300,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     final order = orderFromHubEvent(event, args);
     if (order == null) {
       // Recover once if the event payload cannot be parsed.
-      if (kind == OrderHubEventKind.ready || kind == OrderHubEventKind.assigned) {
+      if (kind == OrderHubEventKind.ready ||
+          kind == OrderHubEventKind.assigned) {
         await Future.wait([
           available.refreshReadyOrders(),
-          ref.read(routeNotifierProvider.notifier)
+          ref
+              .read(routeNotifierProvider.notifier)
               .load(silently: true, ensureFresh: true),
         ]);
       }
@@ -343,29 +360,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 
   /// IndexedStack no vuelve a ejecutar `initState` de cada pestaña al cambiar.
   void _onTabChanged(int index) {
-    setState(() => _currentIndex = index);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      switch (index) {
-        case 0:
-          if (_hubStatus != HubConnectionStatus.connected) {
-            unawaited(ref.read(availableNotifierProvider.notifier)
-                .load(silently: true));
-          }
-          break;
-        case 1:
-          if (_hubStatus != HubConnectionStatus.connected) {
-            unawaited(ref.read(routeNotifierProvider.notifier)
-                .load(silently: true));
-          }
-          break;
-        case 2:
-          ref.read(historyNotifierProvider.notifier).load();
-          break;
-        case 3:
-          ref.read(analyticsNotifierProvider.notifier).load();
-          break;
-      }
+    _initialTabResolved = true;
+    if (index == _currentIndex) return;
+    setState(() {
+      _currentIndex = index;
+      _visitedTabs.add(index);
     });
   }
 
@@ -458,9 +457,34 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                 leading: const Icon(Icons.logout, color: AppColors.error),
                 title: const Text('Cerrar sesión',
                     style: TextStyle(color: AppColors.error)),
-                onTap: () {
+                onTap: () async {
+                  final pending = await ref
+                      .read(orderRepositoryProvider)
+                      .operations
+                      .pending();
+                  if (!ctx.mounted) return;
+                  if (pending.isNotEmpty) {
+                    final leave = await showDialog<bool>(
+                        context: ctx,
+                        builder: (dialog) => AlertDialog(
+                                title: const Text('Hay cambios pendientes'),
+                                content: Text(
+                                    'Hay ${pending.length} acciones sin confirmar. Se conservarán para esta cuenta.'),
+                                actions: [
+                                  TextButton(
+                                      onPressed: () =>
+                                          Navigator.pop(dialog, false),
+                                      child: const Text('Volver')),
+                                  TextButton(
+                                      onPressed: () =>
+                                          Navigator.pop(dialog, true),
+                                      child: const Text(
+                                          'Cerrar sesión y conservar'))
+                                ]));
+                    if (leave != true || !ctx.mounted) return;
+                  }
                   Navigator.pop(ctx);
-                  ref.read(authNotifierProvider.notifier).logout();
+                  await ref.read(authNotifierProvider.notifier).logout();
                 },
               ),
             ],
@@ -511,6 +535,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   @override
   Widget build(BuildContext context) {
     final authState = ref.watch(authNotifierProvider);
+    ref.watch(routeNotifierProvider);
+    ref.listen<RouteState>(routeNotifierProvider, (_, next) {
+      if (_initialTabResolved || next.revision < 0) return;
+      _initialTabResolved = true;
+      if (next.routeId != null && mounted) {
+        setState(() { _currentIndex = 1; _visitedTabs.add(1); });
+      }
+    });
     ref.listen<AuthState>(
       authNotifierProvider,
       (prev, next) {
@@ -539,7 +571,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           children: [
             const AppLogo(size: 28),
             const SizedBox(width: AppTheme.spacingSm),
-            Expanded(child: Text(_currentTitle, overflow: TextOverflow.ellipsis)),
+            Expanded(
+                child: Text(_currentTitle, overflow: TextOverflow.ellipsis)),
           ],
         ),
         actions: [
@@ -567,7 +600,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           Expanded(
             child: IndexedStack(
               index: _currentIndex,
-              children: _screens,
+              children: [
+                for (var i = 0; i < _screens.length; i++)
+                  TickerMode(
+                      enabled: i == _currentIndex,
+                      child: _visitedTabs.contains(i)
+                          ? _screens[i]
+                          : const SizedBox.shrink()),
+              ],
             ),
           ),
         ],
@@ -593,31 +633,67 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 }
 
 class _TrackingStatusBanner extends ConsumerWidget {
-  const _TrackingStatusBanner({required this.authState, required this.onOpenSettings});
+  const _TrackingStatusBanner(
+      {required this.authState, required this.onOpenSettings});
   final AuthState authState;
   final VoidCallback onOpenSettings;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final session = authState.workSession;
-    if (session == null) return const SizedBox.shrink();
-    final snapshot = ref.watch(trackingSnapshotProvider(session.id)).asData?.value;
-    final tracking = session.isActive && DateTime.now().isBefore(session.autoCloseAt)
-        && snapshot?.healthyAt(DateTime.now()) == true;
-    final issue = snapshot == null ? authState.trackingIssue : snapshot.captureIssue ?? snapshot.uploadIssue;
-    final settingsIssue = issue != null && (issue.contains('GPS') || issue.contains('permiso') || issue.contains('precisa'));
-    final label = issue ?? snapshot?.labelAt(DateTime.now()) ?? 'Comprobando el último envío de ubicación';
+    if (session == null)
+      return Material(
+        color: AppColors.warning.withValues(alpha: 0.12),
+        child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            child: Row(children: [
+              Expanded(
+                  child: Text(authState.trackingIssue ??
+                      'Preparando jornada y seguimiento...')),
+              TextButton(
+                  onPressed: () => ref
+                      .read(authNotifierProvider.notifier)
+                      .startWorkSession(),
+                  child: const Text('Iniciar jornada')),
+            ])),
+      );
+    final snapshot =
+        ref.watch(trackingSnapshotProvider(session.id)).asData?.value;
+    final tracking = session.isActive &&
+        DateTime.now().isBefore(session.autoCloseAt) &&
+        snapshot?.healthyAt(DateTime.now()) == true;
+    final issue = snapshot == null
+        ? authState.trackingIssue
+        : snapshot.captureIssue ?? snapshot.uploadIssue;
+    final settingsIssue = issue != null &&
+        (issue.contains('GPS') ||
+            issue.contains('permiso') ||
+            issue.contains('precisa'));
+    final label = issue ??
+        snapshot?.labelAt(DateTime.now()) ??
+        'Comprobando el último envío de ubicación';
     final color = tracking ? AppColors.success : AppColors.warning;
     return Container(
       width: double.infinity,
       color: color.withValues(alpha: 0.12),
-      padding: const EdgeInsets.symmetric(horizontal: AppTheme.spacingMd, vertical: AppTheme.spacingXs),
+      padding: const EdgeInsets.symmetric(
+          horizontal: AppTheme.spacingMd, vertical: AppTheme.spacingXs),
       child: Row(children: [
-        Icon(tracking ? Icons.location_on : Icons.location_off, size: 16, color: color),
+        Icon(tracking ? Icons.location_on : Icons.location_off,
+            size: 16, color: color),
         const SizedBox(width: AppTheme.spacingXs),
-        Expanded(child: Text(label, style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w600))),
-        if (settingsIssue) SizedBox(width: 112, child: TextButton(onPressed: onOpenSettings,
-          child: const Column(mainAxisSize: MainAxisSize.min, children: [Text('Abrir Ajustes')]))),
+        Expanded(
+            child: Text(label,
+                style: TextStyle(
+                    color: color, fontSize: 12, fontWeight: FontWeight.w600))),
+        if (settingsIssue)
+          SizedBox(
+              width: 112,
+              child: TextButton(
+                  onPressed: onOpenSettings,
+                  child: const Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [Text('Abrir Ajustes')]))),
       ]),
     );
   }
@@ -631,19 +707,35 @@ class _ProfileAppBarAvatar extends StatelessWidget {
   Widget build(BuildContext context) {
     final url = resolveProfileImageUrl(user?.profileImageUrl);
     final initials = _initialsFromName(user?.name ?? user?.email ?? '');
-    final child = url != null && url.isNotEmpty ? ClipOval(child: CachedNetworkImage(
-      imageUrl: url, width: 36, height: 36, fit: BoxFit.cover,
-      placeholder: (_, __) => const SizedBox(width: 36, height: 36,
-        child: Center(child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)))),
-      errorWidget: (_, __, ___) => _fallbackAvatar(initials))) : _fallbackAvatar(initials);
+    final child = url != null && url.isNotEmpty
+        ? ClipOval(
+            child: CachedNetworkImage(
+                imageUrl: url,
+                width: 36,
+                height: 36,
+                fit: BoxFit.cover,
+                placeholder: (_, __) => const SizedBox(
+                    width: 36,
+                    height: 36,
+                    child: Center(
+                        child: SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2)))),
+                errorWidget: (_, __, ___) => _fallbackAvatar(initials)))
+        : _fallbackAvatar(initials);
     return SizedBox(width: 36, height: 36, child: child);
   }
 
   Widget _fallbackAvatar(String initials) {
     final letter = initials.isNotEmpty ? initials : '?';
-    return CircleAvatar(radius: 18, backgroundColor: AppColors.primaryContainer, foregroundColor: AppColors.primaryLight,
-      child: letter.length <= 2 ? Text(letter, style: const TextStyle(fontWeight: FontWeight.w600))
-        : const Icon(Icons.person_outline, size: 22));
+    return CircleAvatar(
+        radius: 18,
+        backgroundColor: AppColors.primaryContainer,
+        foregroundColor: AppColors.primaryLight,
+        child: letter.length <= 2
+            ? Text(letter, style: const TextStyle(fontWeight: FontWeight.w600))
+            : const Icon(Icons.person_outline, size: 22));
   }
 
   static String _initialsFromName(String name) {
@@ -661,7 +753,8 @@ class _TabItem {
   final IconData icon;
   final IconData activeIcon;
   final String label;
-  const _TabItem({required this.icon, required this.activeIcon, required this.label});
+  const _TabItem(
+      {required this.icon, required this.activeIcon, required this.label});
 }
 
 class _HubStatusIndicator extends StatelessWidget {
@@ -672,9 +765,23 @@ class _HubStatusIndicator extends StatelessWidget {
   Widget build(BuildContext context) {
     final connected = status == HubConnectionStatus.connected;
     final connecting = status == HubConnectionStatus.connecting;
-    final color = connected ? AppColors.success : connecting ? AppColors.warning : AppColors.error;
-    return Tooltip(message: connected ? 'Conectado en tiempo real' : connecting ? 'Conectando...' : 'Sin conexión en tiempo real',
-      child: Padding(padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 4),
-        child: Container(width: 10, height: 10, decoration: BoxDecoration(color: color, shape: BoxShape.circle))));
+    final color = connected
+        ? AppColors.success
+        : connecting
+            ? AppColors.warning
+            : AppColors.error;
+    return Tooltip(
+        message: connected
+            ? 'Conectado en tiempo real'
+            : connecting
+                ? 'Conectando...'
+                : 'Sin conexión en tiempo real',
+        child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 4),
+            child: Container(
+                width: 10,
+                height: 10,
+                decoration:
+                    BoxDecoration(color: color, shape: BoxShape.circle))));
   }
 }

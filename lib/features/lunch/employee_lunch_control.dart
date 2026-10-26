@@ -47,7 +47,7 @@ class _EmployeeLunchGateState extends ConsumerState<EmployeeLunchGate>
     return ListenableBuilder(listenable: router.routerDelegate, builder: (context, _) {
       final personal = isPersonalLeavePath(router.routerDelegate.currentConfiguration.uri.path);
       // Los permisos personales no son trabajo operativo. El backend sigue bloqueando pedidos durante el almuerzo.
-      final blocked = !personal && (lunch.hasError || lunch.valueOrNull?.active == true || !lunch.hasValue);
+      final blocked = !personal && lunch.valueOrNull?.active == true;
       return Stack(children: [
         ExcludeFocus(excluding: blocked,
             child: IgnorePointer(ignoring: blocked, child: widget.child)),

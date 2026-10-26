@@ -1,3 +1,5 @@
+import '../../route/delivery_operations.dart';
+import '../../../core/storage/secure_storage.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/api/api_constants.dart';
 import '../../../core/api/dio_client.dart';
@@ -9,36 +11,22 @@ class CustomerRepository {
   const CustomerRepository(this._client);
 
   Future<List<Neighborhood>> getNeighborhoods() async {
-    return _client.get<List<Neighborhood>>(
-      ApiConstants.customerNeighborhoods,
-      fromJson: (data) {
-        if (data is List) {
-          return data
-              .map((e) => Neighborhood.fromJson(e as Map<String, dynamic>))
-              .toList();
-        }
-        final map = data as Map<String, dynamic>;
-        final inner = map['data'] as List<dynamic>? ??
-            map['Data'] as List<dynamic>? ??
-            [];
-        return inner
-            .map((e) => Neighborhood.fromJson(e as Map<String, dynamic>))
-            .toList();
-      },
-    );
+    final operations = DeliveryOperations(_client, SecureStorage());
+    final owner = await operations.owner();
+    List<Neighborhood> parse(dynamic data) {
+      final list = data is List ? data : (data as Map)['data'] ?? (data)['items'] ?? [];
+      return (list as List).map((value) => Neighborhood.fromJson(Map<String, dynamic>.from(value as Map))).toList();
+    }
+    final cached = await operations.outbox.cached(owner, 'neighborhoods');
+    if (cached != null) return parse(cached['items']);
+    final result = await _client.get<dynamic>(ApiConstants.customerNeighborhoods);
+    final list = parse(result);
+    await operations.outbox.cache(owner, 'neighborhoods', {'items': [for (final n in list)
+      {'id': n.id, 'name': n.name, 'branchId': n.branchId, 'deliveryFee': n.deliveryFee}]});
+    return list;
   }
 
-  /// Cuerpo camelCase; el backend valida campos requeridos en actualización completa.
-  Future<void> updateCustomerAddress({
-    required int customerId,
-    required int addressId,
-    required Map<String, dynamic> body,
-  }) async {
-    await _client.put<dynamic>(
-      ApiConstants.customerAddress(customerId, addressId),
-      data: body,
-    );
-  }
+
 }
 
 final customerRepositoryProvider = Provider<CustomerRepository>((ref) {

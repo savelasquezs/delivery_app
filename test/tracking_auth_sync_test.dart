@@ -4,6 +4,12 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:delivery_app/core/api/refresh_access_result.dart';
+import 'package:delivery_app/core/api/dio_client.dart';
+import 'package:delivery_app/core/version/delivery_app_version.dart';
+import 'package:delivery_app/features/auth/data/auth_repository.dart';
+import 'package:delivery_app/features/tracking/work_session_repository.dart';
+import 'package:package_info_plus/package_info_plus.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:delivery_app/core/auth/session_refresh.dart';
 import 'package:delivery_app/core/auth/token_session.dart';
 import 'package:delivery_app/core/storage/secure_storage.dart';
@@ -18,6 +24,7 @@ String jwt(DateTime expiry) =>
 
 class MemoryState {
   TokenSession? session;
+  String? workSessionData = 'session-a';
   Future<void> tail = Future.value();
   MemoryState(this.session);
 }
@@ -46,6 +53,13 @@ class MemoryStorage extends SecureStorage {
   Future<void> writeSession(TokenSession value) => withSessionLock((_) async {
         state.session = value;
       });
+  @override
+  Future<String?> getWorkSessionData() async => state.workSessionData;
+  @override
+  Future<void> saveWorkSessionData(String value) async =>
+      state.workSessionData = value;
+  @override
+  Future<void> deleteWorkSessionData() async => state.workSessionData = null;
   @override
   Future<void> clearAll() => withSessionLock((_) async {
         state.session = null;
@@ -98,6 +112,64 @@ void main() {
   late MemoryState state;
   late MemoryStorage storage;
   late String fresh;
+  DioClient client(FakeAdapter adapter) {
+    dotenv.testLoad(fileInput: 'API_BASE_URL=https://example.test/api');
+    final result = DioClient(
+        storage,
+        DeliveryAppVersionInfoLoader(
+            load: () async => PackageInfo(
+                appName: 'Delivery',
+                packageName: 'delivery',
+                version: '1',
+                buildNumber: '1')));
+    result.dio.httpClientAdapter = adapter;
+    return result;
+  }
+
+  test(
+      'offline remote logout still clears local credentials without refreshing',
+      () async {
+    final adapter = FakeAdapter((_) => reply(503));
+    await AuthRepository(client(adapter), storage)
+        .logout(expectedSessionId: 'login-a');
+    expect(state.session, isNull);
+    expect(adapter.calls, 1);
+  });
+  test('late logout and work-session close preserve a replacement account',
+      () async {
+    for (final logout in [true, false]) {
+      final entered = Completer<void>(), response = Completer<ResponseBody>();
+      final adapter = FakeAdapter((_) {
+        entered.complete();
+        return response.future;
+      });
+      final dio = client(adapter);
+      state.session = TokenSession(
+          id: 'login-a', accessToken: fresh, refreshToken: 'refresh-a');
+      state.workSessionData = 'session-b';
+      final request = logout
+          ? AuthRepository(dio, storage).logout(expectedSessionId: 'login-a')
+          : WorkSessionRepository(dio, storage)
+              .closeCurrent(expectedSessionId: 'login-a');
+      await entered.future;
+      state.session = TokenSession(
+          id: 'login-b', accessToken: fresh, refreshToken: 'refresh-b');
+      response.complete(reply(200));
+      await request;
+      expect(state.session!.id, 'login-b');
+      expect(state.workSessionData, 'session-b');
+    }
+  });
+  test('remote cleanup deadline cancels an unresponsive transport', () async {
+    final response = Completer<ResponseBody>();
+    final adapter = FakeAdapter((_) => response.future);
+    final watch = Stopwatch()..start();
+    await client(adapter).closeSessionResource('/auth/logout',
+        sessionId: 'login-a', timeout: const Duration(milliseconds: 30));
+    expect(watch.elapsed, lessThan(const Duration(seconds: 1)));
+    expect(adapter.calls, 1);
+    response.complete(reply(200));
+  });
   setUp(() {
     clock = DateTime.now().toUtc();
     fresh = jwt(clock.add(const Duration(hours: 2)));

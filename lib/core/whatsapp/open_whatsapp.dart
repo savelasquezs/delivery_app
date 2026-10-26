@@ -37,3 +37,14 @@ Future<bool> openWhatsAppChat(String phone, {String? message}) async {
     return false;
   }
 }
+
+Future<bool> openPhoneCall(String raw) async {
+  final phone = raw.replaceAll(RegExp(r'[^0-9+]'), '');
+  if (phone.isEmpty) return false;
+  try {
+    return await launchUrl(Uri(scheme: 'tel', path: phone),
+        mode: LaunchMode.externalApplication);
+  } catch (_) {
+    return false;
+  }
+}

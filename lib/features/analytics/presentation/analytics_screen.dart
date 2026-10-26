@@ -336,7 +336,7 @@ class _KpiGrid extends StatelessWidget {
         value: _money.format(totalFeesRecaudo),
         color: AppColors.hint,
       ),
-      if (avgDeliveryMinutes != null)
+      if (avgDeliveryMinutes != null && avgDeliveryMinutes! > 0)
         _KpiData(
           icon: Icons.timer_outlined,
           label: 'Tiempo prom. entrega',

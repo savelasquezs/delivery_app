@@ -38,20 +38,25 @@ class SecureStorage {
         (lease) => body(SecureStorage._locked(_storage, _mutex, lease)));
   }
 
-  Future<TokenSession?> readSession() => withSessionLock((store) async {
-        final value = await _storage.read(key: _kTokenSession);
-        if (value != null) {
-          return TokenSession.fromJson(
-              Map<String, dynamic>.from(jsonDecode(value) as Map));
-        }
-        final access = await _storage.read(key: _kAuthToken);
-        final refresh = await _storage.read(key: _kRefreshToken);
-        if (access == null || refresh == null) return null;
-        final session = TokenSession(
-            id: const Uuid().v4(), accessToken: access, refreshToken: refresh);
-        await store.writeSession(session);
-        return session;
-      });
+  // The v2 pair is one atomic encrypted value; readers need not wait for HTTP refresh.
+  // Legacy migration and every credential write still share the session lease.
+  Future<TokenSession?> readSession() async {
+    if (_lease != null) await _lease!.ensureOwned();
+    final value = await _storage.read(key: _kTokenSession);
+    if (value != null) {
+      return TokenSession.fromJson(
+          Map<String, dynamic>.from(jsonDecode(value) as Map));
+    }
+    if (_lease == null)
+      return withSessionLock((locked) => locked.readSession());
+    final access = await _storage.read(key: _kAuthToken);
+    final refresh = await _storage.read(key: _kRefreshToken);
+    if (access == null || refresh == null) return null;
+    final session = TokenSession(
+        id: const Uuid().v4(), accessToken: access, refreshToken: refresh);
+    await writeSession(session);
+    return session;
+  }
 
   Future<String?> getAuthToken() async => (await readSession())?.accessToken;
   Future<String?> getRefreshToken() async =>
@@ -100,6 +105,18 @@ class SecureStorage {
 
   Future<void> saveWorkSessionData(String jsonData) =>
       _storage.write(key: _kWorkSessionData, value: jsonData);
+
+  Future<bool> updateWorkSessionData(
+          String? jsonData, String expectedSessionId) =>
+      withSessionLock((store) async {
+        if ((await store.readSession())?.id != expectedSessionId) return false;
+        if (jsonData == null) {
+          await store.deleteWorkSessionData();
+        } else {
+          await store.saveWorkSessionData(jsonData);
+        }
+        return true;
+      });
 
   Future<void> deleteWorkSessionData() =>
       _storage.delete(key: _kWorkSessionData);

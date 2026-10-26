@@ -42,6 +42,40 @@ void main() {
   });
   tearDown(() => db.close());
 
+  test('operational actions survive reopen and are isolated by owner', () async {
+    final payload = {'operationId': 'intent-a', 'kind': 'deliver', 'orderId': 12};
+    await store.enqueueOperation('tenant:driver-a', payload, {'id': 12});
+    final reopened = TrackingOutbox(open: () async => db);
+    expect(await reopened.operations('tenant:driver-b'), isEmpty);
+    expect((await reopened.operations('tenant:driver-a')).single['payload'], jsonEncode(payload));
+    await reopened.enqueueOperation('tenant:driver-a', payload, {'id': 12});
+    expect(await reopened.operations('tenant:driver-a'), hasLength(1));
+  });
+
+  test('only one isolate leases a command and ambiguous results remain recoverable', () async {
+    await store.enqueueOperation('owner', {'operationId': 'intent', 'kind': 'address'}, {});
+    final leases = await Future.wait([store.claimOperation('owner', 'intent', 1000), store.claimOperation('owner', 'intent', 1000)]);
+    expect(leases.where((value) => value), hasLength(1));
+    expect(await store.claimOperation('owner', 'intent', 121001), isTrue);
+    await store.finishOperation('owner', 'intent', conflict: 'La dirección cambió');
+    expect(await store.claimOperation('owner', 'intent', 999999), isFalse);
+    expect((await store.operations('owner')).single['reason'], 'La dirección cambió');
+  });
+
+  test('context snapshots never go backwards and a conflict needs explicit discard', () async {
+    await store.cache('owner', 'route', {'revision': 9, 'routeId': null});
+    await store.cache('owner', 'route', {'revision': 8, 'routeId': 7});
+    expect((await store.cached('owner', 'route'))!['routeId'], isNull);
+    await store.enqueueOperation('owner', {'operationId': 'uncertain'}, {});
+    await store.discardOperationConflict('owner', 'uncertain');
+    expect(await store.operations('owner'), hasLength(1));
+    await store.finishOperation('owner', 'uncertain', conflict: 'Conflicto');
+    await store.discardOperationConflict('other-owner', 'uncertain');
+    expect(await store.operations('owner'), hasLength(1));
+    await store.discardOperationConflict('owner', 'uncertain');
+    expect(await store.operations('owner'), isEmpty);
+  });
+
   test('ACK removes one row without overwriting concurrent captured points',
       () async {
     await store.enqueue(context(), 'location', point('a'));

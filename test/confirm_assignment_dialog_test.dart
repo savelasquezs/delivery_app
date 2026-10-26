@@ -1,3 +1,5 @@
+import 'package:delivery_app/features/orders/models/order_models.dart';
+import 'package:delivery_app/features/route/helpers/delivery_actions.dart';
 import 'dart:async';
 
 import 'package:delivery_app/core/widgets/confirm_assignment_dialog.dart';
@@ -74,4 +76,27 @@ void main() {
     expect(find.text('Pedido ya asignado'), findsOneWidget);
     expect(find.text('Confirmar'), findsOneWidget);
   });
+  testWidgets('delivery needs confirmation and durable save before showing success', (tester) async {
+    final storage = Completer<void>();
+    var writes = 0;
+    bool? result;
+    final order = Order.fromJson({'id': 42, 'createdAt': '2026-10-25T12:00:00Z'});
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: Builder(builder: (context) =>
+      TextButton(child: const Text('Entregar'), onPressed: () async {
+        result = await confirmDelivery(context, order, () { writes++; return storage.future; });
+      })))));
+    await tester.tap(find.text('Entregar')); await tester.pumpAndSettle();
+    await tester.tap(find.text('Cancelar')); await tester.pumpAndSettle();
+    expect(writes, 0);
+    await tester.tap(find.text('Entregar')); await tester.pumpAndSettle();
+    await tester.tap(find.text('Confirmar')); await tester.pumpAndSettle();
+    expect(writes, 1); expect(result, false);
+    expect(find.text('Entrega registrada, pendiente de sincronizar'), findsNothing);
+    storage.completeError(StateError('Storage unavailable'));
+    await tester.pumpAndSettle();
+    expect(result, false);
+    expect(find.text('Entrega registrada, pendiente de sincronizar'), findsNothing);
+    expect(find.text('Entregar'), findsOneWidget);
+  });
+
 }

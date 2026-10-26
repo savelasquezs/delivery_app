@@ -56,8 +56,6 @@ abstract class ApiConstants {
       '/orders/delivery/assigned/$deliverymanId';
   static String deliveryAssignedBranchSummary(int deliverymanId) =>
       '/orders/delivery/assigned/$deliverymanId/branch-summary';
-  static String confirmRouteReturn(int routeId) =>
-      '/deliverymen/routes/$routeId/confirm-return-deliveries';
   static String deliveryAssignedNeighborhoods(int deliverymanId) =>
       '/orders/delivery/assigned/$deliverymanId/neighborhoods';
   static String orderStatus(int orderId) => '/orders/$orderId/status';
@@ -65,8 +63,6 @@ abstract class ApiConstants {
 
   // Customers (direcciones — mismo contrato que el front web)
   static const String customerNeighborhoods = '/customers/neighborhoods';
-  static String customerAddress(int customerId, int addressId) =>
-      '/customers/$customerId/addresses/$addressId';
 
   // Deliveryman
   static const String myDayState = '/deliverymen/me/day-state';

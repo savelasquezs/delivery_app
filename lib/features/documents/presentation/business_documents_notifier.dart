@@ -49,6 +49,7 @@ class BusinessDocumentsState {
 }
 
 class BusinessDocumentsNotifier extends StateNotifier<BusinessDocumentsState> {
+  int _generation = 0;
   final BusinessDocumentRepository _repository;
 
   BusinessDocumentsNotifier(this._repository)
@@ -56,19 +57,18 @@ class BusinessDocumentsNotifier extends StateNotifier<BusinessDocumentsState> {
 
   Future<void> load({String? search}) async {
     if (!mounted) return;
+    final generation = ++_generation;
     final normalizedSearch = search?.trim() ?? state.search;
     state = state.copyWith(
-      documents: const [],
-      totalCount: 0,
       currentPage: 1,
-      hasMore: false,
+      isLoadingMore: false,
       isLoading: true,
       search: normalizedSearch,
       clearError: true,
     );
     try {
       final result = await _repository.getDocuments(search: normalizedSearch);
-      if (!mounted) return;
+      if (!mounted || generation != _generation) return;
       state = state.copyWith(
         documents: result.items,
         totalCount: result.totalCount,
@@ -77,7 +77,7 @@ class BusinessDocumentsNotifier extends StateNotifier<BusinessDocumentsState> {
         isLoading: false,
       );
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || generation != _generation) return;
       state = state.copyWith(
         isLoading: false,
         error: userFacingErrorMessage(
@@ -90,13 +90,14 @@ class BusinessDocumentsNotifier extends StateNotifier<BusinessDocumentsState> {
 
   Future<void> loadMore() async {
     if (!mounted || !state.hasMore || state.isLoadingMore) return;
+    final generation = _generation;
     state = state.copyWith(isLoadingMore: true, clearError: true);
     try {
       final result = await _repository.getDocuments(
         search: state.search,
         page: state.currentPage + 1,
       );
-      if (!mounted) return;
+      if (!mounted || generation != _generation) return;
       state = state.copyWith(
         documents: [...state.documents, ...result.items],
         totalCount: result.totalCount,
@@ -105,7 +106,7 @@ class BusinessDocumentsNotifier extends StateNotifier<BusinessDocumentsState> {
         isLoadingMore: false,
       );
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || generation != _generation) return;
       state = state.copyWith(
         isLoadingMore: false,
         error: userFacingErrorMessage(

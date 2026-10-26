@@ -36,7 +36,7 @@ class _FailedLoginRepository extends AuthRepository {
       );
 
   @override
-  Future<bool> hasValidSession() async => false;
+  Future<AuthUser?> getAuthenticatedUser() async => null;
 
   @override
   Future<AuthUser> login(LoginRequest request) async =>
