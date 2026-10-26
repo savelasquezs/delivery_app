@@ -46,6 +46,9 @@ void main() {
       final restored = (await storage.readSession())!;
       expect(restored.id, original.id);
       expect(restored.refreshToken, 'test-only-refresh');
+      final coordinated =
+          await storage.withSessionLock((locked) => locked.readSession());
+      expect(coordinated!.id, original.id);
       final timeout = await db.rawQuery('PRAGMA busy_timeout');
       expect(timeout.single.values.single, 1000);
     } finally {
@@ -63,7 +66,8 @@ void main() {
     final path = '${await getDatabasesPath()}/hotfix_outbox_probe.db';
     Database db = await openDatabase(path, singleInstance: false);
     final at = DateTime.fromMillisecondsSinceEpoch(
-        DateTime.now().millisecondsSinceEpoch, isUtc: true);
+        DateTime.now().millisecondsSinceEpoch,
+        isUtc: true);
     final context = TrackingContext(
       authSessionId: 'test-only-session',
       ownerKey: 'test-only-owner',
@@ -102,7 +106,8 @@ void main() {
   });
   testWidgets('Android resumes a bounded 120-point migration without loss',
       (tester) async {
-    final path = '${await getDatabasesPath()}/tracking_batch_migration_probe.db';
+    final path =
+        '${await getDatabasesPath()}/tracking_batch_migration_probe.db';
     Database db = await openDatabase(path, singleInstance: false);
     final at = DateTime.now().toUtc();
     final context = TrackingContext(
@@ -125,29 +130,35 @@ void main() {
     try {
       var store = TrackingOutbox(open: () async => db);
       await store.activate(context);
-      expect(await store.importLegacyBatch(
-          'old-history', legacy, 'location', context, batchSize: 25), false);
-      expect((await db.query('tracking_import_cursor')).single['next_index'],
-          25);
+      expect(
+          await store.importLegacyBatch(
+              'old-history', legacy, 'location', context,
+              batchSize: 25),
+          false);
+      expect(
+          (await db.query('tracking_import_cursor')).single['next_index'], 25);
       await db.close();
       db = await openDatabase(path, singleInstance: false);
       store = TrackingOutbox(open: () async => db);
       var finished = false;
       for (var i = 0; i < 10 && !finished; i++) {
         finished = await store.importLegacyBatch(
-            'old-history', legacy, 'location', context, batchSize: 25);
+            'old-history', legacy, 'location', context,
+            batchSize: 25);
       }
       expect(finished, isTrue);
       expect((await db.query('tracking_outbox')).length, 120);
       expect((await db.query('tracking_import_cursor')), isEmpty);
       expect((await db.query('tracking_import')), hasLength(1));
-      expect(await store.importLegacyBatch(
-          'old-history', legacy, 'location', context, batchSize: 25), true);
+      expect(
+          await store.importLegacyBatch(
+              'old-history', legacy, 'location', context,
+              batchSize: 25),
+          true);
       expect((await db.query('tracking_outbox')).length, 120);
     } finally {
       if (db.isOpen) await db.close();
       await deleteDatabase(path);
     }
   });
-
 }
