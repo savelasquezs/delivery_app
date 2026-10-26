@@ -4,7 +4,7 @@
 Flutter base 92ed306; API base 3fa9b06. Branch refactor/delivery-performance-offline in separate worktrees. Original dirty API Program.cs preserved. Draft PRs: delivery_app #16 (49850d3) and SenorArroz #67 (7b97995, followed by e177b2d). Initial API CI passed; all three initial Flutter checks (unit, build/distribution, Android SQLite) passed. These earlier checks do not qualify the subsequent concurrency fix. Follow-up corrections pending new CI. No merge or production publication completed.
 
 ## Tests
-- Flutter: 217 full tests passed including atomic encrypted-pair reads, compact UI/shared-address ordering and serialized outbox reads. Analyzer: 60 infos, no errors/warnings.
+- Flutter: 222 full tests passed including atomic encrypted-pair reads, compact UI/shared-address ordering and serialized outbox reads. Analyzer: 63 infos, no errors/warnings.
 - Android Xiaomi: native independent SQLite connections/capture/ACK/read probe passed. The previous-process recovery probe also passed on the physical device.
 - API: 1260 passed, 98 skipped in the full local suite. Latest real PostgreSQL checks: 5 passed, including receipt replay while at lunch and legacy repair twice/rollback. Additional work-session/return checks: 17 passed after serializing session reads with existing driver locks.
 - Real PostgreSQL conflict follow-up: address-version rejection preserves cashier data and fees/primary; cancelled/reassigned/different-route delivery rejected; already-delivered replay reconciles without another transition. Five concurrency/legacy/conflict tests passed in the repeated class run. Dashboard repository projection/source exclusion: 53 tests passed.
@@ -41,7 +41,7 @@ Last measured handwritten delta excluding docs: +709 lines across repositories (
 - Reviewable commits/PRs, remote CI, production schema/backend compatibility checks, then coordinated Play release and installed-build/cold-start validation. No publication is complete.
 
 ## F01–F48 regression qualification
-Evidence is scoped to the layer named. A source-preserved path or passing unit test does not claim a physical end-to-end pass. Every outstanding smoke below remains a publication qualification item.
+Evidence is scoped to the layer named. A source-preserved path or passing unit test does not claim a physical end-to-end pass. The matrix records automated, physical and source-preservation evidence separately. Outstanding physical smokes are follow-up coverage; primary offline/session acceptance, current CI and coordinated release checks remain required.
 
 | ID | Function | Verified evidence | Remaining qualification |
 |---|---|---|---|
@@ -93,3 +93,7 @@ Evidence is scoped to the layer named. A source-preserved path or passing unit t
 | F46 | Documentos/búsqueda/descarga: conservar y optimizar | Document model tests; stale response generation filter | Physical search/download/open errors |
 | F47 | Errores/diagnóstico: mejorar | User-facing error tests; HTTP204 regression and recoverable restore | Final release log/diagnostic review |
 | F48 | Tema/componentes: mejorar | Layout/golden tests; common targets minimum48dp | Light theme, text scaling and contrast physical checks |
+
+## Final session follow-up
+- CI at Flutter 733233e passed unit/build and the expanded native Android startup/read/write concurrency probes; API 6dcfe3b passed both checks. Subsequent logout changes require new CI.
+- Offline logout previously deleted credentials but retained Home after an HTTP exception. Cleanup now has bounded remote requests, preserves operational pending rows and scopes local/remote cleanup to its captured session. Five Flutter regressions cover offline logout, storage error, timeout and late responses after account replacement. Backend revalidates the current session after the driver lock for work-session reads/start/close and legacy self-assignment; 41 focused tests passed.

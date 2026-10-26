@@ -16,6 +16,7 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 const _driver = AuthUser(
   id: 9,
@@ -65,7 +66,8 @@ class _SessionStore extends SecureStorage {
   Future<TokenSession?> readSession() async => const TokenSession(
       id: 'current-login', accessToken: 'token', refreshToken: 'refresh');
   @override
-  Future<bool> updateWorkSessionData(String? value, String expectedSessionId) async {
+  Future<bool> updateWorkSessionData(
+      String? value, String expectedSessionId) async {
     expect(expectedSessionId, 'current-login');
     cached = value;
     return true;
@@ -101,6 +103,29 @@ class _WorkRepo extends WorkSessionRepository {
   Future<DeliveryWorkSession?> current() async => session;
   @override
   Future<void> clearLocal() async {}
+}
+
+class _LogoutRepo extends _AuthRepo {
+  _LogoutRepo(super.client, super.storage);
+  int attempts = 0;
+  @override
+  Future<String?> getStoredSessionId() async => 'login-a';
+  @override
+  Future<void> logout({String? expectedSessionId}) async {
+    attempts++;
+    throw DioException(
+        requestOptions: RequestOptions(path: '/auth/logout'),
+        type: DioExceptionType.connectionError);
+  }
+}
+
+class _LogoutWorkRepo extends _WorkRepo {
+  final bool fail;
+  _LogoutWorkRepo(super.client, super.storage, this.fail);
+  @override
+  Future<void> closeCurrent({String? expectedSessionId}) async {
+    if (fail) throw StateError('No se pudieron guardar los datos locales.');
+  }
 }
 
 class _DelayedVersionRepo extends _AuthRepo {
@@ -141,27 +166,82 @@ void main() {
                 )),
       );
 
-  test('absent work session accepts the empty HTTP 204 body and clears stale cache', () async {
+  for (final storageFailure in [false, true]) {
+    test(
+        'logout leaves Home after offline error; storage failure=$storageFailure remains visible',
+        () async {
+      SharedPreferences.setMockInitialValues({});
+      final dio = client();
+      final repository = _LogoutRepo(dio, SecureStorage());
+      final notifier = AuthNotifier(repository,
+          _LogoutWorkRepo(dio, SecureStorage(), storageFailure), dio,
+          permissionReader: () async => const LocationPermissionState(
+              serviceEnabled: true,
+              permission: LocationPermission.always,
+              accuracy: LocationAccuracyStatus.precise),
+          registerFcm: () async {},
+          isTrackingRunning: () async => true,
+          trackingStarter: (
+              {required authToken,
+              required baseUrl,
+              required workSession,
+              required versionName,
+              required buildNumber,
+              required packageName}) async {},
+          trackingStopper: (
+              {required recordEvent, required discardPending}) async {
+            expect(discardPending, isFalse);
+          });
+      addTearDown(notifier.dispose);
+      await _waitFor(() => notifier.state.trackingActive);
+      await notifier.logout();
+      expect(repository.attempts, 1);
+      expect(notifier.state.status,
+          storageFailure ? AuthStatus.error : AuthStatus.unauthenticated);
+      if (storageFailure)
+        expect(notifier.state.errorMessage, contains('datos locales'));
+    });
+  }
+  test(
+      'absent work session accepts the empty HTTP 204 body and clears stale cache',
+      () async {
     final storage = _SessionStore();
-    final dio = DioClient(storage, DeliveryAppVersionInfoLoader(load: () async =>
-        PackageInfo(appName: 'Delivery', packageName: 'delivery', version: '1', buildNumber: '1')));
-    dio.dio.interceptors.add(InterceptorsWrapper(onRequest: (options, handler) =>
-        handler.resolve(Response(requestOptions: options, statusCode: 204, data: ''))));
+    final dio = DioClient(
+        storage,
+        DeliveryAppVersionInfoLoader(
+            load: () async => PackageInfo(
+                appName: 'Delivery',
+                packageName: 'delivery',
+                version: '1',
+                buildNumber: '1')));
+    dio.dio.interceptors.add(InterceptorsWrapper(
+        onRequest: (options, handler) => handler.resolve(
+            Response(requestOptions: options, statusCode: 204, data: ''))));
     expect(await WorkSessionRepository(dio, storage).current(), isNull);
     expect(storage.cached, isNull);
   });
 
-  test('version HTTP does not block restore or preparation and still enforces an update', () async {
+  test(
+      'version HTTP does not block restore or preparation and still enforces an update',
+      () async {
     final dio = client();
     final repository = _DelayedVersionRepo(dio, SecureStorage());
-    final notifier = AuthNotifier(repository, _WorkRepo(dio, SecureStorage()), dio,
-      onUpdateRequiredCleanup: () async {}, registerFcm: () async {},
-      permissionReader: () async => const LocationPermissionState(
-        serviceEnabled: true, permission: LocationPermission.always,
-        accuracy: LocationAccuracyStatus.precise),
-      isTrackingRunning: () async => true,
-      trackingStarter: ({required authToken, required baseUrl, required workSession,
-        required versionName, required buildNumber, required packageName}) async {});
+    final notifier = AuthNotifier(
+        repository, _WorkRepo(dio, SecureStorage()), dio,
+        onUpdateRequiredCleanup: () async {},
+        registerFcm: () async {},
+        permissionReader: () async => const LocationPermissionState(
+            serviceEnabled: true,
+            permission: LocationPermission.always,
+            accuracy: LocationAccuracyStatus.precise),
+        isTrackingRunning: () async => true,
+        trackingStarter: (
+            {required authToken,
+            required baseUrl,
+            required workSession,
+            required versionName,
+            required buildNumber,
+            required packageName}) async {});
     addTearDown(notifier.dispose);
     await _waitFor(() => notifier.state.status == AuthStatus.authenticated);
     await _waitFor(() => repository.checks == 1);
@@ -170,8 +250,10 @@ void main() {
     expect(await notifier.canBeginDelivery(), isTrue);
     expect(repository.clears, 0);
     repository.first.complete(const DeliveryAppVersionPolicy(
-      requiredVersion: '99.0.0', minimumBuild: 999,
-      playStoreUrl: 'https://example.invalid/play', updateRequired: true));
+        requiredVersion: '99.0.0',
+        minimumBuild: 999,
+        playStoreUrl: 'https://example.invalid/play',
+        updateRequired: true));
     await _waitFor(() => notifier.state.status == AuthStatus.updateRequired);
     expect(repository.clears, 1);
   });

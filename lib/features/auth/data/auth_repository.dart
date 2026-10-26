@@ -117,18 +117,28 @@ class AuthRepository {
     }
   }
 
-  Future<void> logout() async {
-    final refreshToken = await _storage.getRefreshToken();
+  Future<String?> getStoredSessionId() async =>
+      (await _storage.readSession())?.id;
+
+  Future<void> logout({String? expectedSessionId}) async {
+    final session = await _storage.readSession();
+    if (expectedSessionId != null && session?.id != expectedSessionId) {
+      return;
+    }
     try {
-      if (refreshToken != null && refreshToken.isNotEmpty) {
-        await _client.post<void>(
+      if (session != null) {
+        await _client.closeSessionResource(
           ApiConstants.logout,
-          data: {'refreshToken': refreshToken},
-          fromJson: (_) {},
+          sessionId: session.id,
+          data: {'refreshToken': session.refreshToken},
         );
       }
     } finally {
-      await _storage.clearAll();
+      await _storage.withSessionLock((locked) async {
+        if ((await locked.readSession())?.id == session?.id) {
+          await locked.clearAll();
+        }
+      });
     }
   }
 

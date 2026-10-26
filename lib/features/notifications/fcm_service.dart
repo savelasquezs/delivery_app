@@ -234,16 +234,16 @@ class FcmService {
       debugPrint('FCM: token registrado en backend');
     } catch (e) { debugPrint('FCM: error registrando token: $e'); }
   }
-  static Future<void> unregisterToken(DioClient client) async {
+  static Future<void> unregisterToken(DioClient client, {String? expectedSessionId}) async {
     if (kIsWeb) return;
-    final token = await getToken();
-    if (token != null) {
-      try { await client.delete<void>(ApiConstants.myDeviceToken, data: {'token': token}); debugPrint('FCM: token eliminado del backend'); }
-      catch (e) { debugPrint('FCM: error eliminando token: $e'); }
-    }
-    _authenticatedClient = null;
-    await _tokenRefreshSubscription?.cancel(); _tokenRefreshSubscription = null;
+    final subscription = _tokenRefreshSubscription;
+    _tokenRefreshSubscription = null; _authenticatedClient = null;
+    await subscription?.cancel();
+    final token = await getToken().timeout(const Duration(seconds: 2), onTimeout: () => null);
+    if (token != null) await client.closeSessionResource(ApiConstants.myDeviceToken,
+      method: 'DELETE', sessionId: expectedSessionId, data: {'token': token});
   }
+
   static void _showForegroundNotification(RemoteMessage message) {
     debugPrint('FCM onMessage: messageId=${message.messageId} dataKeys=${message.data.keys.join(",")}');
     EmployeeLeaveNotices.receive(message.data);

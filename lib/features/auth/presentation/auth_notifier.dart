@@ -96,12 +96,18 @@ typedef TrackingStartRunner = Future<void> Function({
   required String packageName,
 });
 
+typedef TrackingStopRunner = Future<void> Function({
+  required bool recordEvent,
+  required bool discardPending,
+});
+
 class AuthNotifier extends StateNotifier<AuthState> {
   final AuthRepository _repository;
   final WorkSessionRepository _workSessions;
   final DioClient _client;
   final Future<void> Function()? _onUpdateRequiredCleanup;
   final TrackingStartRunner _trackingStarter;
+  final TrackingStopRunner _trackingStopper;
   final Future<bool> Function() _isTrackingRunning;
   final Future<LocationPermissionState> Function() _permissionReader;
   final Future<void> Function()? _registerFcm;
@@ -121,11 +127,13 @@ class AuthNotifier extends StateNotifier<AuthState> {
     this._client, {
     Future<void> Function()? onUpdateRequiredCleanup,
     TrackingStartRunner? trackingStarter,
+    TrackingStopRunner? trackingStopper,
     Future<bool> Function()? isTrackingRunning,
     Future<LocationPermissionState> Function()? permissionReader,
     Future<void> Function()? registerFcm,
     this.sessionRestoreTimeout = const Duration(seconds: 30),
   })  : _onUpdateRequiredCleanup = onUpdateRequiredCleanup,
+        _trackingStopper = trackingStopper ?? LocationTrackingService.stopTracking,
         _trackingStarter =
             trackingStarter ?? LocationTrackingService.startTracking,
         _isTrackingRunning =
@@ -437,7 +445,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
           stored.isActive &&
           DateTime.now().toUtc().isBefore(stored.autoCloseAt);
       if (!isTransientSessionFailure(error) || !active) {
-        await LocationTrackingService.stopTracking(recordEvent: false);
+        await _trackingStopper(recordEvent: false, discardPending: false);
       }
       if (!_currentAuthAttempt(generation)) return;
       state = AuthState(
@@ -521,8 +529,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
         ? await _workSessions.startOrResume()
         : await _workSessions.current();
     if (session == null) {
-      await LocationTrackingService.stopTracking(
-          recordEvent: false, discardPending: false);
+      await _trackingStopper(recordEvent: false, discardPending: false);
       return const _TrackingReconciliation(
           session: null, issue: 'No hay una jornada activa.');
     }
@@ -584,21 +591,44 @@ class AuthNotifier extends StateNotifier<AuthState> {
   }
 
   Future<void> logout() async {
-    _authGeneration++;
+    final generation = ++_authGeneration;
     _trackingRetryTimer?.cancel();
     _queuedTrackingSession = null;
-    await LocationTrackingService.stopTracking(discardPending: false);
-    await FcmService.clearTrackingReviewNotices();
+    state = const AuthState(status: AuthStatus.loading);
+    String? issue;
+    String? sessionId;
     try {
-      await FcmService.unregisterToken(_client);
-    } catch (_) {}
-    try {
-      await _workSessions.closeCurrent();
-    } catch (_) {
-      await _workSessions.clearLocal();
+      sessionId = await _repository.getStoredSessionId();
+    } catch (error) {
+      if (_currentAuthAttempt(generation)) {
+        await _endLocalSession(errorMessage: userFacingErrorMessage(error));
+      }
+      return;
     }
-    await _repository.logout();
-    state = const AuthState(status: AuthStatus.unauthenticated);
+    for (final cleanup in <Future<void> Function()>[
+      () => _trackingStopper(recordEvent: true, discardPending: false),
+      FcmService.clearTrackingReviewNotices,
+      () => FcmService.unregisterToken(_client, expectedSessionId: sessionId),
+      () => _workSessions.closeCurrent(expectedSessionId: sessionId),
+      () => _repository.logout(expectedSessionId: sessionId),
+    ]) {
+      if (!_currentAuthAttempt(generation)) {
+        return;
+      }
+      try {
+        await cleanup();
+      } on DioException {
+        continue;
+      } catch (error) {
+        issue ??= userFacingErrorMessage(error);
+      }
+    }
+    if (_currentAuthAttempt(generation)) {
+      state = AuthState(
+        status: issue == null ? AuthStatus.unauthenticated : AuthStatus.error,
+        errorMessage: issue,
+      );
+    }
   }
 
   Future<void> _endLocalSession({String? errorMessage}) async {
@@ -609,8 +639,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
     // Failure in one local plugin must not skip credential cleanup or
     // leave login stuck in AuthStatus.loading. Pending GPS data remains.
     for (final cleanup in <Future<void> Function()>[
-      () => LocationTrackingService.stopTracking(
-          recordEvent: false, discardPending: false),
+      () => _trackingStopper(recordEvent: false, discardPending: false),
       FcmService.clearTrackingReviewNotices,
       _workSessions.clearLocal,
       _repository.clearLocalSession,
@@ -639,10 +668,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
       await _onUpdateRequiredCleanup!();
     } else {
       try {
-        await LocationTrackingService.stopTracking(
-          recordEvent: false,
-          discardPending: false,
-        );
+        await _trackingStopper(recordEvent: false, discardPending: false);
       } catch (_) {}
       try {
         await FcmService.clearTrackingReviewNotices();

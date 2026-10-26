@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../auth/auth_session_bridge.dart';
@@ -123,7 +124,8 @@ class DioClient {
           error: ApiException(reason, statusCode: 401)));
     }
 
-    if (_isAuthPath(err.requestOptions)) {
+    if (_isAuthPath(err.requestOptions) ||
+        err.requestOptions.extra['_skipRefresh'] == true) {
       return handler.next(DioException(
           requestOptions: err.requestOptions,
           response: err.response,
@@ -253,6 +255,42 @@ class DioClient {
           'No pudimos conectarnos. Revisa tu conexión a internet e inténtalo de nuevo.');
     }
     return const ApiException('Sin conexión a internet');
+  }
+
+  Future<void> closeSessionResource(
+    String path, {
+    required String? sessionId,
+    String method = 'POST',
+    dynamic data,
+    Duration timeout = const Duration(seconds: 3),
+  }) async {
+    if (sessionId == null) {
+      return;
+    }
+    final cancel = CancelToken();
+    try {
+      await _dio
+          .request<dynamic>(
+        path,
+        data: data,
+        cancelToken: cancel,
+        options: Options(
+          method: method,
+          extra: {'_sessionId': sessionId, '_skipRefresh': true},
+        ),
+      )
+          .timeout(
+        timeout,
+        onTimeout: () {
+          cancel.cancel();
+          throw TimeoutException('Sign-out deadline');
+        },
+      );
+    } on DioException {
+      return;
+    } on TimeoutException {
+      return;
+    }
   }
 
   Future<T> get<T>(String path,
