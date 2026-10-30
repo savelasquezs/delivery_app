@@ -1,4 +1,5 @@
 import '../../route/delivery_operations.dart';
+import 'package:dio/dio.dart';
 import '../../../core/storage/secure_storage.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/api/api_constants.dart';
@@ -17,13 +18,14 @@ class OrderRepository {
     PrintJobRequestCoordinator? printCoordinator,
   }) : _printCoordinator = printCoordinator ?? PrintJobRequestCoordinator();
 
-  Future<List<Order>> getAvailableOrders({int? branchId}) async {
+  Future<List<Order>> getAvailableOrders({int? branchId, CancelToken? cancelToken}) async {
     final params = <String, dynamic>{};
     if (branchId != null) params['branchId'] = branchId;
 
     return _client.get<List<Order>>(
       ApiConstants.deliveryAvailable,
       queryParameters: params.isEmpty ? null : params,
+      cancelToken: cancelToken,
       fromJson: _parseOrderList,
     );
   }

@@ -75,6 +75,7 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
   final double? _branchLongitude;
   final int _allowedDistanceMeters;
   Future<void>? _availableLoadInFlight;
+  CancelToken? _availableRequest;
   Future<void>? _preparationLoadInFlight;
   Future<void>? _routingLoadInFlight;
   int _ordersRevision = 0;
@@ -101,6 +102,7 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
 
   @override
   void dispose() {
+    _availableRequest?.cancel('Vista de disponibles cerrada');
     _planExpiry?.cancel();
     _routingRetry?.cancel();
     super.dispose();
@@ -133,9 +135,12 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
   Future<void> _load({int? branchId, required bool silently}) async {
     final revision = _ordersRevision;
     if (!mounted) return;
+    final request = CancelToken();
+    _availableRequest = request;
     if (!silently) state = state.copyWith(isLoading: true, clearError: true);
     try {
-      final orders = await _repository.getAvailableOrders(branchId: branchId);
+      final orders = await _repository.getAvailableOrders(
+          branchId: branchId, cancelToken: request);
       if (!mounted) return;
       if (revision != _ordersRevision || _reloadAvailableAfterInFlight) {
         _reloadAvailableAfterInFlight = true;
@@ -150,11 +155,16 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
             clearError: true);
       }
     } catch (error) {
-      if (!mounted || silently) return;
+      if (!mounted || request.isCancelled) return;
+      // Silent refreshes preserve the prior list, but a first visible load
+      // must not remain stuck showing its loading indicator on a retry error.
+      if (silently && !state.isLoading) return;
       state = state.copyWith(
           isLoading: false,
           error: userFacingErrorMessage(error,
               fallback: 'No pudimos cargar los pedidos disponibles.'));
+    } finally {
+      if (identical(_availableRequest, request)) _availableRequest = null;
     }
   }
 
@@ -423,6 +433,7 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
 
   Future<void> refreshReadyOrders() async {
     _ordersRevision++;
+    _cancelObsoleteAvailableRequest();
     invalidateRouting('Cambió la disponibilidad de los pedidos.');
     await Future.wait([
       load(silently: true, ensureFresh: true),
@@ -430,11 +441,20 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
     ]);
   }
 
+  void _cancelObsoleteAvailableRequest() {
+    if (_availableLoadInFlight == null) return;
+    // An in-flight GET is no longer authoritative. Coalesce refresh events
+    // into the already-existing second pass, instead of starting parallel GETs.
+    _reloadAvailableAfterInFlight = true;
+    _availableRequest?.cancel('Cambió la disponibilidad de los pedidos');
+  }
+
   void removeOrders(Iterable<int> orderIds) {
     if (!mounted) return;
     final ids = orderIds.toSet();
     if (ids.isEmpty) return;
     _ordersRevision++;
+    _cancelObsoleteAvailableRequest();
     if (_routingLoadInFlight != null ||
         ids.any((id) => state.routingPlan?.containsOrder(id) ?? false)) {
       invalidateRouting('Un pedido dejó de estar disponible.',

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'package:dio/dio.dart';
 import 'package:flutter/services.dart';
 import 'package:delivery_app/core/theme/app_theme.dart';
 import 'package:delivery_app/features/available/data/branch_presence_verifier.dart';
@@ -63,7 +64,7 @@ class _Orders extends Fake implements OrderRepository {
   List<int>? accepted;
   String? fingerprint;
   @override
-  Future<List<Order>> getAvailableOrders({int? branchId}) async => [
+  Future<List<Order>> getAvailableOrders({int? branchId, CancelToken? cancelToken}) async => [
         for (final id in [21, 22, 23])
           Order(
               id: id,
