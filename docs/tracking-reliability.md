@@ -1,5 +1,11 @@
 # Tracking reliability — delivery 1
 
+## Route closure and logout — 2026-10-30
+
+Routes close on an observed return after departure, a new route, or logout only after all current deliveries are delivered (cancelled orders retain their cancellation). Return/new-route closure never marks outstanding deliveries as delivered. Pending deliveries block a new route and logout until delivered or reassigned. GPS return with outstanding deliveries leaves the route open.
+
+Logout must be confirmed by the API before clearing credentials or stopping tracking. A server rejection, timeout, or connection failure keeps the authenticated user, work-session cache, and tracking, and shows an error. Successful logout closes resolved routes and the work session atomically on the server. Pending local actions remain in the durable outbox; an older login cannot clear a replacement account. Logout closures are operational, not observed GPS returns, and do not contribute physical duration or SLA.
+
 ## Android SQLite contention — 2026-10-23
 
 Build 33 on the connected POCO X7 Pro repeatedly reported `SqfliteDatabaseException`

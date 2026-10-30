@@ -108,23 +108,27 @@ class _WorkRepo extends WorkSessionRepository {
 class _LogoutRepo extends _AuthRepo {
   _LogoutRepo(super.client, super.storage);
   int attempts = 0;
+  int? rejectionStatus;
   @override
   Future<String?> getStoredSessionId() async => 'login-a';
   @override
   Future<void> logout({String? expectedSessionId}) async {
     attempts++;
+    final request = RequestOptions(path: '/auth/logout');
     throw DioException(
-        requestOptions: RequestOptions(path: '/auth/logout'),
-        type: DioExceptionType.connectionError);
-  }
-}
-
-class _LogoutWorkRepo extends _WorkRepo {
-  final bool fail;
-  _LogoutWorkRepo(super.client, super.storage, this.fail);
-  @override
-  Future<void> closeCurrent({String? expectedSessionId}) async {
-    if (fail) throw StateError('No se pudieron guardar los datos locales.');
+        requestOptions: request,
+        type: rejectionStatus == null
+            ? DioExceptionType.connectionError
+            : DioExceptionType.badResponse,
+        response: rejectionStatus == null
+            ? null
+            : Response(
+                requestOptions: request,
+                statusCode: rejectionStatus,
+                data: {
+                    'message':
+                        'Entrega o reasigna todos tus pedidos pendientes antes de cerrar sesión.'
+                  }));
   }
 }
 
@@ -166,15 +170,15 @@ void main() {
                 )),
       );
 
-  for (final storageFailure in [false, true]) {
-    test(
-        'logout leaves Home after offline error; storage failure=$storageFailure remains visible',
+  for (final rejectionStatus in [null, 400]) {
+    test('rejected logout retains Home and tracking; status=$rejectionStatus',
         () async {
       SharedPreferences.setMockInitialValues({});
       final dio = client();
-      final repository = _LogoutRepo(dio, SecureStorage());
-      final notifier = AuthNotifier(repository,
-          _LogoutWorkRepo(dio, SecureStorage(), storageFailure), dio,
+      final repository = _LogoutRepo(dio, SecureStorage())
+        ..rejectionStatus = rejectionStatus;
+      final notifier = AuthNotifier(
+          repository, _WorkRepo(dio, SecureStorage()), dio,
           permissionReader: () async => const LocationPermissionState(
               serviceEnabled: true,
               permission: LocationPermission.always,
@@ -196,10 +200,12 @@ void main() {
       await _waitFor(() => notifier.state.trackingActive);
       await notifier.logout();
       expect(repository.attempts, 1);
-      expect(notifier.state.status,
-          storageFailure ? AuthStatus.error : AuthStatus.unauthenticated);
-      if (storageFailure)
-        expect(notifier.state.errorMessage, contains('datos locales'));
+      expect(notifier.state.status, AuthStatus.authenticated);
+      expect(notifier.state.trackingActive, isTrue);
+      expect(notifier.state.user?.id, _driver.id);
+      expect(notifier.state.errorMessage, isNotEmpty);
+      if (rejectionStatus != null)
+        expect(notifier.state.errorMessage, contains('pedidos pendientes'));
     });
   }
   test(

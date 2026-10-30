@@ -160,7 +160,10 @@ class _EmployeeLunchFormState extends ConsumerState<EmployeeLunchForm> {
               password.clear();
               ref.read(appRouterProvider).go(routeEmployeeLeaves);
             }, child: const Text('Mis permisos')),
-            TextButton(onPressed: saving ? null : () => ref.read(authNotifierProvider.notifier).logout(),
+            TextButton(onPressed: saving ? null : () async {
+              await ref.read(authNotifierProvider.notifier).logout();
+              if (mounted) setState(() => error = ref.read(authNotifierProvider).errorMessage);
+            },
                 child: const Text('Cerrar sesión')),
           ],
         ]);

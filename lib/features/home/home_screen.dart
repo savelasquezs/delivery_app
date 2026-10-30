@@ -485,6 +485,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                   }
                   Navigator.pop(ctx);
                   await ref.read(authNotifierProvider.notifier).logout();
+                  if (!mounted) return;
+                  final issue = ref.read(authNotifierProvider).errorMessage;
+                  if (issue != null) {
+                    ScaffoldMessenger.of(context)
+                        .showSnackBar(SnackBar(content: Text(issue)));
+                  }
                 },
               ),
             ],
@@ -540,7 +546,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       if (_initialTabResolved || next.revision < 0) return;
       _initialTabResolved = true;
       if (next.routeId != null && mounted) {
-        setState(() { _currentIndex = 1; _visitedTabs.add(1); });
+        setState(() {
+          _currentIndex = 1;
+          _visitedTabs.add(1);
+        });
       }
     });
     ref.listen<AuthState>(
