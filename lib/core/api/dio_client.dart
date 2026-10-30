@@ -263,6 +263,7 @@ class DioClient {
     String method = 'POST',
     dynamic data,
     Duration timeout = const Duration(seconds: 3),
+    bool requireSuccess = false,
   }) async {
     if (sessionId == null) {
       return;
@@ -287,17 +288,23 @@ class DioClient {
         },
       );
     } on DioException {
+      if (requireSuccess) rethrow;
       return;
     } on TimeoutException {
+      if (requireSuccess) {
+        throw const ApiException(
+            'No pudimos verificar el cierre de sesión. Revisa tu conexión e inténtalo de nuevo.');
+      }
       return;
     }
   }
 
   Future<T> get<T>(String path,
       {Map<String, dynamic>? queryParameters,
-      T Function(dynamic)? fromJson, Options? options}) async {
-    final response =
-        await _dio.get<dynamic>(path, queryParameters: queryParameters, options: options);
+      T Function(dynamic)? fromJson,
+      Options? options}) async {
+    final response = await _dio.get<dynamic>(path,
+        queryParameters: queryParameters, options: options);
     return fromJson != null ? fromJson(response.data) : response.data as T;
   }
 

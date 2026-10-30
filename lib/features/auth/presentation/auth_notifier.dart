@@ -119,6 +119,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
   int? _startingTrackingSessionId;
   int? _startingTrackingGeneration;
   int _authGeneration = 0;
+  Future<void>? _logoutInFlight;
   Timer? _trackingRetryTimer;
 
   AuthNotifier(
@@ -133,7 +134,8 @@ class AuthNotifier extends StateNotifier<AuthState> {
     Future<void> Function()? registerFcm,
     this.sessionRestoreTimeout = const Duration(seconds: 30),
   })  : _onUpdateRequiredCleanup = onUpdateRequiredCleanup,
-        _trackingStopper = trackingStopper ?? LocationTrackingService.stopTracking,
+        _trackingStopper =
+            trackingStopper ?? LocationTrackingService.stopTracking,
         _trackingStarter =
             trackingStarter ?? LocationTrackingService.startTracking,
         _isTrackingRunning =
@@ -410,7 +412,8 @@ class AuthNotifier extends StateNotifier<AuthState> {
         workSession: session,
         trackingIssue: 'Comprobando jornada y seguimiento...',
       );
-      debugPrint('AuthStartup localIdentityMs=${localRead.elapsedMilliseconds}');
+      debugPrint(
+          'AuthStartup localIdentityMs=${localRead.elapsedMilliseconds}');
       unawaited(refreshSessionIfNeededAfterResume());
     } catch (error) {
       if (_currentAuthAttempt(generation)) {
@@ -590,27 +593,31 @@ class AuthNotifier extends StateNotifier<AuthState> {
     }
   }
 
-  Future<void> logout() async {
-    final generation = ++_authGeneration;
-    _trackingRetryTimer?.cancel();
-    _queuedTrackingSession = null;
-    state = const AuthState(status: AuthStatus.loading);
+  Future<void> logout() => _logoutInFlight ??=
+      _logoutVerified().whenComplete(() => _logoutInFlight = null);
+
+  Future<void> _logoutVerified() async {
+    var generation = _authGeneration;
     String? issue;
     String? sessionId;
     try {
       sessionId = await _repository.getStoredSessionId();
+      await _repository.logout(expectedSessionId: sessionId);
     } catch (error) {
       if (_currentAuthAttempt(generation)) {
-        await _endLocalSession(errorMessage: userFacingErrorMessage(error));
+        state = state.copyWith(errorMessage: userFacingErrorMessage(error));
       }
       return;
     }
+    if (!_currentAuthAttempt(generation)) return;
+    generation = ++_authGeneration;
+    _trackingRetryTimer?.cancel();
+    _queuedTrackingSession = null;
+    state = const AuthState(status: AuthStatus.loading);
     for (final cleanup in <Future<void> Function()>[
       () => _trackingStopper(recordEvent: true, discardPending: false),
       FcmService.clearTrackingReviewNotices,
       () => FcmService.unregisterToken(_client, expectedSessionId: sessionId),
-      () => _workSessions.closeCurrent(expectedSessionId: sessionId),
-      () => _repository.logout(expectedSessionId: sessionId),
     ]) {
       if (!_currentAuthAttempt(generation)) {
         return;

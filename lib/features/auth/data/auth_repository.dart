@@ -125,21 +125,19 @@ class AuthRepository {
     if (expectedSessionId != null && session?.id != expectedSessionId) {
       return;
     }
-    try {
-      if (session != null) {
-        await _client.closeSessionResource(
-          ApiConstants.logout,
-          sessionId: session.id,
-          data: {'refreshToken': session.refreshToken},
-        );
-      }
-    } finally {
-      await _storage.withSessionLock((locked) async {
-        if ((await locked.readSession())?.id == session?.id) {
-          await locked.clearAll();
-        }
-      });
+    if (session != null) {
+      await _client.closeSessionResource(
+        ApiConstants.logout,
+        sessionId: session.id,
+        data: {'refreshToken': session.refreshToken},
+        requireSuccess: true,
+      );
     }
+    await _storage.withSessionLock((locked) async {
+      if ((await locked.readSession())?.id == session?.id) {
+        await locked.clearAll();
+      }
+    });
   }
 
   Future<void> clearLocalSession() => _storage.clearAll();

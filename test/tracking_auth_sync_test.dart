@@ -127,13 +127,37 @@ void main() {
   }
 
   test(
-      'offline remote logout still clears local credentials without refreshing',
+      'unconfirmed remote logout preserves local credentials without refreshing',
       () async {
     final adapter = FakeAdapter((_) => reply(503));
+    await expectLater(
+        AuthRepository(client(adapter), storage)
+            .logout(expectedSessionId: 'login-a'),
+        throwsA(isA<DioException>()));
+    expect(state.session?.id, 'login-a');
+    expect(adapter.calls, 1);
+  });
+  test(
+      'pending-delivery rejection preserves authentication and work-session cache',
+      () async {
+    final adapter = FakeAdapter((_) =>
+        reply(400, {'message': 'Entrega o reasigna tus pedidos pendientes.'}));
+    await expectLater(
+        AuthRepository(client(adapter), storage)
+            .logout(expectedSessionId: 'login-a'),
+        throwsA(isA<DioException>()));
+    expect(state.session?.id, 'login-a');
+    await expectLater(
+        WorkSessionRepository(client(adapter), storage)
+            .closeCurrent(expectedSessionId: 'login-a'),
+        throwsA(isA<DioException>()));
+    expect(state.workSessionData, 'session-a');
+  });
+  test('confirmed logout clears credentials', () async {
+    final adapter = FakeAdapter((_) => reply(200));
     await AuthRepository(client(adapter), storage)
         .logout(expectedSessionId: 'login-a');
     expect(state.session, isNull);
-    expect(adapter.calls, 1);
   });
   test('late logout and work-session close preserve a replacement account',
       () async {

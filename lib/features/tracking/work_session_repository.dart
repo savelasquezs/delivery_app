@@ -98,15 +98,13 @@ class WorkSessionRepository {
     final auth = await _storage.readSession();
     if (auth == null ||
         expectedSessionId != null && auth.id != expectedSessionId) return;
-    try {
-      await _client.closeSessionResource(
-        ApiConstants.myWorkSession,
-        method: 'DELETE',
-        sessionId: auth.id,
-      );
-    } finally {
-      await _storage.updateWorkSessionData(null, auth.id);
-    }
+    await _client.closeSessionResource(
+      ApiConstants.myWorkSession,
+      method: 'DELETE',
+      sessionId: auth.id,
+      requireSuccess: true,
+    );
+    await _storage.updateWorkSessionData(null, auth.id);
   }
 
   Future<void> clearLocal() => _storage.deleteWorkSessionData();
