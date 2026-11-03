@@ -466,12 +466,16 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
     return preview;
   }
 
+  Future<List<Order>> pendingBeforeNextRoute() =>
+      _repository.operations.pendingBeforeNextRoute();
+
   Future<List<Order>> selfAssign(
       {required List<int> orderIds,
       int? proposalId,
       int? expectedPlanVersion,
       bool modifiedProposal = false,
-      String? selectionFingerprint}) async {
+      String? selectionFingerprint,
+      List<Order> confirmedPreviousDeliveries = const []}) async {
     if (proposalId != null &&
         (state.routingPlan == null ||
             state.routingPlan!.isStale ||
@@ -489,7 +493,8 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
           proposalId: proposalId,
           expectedPlanVersion: expectedPlanVersion,
           modifiedProposal: modifiedProposal,
-          selectionFingerprint: selectionFingerprint);
+          selectionFingerprint: selectionFingerprint,
+          confirmedPreviousDeliveries: confirmedPreviousDeliveries);
       removeOrders(assigned.map((o) => o.id));
       return assigned;
     } on DioException catch (error) {

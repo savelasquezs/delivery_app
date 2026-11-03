@@ -9,6 +9,19 @@ import '../../core/errors/user_facing_error.dart';
 import '../orders/models/order_models.dart';
 import '../tracking/tracking_outbox.dart';
 
+/// Human-readable, explicit confirmation before accepting a new route.
+String previousRouteConfirmationMessage(List<Order> orders) {
+  final lines = orders.map((order) {
+    final address = order.displayAddressLine ?? 'Dirección no registrada';
+    final neighborhood = order.displayNeighborhoodLabel;
+    return '#${order.id} · $address${neighborhood == null ? '' : ' · $neighborhood'}';
+  }).join('\n');
+  return 'Tienes ${orders.length} pedido(s) pendientes de la ruta anterior:\n\n'
+      '$lines\n\n'
+      'Al confirmar se marcarán como ENTREGADOS y se iniciará la nueva ruta '
+      'en una sola operación. ¿Confirmas que realmente ya fueron entregados?';
+}
+
 class DeliveryOperations {
   final DioClient client;
   final SecureStorage storage;
@@ -82,9 +95,40 @@ class DeliveryOperations {
         order.rawJson);
   }
 
-  Future<List<Order>> take(Map<String, dynamic> selection) async {
+  /// Always use the server snapshot; never infer a delivery from a cached route.
+  Future<List<Order>> pendingBeforeNextRoute() async {
+    await sync(); // First acknowledge any previously queued deliveries when possible.
+    return _pendingFromContext(await refresh());
+  }
+
+  static List<Order> _pendingFromContext(Map<String, dynamic> context) {
+    final currentRouteId = context['routeId'] as int?;
+    if (currentRouteId == null) return const [];
+    return (context['orders'] as List? ?? [])
+        .map((value) => Order.fromJson(Map<String, dynamic>.from(value as Map)))
+        .where((order) =>
+            order.deliveryRouteId == currentRouteId &&
+            order.status != OrderStatus.delivered &&
+            order.status != OrderStatus.cancelled)
+        .toList();
+  }
+
+  Future<List<Order>> take(Map<String, dynamic> selection,
+      {List<Order> confirmedPreviousDeliveries = const []}) async {
     final key = await owner();
     final context = await refresh();
+    final pending = _pendingFromContext(context);
+    final confirmed = {
+      for (final order in confirmedPreviousDeliveries) order.id: order.managementVersion
+    };
+    if (confirmed.length != confirmedPreviousDeliveries.length ||
+        confirmed.length != pending.length ||
+        pending.any((order) =>
+            order.status != OrderStatus.onTheWay ||
+            order.managementVersion <= 0 ||
+            confirmed[order.id] != order.managementVersion)) {
+      throw StateError('La ruta anterior cambió. Revisa sus pedidos antes de confirmar la nueva.');
+    }
     final session =
         jsonDecode((await storage.getWorkSessionData()) ?? '{}') as Map;
     final existing = (await outbox.operations(key))
@@ -102,7 +146,12 @@ class DeliveryOperations {
       'selection': selection,
       'routeId': context['routeId'],
       'workSessionId': session['id'],
-      'expectedLastTakeId': context['lastTakeId']
+      'expectedLastTakeId': context['lastTakeId'],
+      if (confirmedPreviousDeliveries.isNotEmpty)
+        'confirmedPreviousDeliveries': [
+          for (final order in confirmedPreviousDeliveries)
+            {'orderId': order.id, 'expectedVersion': order.managementVersion}
+        ],
     };
     await outbox.enqueueOperation(key, request, {});
     await sync();

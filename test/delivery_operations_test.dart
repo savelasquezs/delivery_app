@@ -39,8 +39,18 @@ class Store extends SecureStorage {
 class Client extends DioClient {
   final sent = <Map<String, dynamic>>[];
   Future<Map<String, dynamic>> Function()? respond;
+  Map<String, dynamic>? routeSnapshot;
   Client(SecureStorage storage)
       : super(storage, DeliveryAppVersionInfoLoader());
+  @override
+  Future<T> get<T>(String path,
+      {Map<String, dynamic>? queryParameters,
+      T Function(dynamic)? fromJson, Options? options}) async {
+    if (path == '/deliverymen/me/active-route' && routeSnapshot != null)
+      return fromJson!(routeSnapshot);
+    return super.get(path, queryParameters: queryParameters,
+        fromJson: fromJson, options: options);
+  }
   @override
   Future<T> post<T>(String path,
       {dynamic data, T Function(dynamic)? fromJson, Options? options}) async {
@@ -208,6 +218,67 @@ void main() {
     client.respond = () async => {'context': {'revision': 8, 'orders': []}};
     await operations.sync();
     expect(client.sent.first, client.sent.last);
+    expect(await operations.pending(), isEmpty);
+  });
+
+  test('new route explicitly confirms the exact prior order and address', () async {
+    final oldOrder = Order.fromJson({
+      ...order.rawJson,
+      'addressDescription': 'Calle 91 # 70-25',
+      'neighborhoodName': 'Santander'
+    });
+    client.routeSnapshot = {
+      'revision': 4,
+      'routeId': 5,
+      'orders': [oldOrder.rawJson],
+      'neighborhoods': []
+    };
+    final previous = await operations.pendingBeforeNextRoute();
+    expect(previous.map((o) => o.id), [12]);
+    final prompt = previousRouteConfirmationMessage(previous);
+    expect(prompt, contains('pedido(s)'));
+    expect(prompt, contains('#12'));
+    expect(prompt, contains('Calle 91 # 70-25'));
+    expect(prompt, contains('ENTREGADOS'));
+
+    await expectLater(operations.take({'orderIds': [21]}), throwsStateError);
+    expect(await operations.pending(), isEmpty);
+    expect(client.sent, isEmpty);
+
+    client.respond = () async => {
+      'context': {
+        'revision': 5,
+        'routeId': 20,
+        'orders': [
+          {
+            ...order.rawJson,
+            'id': 21,
+            'status': 'onTheWay',
+            'deliveryRouteId': 20,
+          }
+        ]
+      }
+    };
+    final assigned = await operations.take(
+        {'orderIds': [21]}, confirmedPreviousDeliveries: previous);
+    expect(client.sent, hasLength(1));
+    expect(client.sent.single['confirmedPreviousDeliveries'], [
+      {'orderId': 12, 'expectedVersion': 3}
+    ]);
+    expect(assigned.single.id, 21);
+    expect(await operations.pending(), isEmpty);
+  });
+
+  test('changed previous order version requires fresh confirmation', () async {
+    final oldOrder = Order.fromJson({...order.rawJson, 'managementVersion': 4});
+    client.routeSnapshot = {
+      'revision': 5,
+      'routeId': 5,
+      'orders': [oldOrder.rawJson],
+    };
+    await expectLater(operations.take({'orderIds': [21]},
+        confirmedPreviousDeliveries: [order]), throwsStateError);
+    expect(client.sent, isEmpty);
     expect(await operations.pending(), isEmpty);
   });
 

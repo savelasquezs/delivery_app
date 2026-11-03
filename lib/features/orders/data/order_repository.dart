@@ -92,6 +92,7 @@ class OrderRepository {
     int? expectedPlanVersion,
     bool modifiedProposal = false,
     String? selectionFingerprint,
+    List<Order> confirmedPreviousDeliveries = const [],
   }) async {
     return operations.take({
       'orderIds': orderIds,
@@ -99,7 +100,7 @@ class OrderRepository {
       if (expectedPlanVersion != null) 'expectedPlanVersion': expectedPlanVersion,
       if (modifiedProposal) 'modifiedProposal': true,
       if (selectionFingerprint != null) 'selectionFingerprint': selectionFingerprint,
-    });
+    }, confirmedPreviousDeliveries: confirmedPreviousDeliveries);
   }
 
   /// Encola reimpresión de ticket de domicilio (`kind: delivery`).

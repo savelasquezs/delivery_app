@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/errors/user_facing_error.dart';
 import '../available/presentation/available_notifier.dart';
+import '../route/delivery_operations.dart';
 import 'delivery_routing_models.dart';
 import 'helpers/route_editor_helpers.dart';
 import 'route_timing_summary.dart';
@@ -266,6 +267,20 @@ class _RouteProposalEditorState extends ConsumerState<RouteProposalEditor> {
       _error = null;
     });
     try {
+      final previous = await ref
+          .read(availableNotifierProvider.notifier)
+          .pendingBeforeNextRoute();
+      if (!mounted) return;
+      if (_stale) throw StateError('El plan cambió. Actualiza las rutas.');
+      if (previous.isNotEmpty) {
+        final accepted = await _confirm(
+          title: 'Confirmar entregas anteriores',
+          message: previousRouteConfirmationMessage(previous),
+          action: 'Confirmar entregas y tomar ruta',
+        );
+        if (!accepted || !mounted) return;
+      }
+      if (_stale) throw StateError('El plan cambió. Actualiza las rutas.');
       final orders = await ref
           .read(availableNotifierProvider.notifier)
           .selfAssign(
@@ -273,7 +288,8 @@ class _RouteProposalEditorState extends ConsumerState<RouteProposalEditor> {
               proposalId: widget.proposal.id,
               expectedPlanVersion: widget.version,
               modifiedProposal: true,
-              selectionFingerprint: preview.selectionFingerprint);
+              selectionFingerprint: preview.selectionFingerprint,
+              confirmedPreviousDeliveries: previous);
       if (mounted) Navigator.pop(context, orders);
     } catch (error) {
       if (mounted) {

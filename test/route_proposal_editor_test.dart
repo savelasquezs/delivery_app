@@ -7,6 +7,7 @@ import 'package:delivery_app/features/available/data/branch_presence_verifier.da
 import 'package:delivery_app/features/available/presentation/available_notifier.dart';
 import 'package:delivery_app/features/orders/data/order_repository.dart';
 import 'package:delivery_app/features/orders/models/order_models.dart';
+import 'package:delivery_app/features/route/delivery_operations.dart';
 import 'package:delivery_app/features/routing/delivery_routing_models.dart';
 import 'package:delivery_app/features/routing/delivery_routing_repository.dart';
 import 'package:delivery_app/features/routing/helpers/route_editor_helpers.dart';
@@ -59,7 +60,16 @@ DeliveryRoutingPlan _plan() => DeliveryRoutingPlan(
           _stop(22)
         ]);
 
+class _PendingRouteOperations extends Fake implements DeliveryOperations {
+  List<Order> previous = [];
+  @override
+  Future<List<Order>> pendingBeforeNextRoute() async => previous;
+}
+
 class _Orders extends Fake implements OrderRepository {
+  final pendingOperations = _PendingRouteOperations();
+  @override
+  DeliveryOperations get operations => pendingOperations;
   List<int>? accepted;
   String? fingerprint;
   @override
@@ -82,7 +92,10 @@ class _Orders extends Fake implements OrderRepository {
       int? proposalId,
       int? expectedPlanVersion,
       bool modifiedProposal = false,
-      String? selectionFingerprint}) async {
+      String? selectionFingerprint,
+      List<Order> confirmedPreviousDeliveries = const []}) async {
+    expect(confirmedPreviousDeliveries.map((order) => order.id),
+        pendingOperations.previous.map((order) => order.id));
     expect(modifiedProposal, isTrue);
     expect(proposalId, 10);
     expect(expectedPlanVersion, 1);
@@ -464,6 +477,41 @@ void main() {
     expect(orders.accepted, isNull);
     expect(find.textContaining('seguimiento de ubicación'), findsOneWidget);
     expect(find.byType(RouteProposalEditor), findsOneWidget);
+  });
+
+  testWidgets('prior route confirmation lists address and cancellation is safe',
+      (tester) async {
+    final orders = _Orders();
+    orders.pendingOperations.previous = [
+      Order.fromJson({
+        'id': 44,
+        'status': 'onTheWay',
+        'type': 'delivery',
+        'branchId': 1,
+        'deliveryManId': 9,
+        'deliveryRouteId': 8,
+        'managementVersion': 4,
+        'createdAt': '2026-10-18T12:00:00Z',
+        'addressDescription': 'Calle 91 # 70-25'
+      })
+    ];
+    await _mount(tester, orders, _Routes());
+
+    await tester.tap(_accept);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(find.text('Confirmar entregas anteriores'), findsOneWidget);
+    expect(find.textContaining('Calle 91 # 70-25'), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, 'Cancelar'));
+    await tester.pumpAndSettle();
+    expect(orders.accepted, isNull);
+
+    await tester.tap(_accept);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.tap(find.text('Confirmar entregas y tomar ruta'));
+    await tester.pumpAndSettle();
+    expect(orders.accepted, [21, 23]);
   });
 
   testWidgets('dragging the handle updates the order and recalculates',
