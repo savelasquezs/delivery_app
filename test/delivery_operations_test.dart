@@ -22,11 +22,12 @@ TokenSession auth(int user) => TokenSession(
 
 class Store extends SecureStorage {
   TokenSession session = auth(9);
+  int workSessionId = 4;
   @override
   Future<TokenSession?> readSession() async => session;
   @override
   Future<String?> getWorkSessionData() async => jsonEncode({
-        'id': 4,
+        'id': workSessionId,
         'deliverymanId': 9,
         'branchId': 1,
         'autoCloseAt': DateTime.now()
@@ -41,6 +42,8 @@ class Client extends DioClient {
   Future<Map<String, dynamic>> Function()? respond;
   Map<String, dynamic>? routeSnapshot;
   Map<String, dynamic>? orderSnapshot;
+  final orderSnapshots = <int, Map<String, dynamic>>{};
+  final fetchedOrderIds = <int>[];
   Client(SecureStorage storage)
       : super(storage, DeliveryAppVersionInfoLoader());
   @override
@@ -53,6 +56,19 @@ class Client extends DioClient {
     if (path.startsWith('/orders/') && path.endsWith('/details')) {
       if (orderSnapshot == null) throw StateError('No server order snapshot available');
       return fromJson!(orderSnapshot);
+    }
+    if (path.startsWith('/orders/')) {
+      final id = int.tryParse(path.split('/').last);
+      if (id != null) {
+        fetchedOrderIds.add(id);
+        final order = orderSnapshots[id];
+        if (order == null) {
+          throw DioException(
+              requestOptions: RequestOptions(path: path),
+              type: DioExceptionType.connectionError);
+        }
+        return fromJson!(order);
+      }
     }
     return super.get(path, queryParameters: queryParameters,
         fromJson: fromJson, options: options, cancelToken: cancelToken);
@@ -107,6 +123,39 @@ void main() {
     operations = DeliveryOperations(client, storage, outbox: outbox);
   });
   tearDown(() => db.close());
+
+  const staleTakeId = 'd20d2000-0000-4000-8000-000000000001';
+  void serverRoute({String? lastTakeId}) {
+    client.routeSnapshot = {
+      'revision': 8,
+      'routeId': null,
+      'orders': [],
+      'lastTakeId': lastTakeId
+    };
+  }
+
+  Map<String, dynamic> liveOrder(int id,
+          {String status = 'ready', int? driver}) =>
+      {'id': id, 'status': status, 'deliveryManId': driver, 'branchId': 1};
+
+  Future<void> queuedTake(List<int> ids,
+      {bool conflict = false,
+      String operationId = staleTakeId,
+      int workSessionId = 4,
+      String? expectedLastTakeId}) async {
+    final key = await operations.owner();
+    await outbox.enqueueOperation(key, {
+      'operationId': operationId,
+      'kind': 'take',
+      'selection': {'orderIds': ids},
+      'workSessionId': workSessionId,
+      'expectedLastTakeId': expectedLastTakeId
+    }, {});
+    if (conflict) {
+      await outbox.finishOperation(key, operationId,
+          conflict: 'La asignación anterior fue rechazada.');
+    }
+  }
 
   test(
       'offline save is durable before HTTP and retries the exact intent after a timeout',
@@ -304,6 +353,7 @@ void main() {
       'context': {
         'revision': 5,
         'routeId': 20,
+        'lastTakeId': client.sent.last['operationId'],
         'orders': [
           {
             ...order.rawJson,
@@ -321,6 +371,141 @@ void main() {
       {'orderId': 12, 'expectedVersion': 3}
     ]);
     expect(assigned.single.id, 21);
+    expect(await operations.pending(), isEmpty);
+  });
+
+
+  test('old selection assigned to another driver no longer blocks', () async {
+    serverRoute();
+    await queuedTake([9393, 9394], conflict: true);
+    client.orderSnapshots[9393] =
+        liveOrder(9393, status: 'onTheWay', driver: 26);
+    client.orderSnapshots[9394] = liveOrder(9394);
+
+    await operations.pendingBeforeNextRoute();
+    expect(await operations.pending(), isEmpty);
+    expect(client.fetchedOrderIds, [9393]);
+    expect(client.sent, isEmpty);
+  });
+
+  test('old take assigned to the same driver is acknowledged, not delivered', () async {
+    serverRoute();
+    await queuedTake([21], conflict: true);
+    client.orderSnapshots[21] =
+        liveOrder(21, status: 'onTheWay', driver: 9);
+
+    await operations.pendingBeforeNextRoute();
+    expect(await operations.pending(), isEmpty);
+    expect(client.sent, isEmpty);
+    expect(client.orderSnapshots[21]!['status'], 'onTheWay');
+  });
+
+  test('cancelled order invalidates an entire old selection', () async {
+    serverRoute();
+    await queuedTake([21, 22], conflict: true);
+    client.orderSnapshots[21] = liveOrder(21);
+    client.orderSnapshots[22] =
+        liveOrder(22, status: 'cancelled');
+
+    await operations.pendingBeforeNextRoute();
+    expect(await operations.pending(), isEmpty);
+    expect(client.fetchedOrderIds, [21, 22]);
+  });
+
+  test('a rejected take with available orders can be retried fresh', () async {
+    serverRoute();
+    await queuedTake([21], conflict: true);
+    client.orderSnapshots[21] = liveOrder(21);
+
+    client.respond = () async => {
+          'context': {
+            'revision': 9,
+            'routeId': 88,
+            'orders': [],
+            'lastTakeId': client.sent.last['operationId']
+          }
+        };
+    await operations.take({'orderIds': [22]});
+    expect(client.sent, hasLength(1));
+    expect(client.sent.single['selection'], {'orderIds': [22]});
+    expect(await operations.pending(), isEmpty);
+  });
+
+  test('still available unconfirmed take is never silently dropped', () async {
+    serverRoute();
+    await queuedTake([21]);
+    client.orderSnapshots[21] = liveOrder(21);
+
+    await operations.pendingBeforeNextRoute();
+    final pending = await operations.pending();
+    expect(pending, hasLength(1));
+    expect(pending.single['state'], 'pending');
+    expect(client.fetchedOrderIds, [21]);
+  });
+
+  test('an old work session cannot block the new shift', () async {
+    serverRoute();
+    storage.workSessionId = 7;
+    await queuedTake([21], conflict: true, workSessionId: 4);
+
+    await operations.pendingBeforeNextRoute();
+    expect(await operations.pending(), isEmpty);
+    expect(client.fetchedOrderIds, isEmpty);
+  });
+
+  test('lastTakeId receipt clears a lost take ACK without order queries', () async {
+    serverRoute(lastTakeId: staleTakeId);
+    await queuedTake([21], conflict: true);
+
+    await operations.pendingBeforeNextRoute();
+    expect(await operations.pending(), isEmpty);
+    expect(client.fetchedOrderIds, isEmpty);
+  });
+
+  test('a superseded lastTakeId clears an impossible old take', () async {
+    serverRoute(lastTakeId: 'a20d2000-0000-4000-8000-000000000002');
+    await queuedTake([21], conflict: true,
+        expectedLastTakeId: 'a20d2000-0000-4000-8000-000000000003');
+
+    await operations.pendingBeforeNextRoute();
+    expect(await operations.pending(), isEmpty);
+  });
+
+  test('missing authoritative order data preserves a conflict', () async {
+    serverRoute();
+    await queuedTake([21], conflict: true);
+
+    await operations.pendingBeforeNextRoute();
+    final pending = await operations.pending();
+    expect(pending, hasLength(1));
+    expect(pending.single['state'], 'conflict');
+  });
+
+  test('reconciling take never deletes an unsent delivery', () async {
+    serverRoute();
+    final key = await operations.owner();
+    await operations.record(order, 'deliver');
+    final deliveryId = (await operations.pending()).single['id'] as String;
+    await outbox.finishOperation(key, deliveryId,
+        conflict: 'Pedido modificado.');
+    await queuedTake([21], conflict: true);
+    client.orderSnapshots[21] =
+        liveOrder(21, status: 'onTheWay', driver: 26);
+
+    await operations.pendingBeforeNextRoute();
+    final pending = await operations.pending();
+    expect(pending, hasLength(1));
+    expect(jsonDecode(pending.single['payload'] as String)['kind'], 'deliver');
+  });
+
+  test('no success message without a matching server take receipt', () async {
+    serverRoute();
+    client.respond = () async => {
+          'context': {'revision': 9, 'routeId': 99, 'orders': []}
+        };
+
+    await expectLater(
+        operations.take({'orderIds': [21]}), throwsStateError);
     expect(await operations.pending(), isEmpty);
   });
 
