@@ -168,6 +168,33 @@ class DeliveryOperations {
   Future<void> sync() =>
       _syncing ??= _synchronize().whenComplete(() => _syncing = null);
 
+  /// Only acknowledge a 409 when the authoritative server state proves the
+  /// original intent already happened. Uncertain or reassigned work stays in
+  /// SQLite for explicit review.
+  Future<bool> _alreadyConfirmed(Map<String, dynamic> payload,
+      Map<String, Object?> row) async {
+    try {
+      if (payload['kind'] == 'take') {
+        final context = await refresh();
+        return context['lastTakeId'] == payload['operationId'];
+      }
+      if (payload['kind'] != 'deliver') return false;
+      final id = payload['orderId'] as int?;
+      if (id == null) return false;
+      final original = jsonDecode(row['display'] as String) as Map;
+      final current = await client.get<Map<String, dynamic>>(
+        '/orders/$id/details',
+        fromJson: (value) => Map<String, dynamic>.from(value as Map),
+      );
+      return current['status'].toString().toLowerCase() == 'delivered' &&
+          current['deliveryManId'] == original['deliveryManId'] &&
+          current['deliveryRouteId'] == payload['routeId'] &&
+          current['deliveryRouteId'] == original['deliveryRouteId'];
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<void> _synchronize() async {
     final auth = await storage.readSession();
     if (auth == null) return;
@@ -203,6 +230,10 @@ class DeliveryOperations {
         await outbox.finishOperation(key, id);
       } on DioException catch (error) {
         final status = error.response?.statusCode;
+        if (status == 409 && await _alreadyConfirmed(payload, row)) {
+          await outbox.finishOperation(key, id);
+          continue;
+        }
         if (status == 400 ||
             status == 404 ||
             status == 409 ||
