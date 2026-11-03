@@ -127,7 +127,12 @@ class RouteNotifier extends StateNotifier<RouteState> {
 
   Future<void> _syncPending() async {
     try {
-      if ((await _repository.operations.pending()).isEmpty) return;
+      final queued = await _repository.operations.pending();
+      final now = DateTime.now().millisecondsSinceEpoch;
+      // Conflicts need human review; delayed retries are not due yet.
+      if (!queued.any((row) =>
+          row['state'] == 'pending' &&
+          (row['available_at'] as num? ?? 0) <= now)) return;
       await _repository.operations.sync();
       final cached = await _repository.operations.cachedContext();
       if (cached != null) await _applyContext(cached);
