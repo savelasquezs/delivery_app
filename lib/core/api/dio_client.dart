@@ -302,9 +302,11 @@ class DioClient {
   Future<T> get<T>(String path,
       {Map<String, dynamic>? queryParameters,
       T Function(dynamic)? fromJson,
-      Options? options}) async {
+      Options? options,
+      CancelToken? cancelToken}) async {
     final response = await _dio.get<dynamic>(path,
-        queryParameters: queryParameters, options: options);
+        queryParameters: queryParameters, options: options,
+        cancelToken: cancelToken);
     return fromJson != null ? fromJson(response.data) : response.data as T;
   }
 
