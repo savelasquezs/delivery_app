@@ -297,10 +297,14 @@ class _RouteScreenState extends ConsumerState<RouteScreen> {
                       final conflict = row['state'] == 'conflict';
                       return ListTile(
                         title: Text(kind == 'deliver'
-                            ? 'Pedido #${payload['orderId']} · Entregado, pendiente de sincronizar'
+                            ? conflict
+                                ? 'Pedido #${payload['orderId']} · Entrega por revisar'
+                                : 'Pedido #${payload['orderId']} · Sincronización pendiente'
                             : kind == 'address'
                                 ? 'Pedido #${payload['orderId']} · Dirección pendiente'
-                                : 'Confirmando resultado de la toma'),
+                                : conflict
+                                    ? 'Asignación por revisar'
+                                    : 'Confirmando resultado de la toma'),
                         subtitle: conflict
                             ? Text(row['reason'] as String? ??
                                 'Revisa los cambios de la sucursal.')
