@@ -46,7 +46,8 @@ class Client extends DioClient {
   @override
   Future<T> get<T>(String path,
       {Map<String, dynamic>? queryParameters,
-      T Function(dynamic)? fromJson, Options? options}) async {
+      T Function(dynamic)? fromJson, Options? options,
+      CancelToken? cancelToken}) async {
     if (path == '/deliverymen/me/active-route' && routeSnapshot != null)
       return fromJson!(routeSnapshot);
     if (path.startsWith('/orders/') && path.endsWith('/details')) {
@@ -54,7 +55,7 @@ class Client extends DioClient {
       return fromJson!(orderSnapshot);
     }
     return super.get(path, queryParameters: queryParameters,
-        fromJson: fromJson, options: options);
+        fromJson: fromJson, options: options, cancelToken: cancelToken);
   }
   @override
   Future<T> post<T>(String path,
