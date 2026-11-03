@@ -649,7 +649,13 @@ class LocationTrackingService {
     final routeContext =
         await _outbox.cached(authSession.ownerKey(baseUrl), 'route');
     if (routeContext != null) {
-      previousRouteId = routeContext['routeId'] as int?;
+      // Cached routes can outlive a work session. Only a route confirmed for
+      // this exact session may reactivate high-frequency GPS on startup.
+      final cachedSessionId = (routeContext['workSessionId'] as num?)?.toInt();
+      previousRouteId = routeContext['phase'] != 'previous_session' &&
+              cachedSessionId == workSessionId
+          ? routeContext['routeId'] as int?
+          : null;
       resumeActive = previousRouteId != null;
     }
     await FlutterForegroundTask.saveData(
