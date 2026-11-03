@@ -498,7 +498,8 @@ void main() {
     await _mount(tester, orders, _Routes());
 
     await tester.tap(_accept);
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
     expect(find.text('Confirmar entregas anteriores'), findsOneWidget);
     expect(find.textContaining('Calle 91 # 70-25'), findsOneWidget);
     await tester.tap(find.widgetWithText(TextButton, 'Cancelar'));
@@ -506,7 +507,8 @@ void main() {
     expect(orders.accepted, isNull);
 
     await tester.tap(_accept);
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
     await tester.tap(find.text('Confirmar entregas y tomar ruta'));
     await tester.pumpAndSettle();
     expect(orders.accepted, [21, 23]);
