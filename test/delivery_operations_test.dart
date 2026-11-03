@@ -236,7 +236,7 @@ void main() {
     final previous = await operations.pendingBeforeNextRoute();
     expect(previous.map((o) => o.id), [12]);
     final prompt = previousRouteConfirmationMessage(previous);
-    expect(prompt, contains('Pedido'));
+    expect(prompt, contains('pedido(s)'));
     expect(prompt, contains('#12'));
     expect(prompt, contains('Calle 91 # 70-25'));
     expect(prompt, contains('ENTREGADOS'));
