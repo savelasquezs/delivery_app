@@ -40,6 +40,7 @@ class Client extends DioClient {
   final sent = <Map<String, dynamic>>[];
   Future<Map<String, dynamic>> Function()? respond;
   Map<String, dynamic>? routeSnapshot;
+  Map<String, dynamic>? orderSnapshot;
   Client(SecureStorage storage)
       : super(storage, DeliveryAppVersionInfoLoader());
   @override
@@ -48,6 +49,10 @@ class Client extends DioClient {
       T Function(dynamic)? fromJson, Options? options}) async {
     if (path == '/deliverymen/me/active-route' && routeSnapshot != null)
       return fromJson!(routeSnapshot);
+    if (path.startsWith('/orders/') && path.endsWith('/details')) {
+      if (orderSnapshot == null) throw StateError('No server order snapshot available');
+      return fromJson!(orderSnapshot);
+    }
     return super.get(path, queryParameters: queryParameters,
         fromJson: fromJson, options: options);
   }
@@ -218,6 +223,55 @@ void main() {
     client.respond = () async => {'context': {'revision': 8, 'orders': []}};
     await operations.sync();
     expect(client.sent.first, client.sent.last);
+    expect(await operations.pending(), isEmpty);
+  });
+
+  test('409 with delivered server state acknowledges the original delivery once',
+      () async {
+    await operations.record(order, 'deliver');
+    client.orderSnapshot = {...order.rawJson, 'status': 'delivered'};
+    client.respond = () async => throw DioException(
+      requestOptions: RequestOptions(path: '/operations'),
+      response: Response(
+          requestOptions: RequestOptions(path: '/operations'), statusCode: 409));
+    await operations.sync();
+    expect(await operations.pending(), isEmpty);
+    expect(client.sent, hasLength(1));
+  });
+
+  test('409 with another route is a genuine conflict and retains the delivery',
+      () async {
+    await operations.record(order, 'deliver');
+    client.orderSnapshot = {
+      ...order.rawJson,
+      'status': 'delivered',
+      'deliveryRouteId': 99
+    };
+    client.respond = () async => throw DioException(
+      requestOptions: RequestOptions(path: '/operations'),
+      response: Response(
+          requestOptions: RequestOptions(path: '/operations'), statusCode: 409));
+    await operations.sync();
+    expect((await operations.pending()).single['state'], 'conflict');
+  });
+
+  test('409 from a lost take response reconciles only matching server take id',
+      () async {
+    const takeId = 'e3f69d0f-8b3f-45b5-a5d8-7169f073a907';
+    final key = await operations.owner();
+    await outbox.enqueueOperation(
+      key, {'operationId': takeId, 'kind': 'take'}, {});
+    client.routeSnapshot = {
+      'revision': 8,
+      'routeId': 26,
+      'orders': [],
+      'lastTakeId': takeId,
+    };
+    client.respond = () async => throw DioException(
+      requestOptions: RequestOptions(path: '/operations'),
+      response: Response(
+          requestOptions: RequestOptions(path: '/operations'), statusCode: 409));
+    await operations.sync();
     expect(await operations.pending(), isEmpty);
   });
 
