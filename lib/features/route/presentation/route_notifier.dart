@@ -204,7 +204,9 @@ class RouteNotifier extends StateNotifier<RouteState> {
     } else {
       unawaited(LocationTrackingService.applyRouteContext(revision, state.routeId,
           baseUrl: _repository.operations.client.dio.options.baseUrl,
-          expectedOwner: owner).catchError((Object error) {
+          expectedOwner: owner,
+          workSessionId: (context['workSessionId'] as num?)?.toInt())
+          .catchError((Object error) {
             debugPrint('Route tracking update deferred: ${error.runtimeType}');
           }));
     }
