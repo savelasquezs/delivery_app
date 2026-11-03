@@ -479,6 +479,39 @@ void main() {
     expect(find.byType(RouteProposalEditor), findsOneWidget);
   });
 
+  testWidgets('prior route confirmation lists address and cancellation is safe',
+      (tester) async {
+    final orders = _Orders();
+    orders.pendingOperations.previous = [
+      Order.fromJson({
+        'id': 44,
+        'status': 'onTheWay',
+        'type': 'delivery',
+        'branchId': 1,
+        'deliveryManId': 9,
+        'deliveryRouteId': 8,
+        'managementVersion': 4,
+        'createdAt': '2026-10-18T12:00:00Z',
+        'addressDescription': 'Calle 91 # 70-25'
+      })
+    ];
+    await _mount(tester, orders, _Routes());
+
+    await tester.tap(_accept);
+    await tester.pumpAndSettle();
+    expect(find.text('Confirmar entregas anteriores'), findsOneWidget);
+    expect(find.textContaining('Calle 91 # 70-25'), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, 'Cancelar'));
+    await tester.pumpAndSettle();
+    expect(orders.accepted, isNull);
+
+    await tester.tap(_accept);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Confirmar entregas y tomar ruta'));
+    await tester.pumpAndSettle();
+    expect(orders.accepted, [21, 23]);
+  });
+
   testWidgets('dragging the handle updates the order and recalculates',
       (tester) async {
     final routes = _Routes();
