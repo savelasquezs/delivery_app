@@ -237,6 +237,17 @@ class _RouteScreenState extends ConsumerState<RouteScreen> {
     final state = ref.watch(routeNotifierProvider);
     final now = DateTime.now();
     final displayOrders = prioritizeRouteOrdersForDisplay(state.orders, now);
+    final closure = state.lastClosure;
+    final closureAt = DateTime.tryParse(closure?['at']?.toString() ?? '')?.toLocal();
+    final closureWhen = closureAt == null
+        ? ''
+        : ' · ${MaterialLocalizations.of(context).formatMediumDate(closureAt)} '
+            '${TimeOfDay.fromDateTime(closureAt).format(context)}';
+    final closureSource = closure?['source'] == 'return'
+        ? 'al regresar'
+        : closure?['source'] == 'next_route'
+            ? 'al tomar otra ruta'
+            : 'al finalizar la jornada';
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -246,17 +257,29 @@ class _RouteScreenState extends ConsumerState<RouteScreen> {
         backgroundColor: AppColors.card,
         child: CustomScrollView(
           slivers: [
-            if (state.lastClosure != null)
+            if (closure != null)
               SliverToBoxAdapter(
                   child: ListTile(
                 dense: true,
                 leading: const Icon(Icons.task_alt),
                 title: Text(
-                    'Ruta #${state.lastClosure!['routeId']} cerrada ${state.lastClosure!['source'] == 'return' ? 'al regresar' : 'al tomar la siguiente ruta'}'),
-                subtitle: (state.lastClosure!['deliveries'] as num? ?? 0) > 0
+                    'Ruta #${closure['routeId']} cerrada $closureSource$closureWhen'),
+                subtitle: (closure['deliveries'] as num? ?? 0) > 0
                     ? Text(
-                        '${state.lastClosure!['deliveries']} entregas confirmadas por cierre operativo')
+                        '${closure['deliveries']} entregas confirmadas por cierre operativo')
                     : null,
+              )),
+            if (state.previousRouteId != null)
+              SliverToBoxAdapter(
+                  child: ListTile(
+                dense: true,
+                leading: const Icon(Icons.history),
+                title: Text('Ruta #${state.previousRouteId} de una jornada anterior'),
+                subtitle: Text(state.previousOrderCount == 0
+                    ? 'Sin entregas pendientes; el cierre anterior está por resolver.'
+                    : '${state.previousOrderCount} pedido(s) anteriores por resolver. '
+                        'Confirma únicamente entregas reales al tomar otra ruta, '
+                        'o solicita revisión administrativa.'),
               )),
             if (state.pending.isNotEmpty)
               SliverToBoxAdapter(
