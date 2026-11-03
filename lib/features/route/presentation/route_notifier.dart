@@ -18,6 +18,9 @@ class RouteState {
   final Map<String, dynamic>? lastClosure;
   final int revision;
   final int? routeId;
+  /// Unclosed route from another work session; never used for active GPS.
+  final int? previousRouteId;
+  final int previousOrderCount;
   final String phase;
   final List<Map<String, Object?>> pending;
   final List<Order> orders;
@@ -28,6 +31,8 @@ class RouteState {
     this.lastClosure,
     this.revision = -1,
     this.routeId,
+    this.previousRouteId,
+    this.previousOrderCount = 0,
     this.phase = 'idle',
     this.pending = const [],
     this.orders = const [],
@@ -38,6 +43,8 @@ class RouteState {
   RouteState copyWith({
     int? revision,
     int? routeId,
+    int? previousRouteId,
+    int? previousOrderCount,
     String? phase,
     List<Map<String, Object?>>? pending,
     List<Order>? orders,
@@ -48,6 +55,8 @@ class RouteState {
         lastClosure: lastClosure,
         revision: revision ?? this.revision,
         routeId: routeId ?? this.routeId,
+        previousRouteId: previousRouteId ?? this.previousRouteId,
+        previousOrderCount: previousOrderCount ?? this.previousOrderCount,
         phase: phase ?? this.phase,
         pending: pending ?? this.pending,
         orders: orders ?? this.orders,
@@ -137,10 +146,20 @@ class RouteNotifier extends StateNotifier<RouteState> {
     final corrections = <int, Map>{};
     for (final row in pending) {
       final value = jsonDecode(row['payload'] as String) as Map;
-      if (value['kind'] == 'deliver') delivered.add(value['orderId'] as int);
+      // A conflicting local delivery is not a confirmed delivery. Keep it visible.
+      if (value['kind'] == 'deliver' && row['state'] != 'conflict')
+        delivered.add(value['orderId'] as int);
       if (value['kind'] == 'address')
         corrections[value['orderId'] as int] = value['changes'] as Map;
     }
+    final previousSession = context['phase'] == 'previous_session';
+    final contextRouteId = context['routeId'] as int?;
+    final previousOrderCount = previousSession
+        ? (context['orders'] as List? ?? [])
+            .map((raw) => Order.fromJson(Map<String, dynamic>.from(raw as Map)))
+            .where((order) => order.status != OrderStatus.delivered &&
+                order.status != OrderStatus.cancelled).length
+        : 0;
     final orders = (context['orders'] as List? ?? [])
         .map((raw) {
           final json = Map<String, dynamic>.from(raw as Map);
@@ -160,6 +179,7 @@ class RouteNotifier extends StateNotifier<RouteState> {
           return Order.fromJson(json);
         })
         .where((order) =>
+            !previousSession &&
             order.deliveryManId == _deliverymanId &&
             order.status == OrderStatus.onTheWay &&
             !delivered.contains(order.id))
@@ -170,7 +190,9 @@ class RouteNotifier extends StateNotifier<RouteState> {
             : Map<String, dynamic>.from(context['lastClosure'] as Map),
         revision: revision,
         orders: orders,
-        routeId: context['routeId'] as int?,
+        routeId: previousSession ? null : contextRouteId,
+        previousRouteId: previousSession ? contextRouteId : null,
+        previousOrderCount: previousOrderCount,
         phase: context['phase'] as String? ?? 'idle',
         pending: pending);
     if (_trackingSync != null) {
