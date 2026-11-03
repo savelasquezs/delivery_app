@@ -98,6 +98,7 @@ class DeliveryOperations {
   /// Always use the server snapshot; never infer a delivery from a cached route.
   Future<List<Order>> pendingBeforeNextRoute() async {
     await sync(); // First acknowledge any previously queued deliveries when possible.
+    await _resolveObsoleteTakes(await owner());
     return _pendingFromContext(await refresh());
   }
 
@@ -113,9 +114,99 @@ class DeliveryOperations {
         .toList();
   }
 
+  /// A take is online-only. An old intent must not block future work once
+  /// the server proves it was applied, superseded or rejected. Never remove
+  /// address or delivery changes here.
+  Future<void> _resolveObsoleteTakes(String key,
+      {bool conflictsOnly = false}) async {
+    final takes = (await outbox.operations(key)).where((row) {
+      if (conflictsOnly && row['state'] != 'conflict') return false;
+      final payload = jsonDecode(row['payload'] as String) as Map;
+      return payload['kind'] == 'take';
+    }).toList();
+    if (takes.isEmpty) return;
+
+    final context = await refresh();
+    if (await owner() != key) return;
+    final rawSession = await storage.getWorkSessionData();
+    final session = rawSession == null ? null : jsonDecode(rawSession) as Map;
+
+    for (final row in takes) {
+      if (await owner() != key) return;
+      final payload = jsonDecode(row['payload'] as String) as Map;
+      final id = row['id'] as String;
+
+      // An ACK may have been lost even though the original take succeeded.
+      if (context['lastTakeId'] == payload['operationId']) {
+        await outbox.finishOperation(key, id);
+        continue;
+      }
+
+      // The backend rejects a stale expectedLastTakeId or work session.
+      if (payload.containsKey('expectedLastTakeId') &&
+              context['lastTakeId'] != payload['expectedLastTakeId'] ||
+          session?['id'] is num &&
+              payload['workSessionId'] is num &&
+              session!['id'] != payload['workSessionId']) {
+        await outbox.finishOperation(key, id);
+        continue;
+      }
+
+      final selection = payload['selection'];
+      final ids = selection is Map ? selection['orderIds'] : null;
+      if (ids is! List ||
+          ids.isEmpty ||
+          ids.length > 20 ||
+          ids.any((value) => value is! int || value <= 0) ||
+          ids.toSet().length != ids.length) {
+        continue; // Unknown intent; do not guess what it selected.
+      }
+
+      var verified = true;
+      var obsolete = false;
+      for (final orderId in ids) {
+        try {
+          // Read current server data, not the available-orders cache.
+          final current = await client.get<Map<String, dynamic>>(
+              '/orders/$orderId',
+              fromJson: (value) => Map<String, dynamic>.from(value as Map));
+          if (current['id'] != orderId ||
+              current['status'] is! String ||
+              !current.containsKey('deliveryManId')) {
+            verified = false;
+            break;
+          }
+          if (OrderStatus.fromApi(current['status'] as String) !=
+                  OrderStatus.ready ||
+              current['deliveryManId'] != null) {
+            obsolete = true; // A batch take cannot partially succeed.
+            break;
+          }
+        } on DioException catch (error) {
+          if (error.response?.statusCode == 404) {
+            obsolete = true; // Order no longer exists in this scope.
+          } else {
+            verified = false;
+          }
+          break;
+        } catch (_) {
+          verified = false; // Connectivity/unknown response: retain intent.
+          break;
+        }
+      }
+
+      // 400/404/409/422 conflicts were rejected by the API. If its
+      // authoritative state is readable, let the driver retry with fresh IDs.
+      if (verified && (obsolete || row['state'] == 'conflict')) {
+        await outbox.finishOperation(key, id);
+      }
+    }
+  }
+
   Future<List<Order>> take(Map<String, dynamic> selection,
       {List<Order> confirmedPreviousDeliveries = const []}) async {
     final key = await owner();
+    await _resolveObsoleteTakes(key);
     final context = await refresh();
     final pending = _pendingFromContext(context);
     final confirmed = {
@@ -137,7 +228,8 @@ class DeliveryOperations {
         .toList();
     if (existing.isNotEmpty)
       throw StateError(
-          'Hay una toma pendiente de confirmar. Sincroniza antes de continuar.');
+          'La asignación anterior aún no tiene respuesta confirmada. '
+          'Verifica la conexión antes de volver a intentarlo.');
     final id = const Uuid().v4();
     final request = <String, dynamic>{
       'operationId': id,
@@ -155,11 +247,18 @@ class DeliveryOperations {
     };
     await outbox.enqueueOperation(key, request, {});
     await sync();
-    if ((await outbox.operations(key)).any((row) => row['id'] == id)) {
-      throw StateError(
-          'Confirmando el resultado de la toma. No vuelvas a asignarte los pedidos.');
+    final remaining = (await outbox.operations(key))
+        .where((row) => row['id'] == id).toList();
+    if (remaining.isNotEmpty) {
+      throw StateError(remaining.single['state'] == 'conflict'
+          ? 'La asignación fue rechazada. Actualiza los pedidos y vuelve a seleccionarlos.'
+          : 'Confirmando el resultado de la toma. No vuelvas a asignarte los pedidos.');
     }
     final current = await outbox.cached(key, 'route');
+    if (current?['lastTakeId'] != id) {
+      throw StateError(
+          'El servidor no confirmó esta asignación. Actualiza los pedidos antes de reintentar.');
+    }
     return (current?['orders'] as List? ?? [])
         .map((value) => Order.fromJson(Map<String, dynamic>.from(value as Map)))
         .toList();
@@ -199,6 +298,11 @@ class DeliveryOperations {
     final auth = await storage.readSession();
     if (auth == null) return;
     final key = auth.ownerKey(client.dio.options.baseUrl);
+    // A server-rejected take is safe to reconcile independently of any
+    // delivery/address outbox entries. Offline checks preserve the row.
+    try {
+      await _resolveObsoleteTakes(key, conflictsOnly: true);
+    } catch (_) {}
     final blocked = <String>{};
     for (final row in await outbox.operations(key)) {
       if ((await storage.readSession())?.id != auth.id) return;
