@@ -15,9 +15,9 @@ String previousRouteConfirmationMessage(List<Order> orders) {
     final address = order.displayAddressLine ?? 'Dirección no registrada';
     final neighborhood = order.displayNeighborhoodLabel;
     return '#${order.id} · $address${neighborhood == null ? '' : ' · $neighborhood'}';
-  }).join('\\n');
-  return 'Tienes ${orders.length} pedido(s) pendientes de la ruta anterior:\\n\\n'
-      '$lines\\n\\n'
+  }).join('\n');
+  return 'Tienes ${orders.length} pedido(s) pendientes de la ruta anterior:\n\n'
+      '$lines\n\n'
       'Al confirmar se marcarán como ENTREGADOS y se iniciará la nueva ruta '
       'en una sola operación. ¿Confirmas que realmente ya fueron entregados?';
 }
