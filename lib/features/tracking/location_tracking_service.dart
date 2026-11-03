@@ -764,7 +764,7 @@ class LocationTrackingService {
   }
 
   static Future<void> applyRouteContext(int revision, int? routeId,
-          {String? baseUrl, String? expectedOwner}) =>
+          {String? baseUrl, String? expectedOwner, int? workSessionId}) =>
       _enqueue(() async {
         final auth = await SecureStorage().readSession();
         if (auth == null) return;
@@ -784,7 +784,12 @@ class LocationTrackingService {
             key: 'sa_route_owner', value: owner);
         if (revision <= saved) return;
         if (!await FlutterForegroundTask.isRunningService) return;
-        if (routeId == null) {
+        // Route snapshots can outlive the session that created them. A newer
+        // login must not switch GPS to the prior courier shift's route.
+        final trackedSessionId = await FlutterForegroundTask.getData<int>(
+            key: _kWorkSessionId);
+        if (routeId == null ||
+            (workSessionId != null && workSessionId != trackedSessionId)) {
           await _setLightMode();
         } else {
           await _setActiveDeliveryMode(routeId: routeId);
