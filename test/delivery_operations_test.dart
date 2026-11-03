@@ -377,7 +377,10 @@ void main() {
 
   test('old selection assigned to another driver no longer blocks', () async {
     serverRoute();
-    await queuedTake([9393, 9394], conflict: true);
+    await queuedTake([9393, 9394]);
+    // A previous timeout has delayed the retry, but cannot block all new takes.
+    await outbox.finishOperation(await operations.owner(), staleTakeId,
+        retryAt: DateTime.now().millisecondsSinceEpoch + 300000);
     client.orderSnapshots[9393] =
         liveOrder(9393, status: 'onTheWay', driver: 26);
     client.orderSnapshots[9394] = liveOrder(9394);
