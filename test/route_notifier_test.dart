@@ -8,11 +8,12 @@ import 'package:delivery_app/features/route/delivery_operations.dart';
 import 'package:delivery_app/features/route/presentation/route_notifier.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-Map<String, dynamic> context(int revision, List<int> ids, {int? routeId = 4}) =>
+Map<String, dynamic> context(int revision, List<int> ids,
+        {int? routeId = 4, String? phase}) =>
     {
       'revision': revision,
       'routeId': routeId,
-      'phase': ids.isEmpty ? 'returning' : 'delivering',
+      'phase': phase ?? (ids.isEmpty ? 'returning' : 'delivering'),
       'neighborhoods': [{'id': 99, 'name': 'Barrio guardado'}],
   'orders': [
         for (final id in ids)
@@ -164,6 +165,57 @@ void main() {
     expect(await notifier.applyRealtimeOrder(hint), RouteOrderChange.removed);
     expect(notifier.state.routeId, 4);
   });
+  test('a previous work session route is visible only as prior work, never as GPS route',
+      () async {
+    operations.fetch = () async =>
+        context(7, [11], routeId: 25, phase: 'previous_session');
+    await notifier.load();
+    expect(notifier.state.previousRouteId, 25);
+    expect(notifier.state.previousOrderCount, 1);
+    expect(notifier.state.routeId, isNull);
+    expect(notifier.state.orders, isEmpty);
+    expect(tracked.last, isNull);
+  });
+
+  test('conflicting deliveries remain visible for review rather than appearing delivered',
+      () async {
+    operations.queue = [
+      {
+        'state': 'conflict',
+        'reason': 'El pedido cambió',
+        'payload': jsonEncode({'kind': 'deliver', 'orderId': 11})
+      }
+    ];
+    operations.fetch = () async => context(1, [11]);
+    await notifier.load();
+    expect(notifier.state.orders.map((order) => order.id), [11]);
+    expect(notifier.state.pending.single['state'], 'conflict');
+  });
+
+  test('a fresh local enqueue does not flash a syncing warning before its first attempt',
+      () async {
+    operations.queue = [
+      {
+        'state': 'pending',
+        'attempts': 0,
+        'payload': jsonEncode({'kind': 'deliver', 'orderId': 11})
+      }
+    ];
+    operations.fetch = () async => context(2, [11]);
+    await notifier.load();
+    expect(notifier.state.orders, isEmpty); // optimistic delivery
+    expect(notifier.state.pending, isEmpty); // no transient warning
+    operations.queue = [
+      {
+        'state': 'pending',
+        'attempts': 1,
+        'payload': jsonEncode({'kind': 'deliver', 'orderId': 11})
+      }
+    ];
+    await notifier.load();
+    expect(notifier.state.pending, hasLength(1));
+  });
+
   test('delivery cannot start until tracking is confirmed', () async {
     await expectLater(notifier.markOnTheWay(42), throwsStateError);
   });

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:dio/dio.dart';
 import 'package:delivery_app/features/available/data/branch_presence_verifier.dart';
 import 'package:delivery_app/features/available/presentation/available_notifier.dart';
 import 'package:delivery_app/features/available/presentation/available_screen.dart';
@@ -20,7 +21,7 @@ DeliveryRoutingPlan plan({bool empty = false}) => DeliveryRoutingPlan(id: 1, ver
     claimableReadyOrderIds: [21], stops: [stop(21)], warning: null)], unroutedOrders: [stop(22)]);
 class Orders extends Fake implements OrderRepository {
   @override
-  Future<List<Order>> getAvailableOrders({int? branchId}) async => [];
+  Future<List<Order>> getAvailableOrders({int? branchId, CancelToken? cancelToken}) async => [];
 }
 class Presence extends Fake implements BranchPresenceVerifier {}
 class Routes extends Fake implements DeliveryRoutingRepository {
