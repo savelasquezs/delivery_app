@@ -194,7 +194,11 @@ class RouteNotifier extends StateNotifier<RouteState> {
         previousRouteId: previousSession ? contextRouteId : null,
         previousOrderCount: previousOrderCount,
         phase: context['phase'] as String? ?? 'idle',
-        pending: pending);
+        // A freshly enqueued action is being attempted, not an offline
+        // failure. Show only attempts that have reached the retry/review stage.
+        pending: pending.where((row) =>
+            row['state'] == 'conflict' ||
+            (row['attempts'] as num? ?? 1) > 0).toList());
     if (_trackingSync != null) {
       await _trackingSync!(revision, state.routeId, owner);
     } else {
