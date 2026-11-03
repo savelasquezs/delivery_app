@@ -11,6 +11,7 @@ import '../../../core/widgets/error_banner.dart';
 import '../../../core/widgets/confirm_assignment_dialog.dart';
 import '../../orders/models/order_models.dart';
 import '../../route/presentation/route_notifier.dart';
+import '../../route/delivery_operations.dart';
 import '../data/branch_presence_verifier.dart';
 import 'available_notifier.dart';
 import '../../routing/delivery_routing_models.dart';
@@ -89,16 +90,36 @@ class _AvailableScreenState extends ConsumerState<AvailableScreen>
   Future<void> _confirmAssignment() async {
     if (_selectedIds.isEmpty) return;
     final selectedList = List<int>.from(_selectedIds);
+    List<Order> pendingPrevious;
+    try {
+      pendingPrevious = await ref
+          .read(availableNotifierProvider.notifier)
+          .pendingBeforeNextRoute();
+    } catch (error) {
+      if (mounted) {
+        ErrorBanner.show(context, error,
+            fallback: 'No pudimos comprobar tu ruta anterior.');
+      }
+      return;
+    }
+    if (!mounted) return;
     final confirmed = await ConfirmAssignmentDialog.show(
       context,
-      title: 'Confirmar asignación',
-      subtitle: '¿Quieres asignarte ${selectedList.length} pedido(s)? '
-          'Pasarán a En camino.\n\n'
-          'Pedidos: ${selectedList.map((id) => '#$id').join(', ')}',
+      title: pendingPrevious.isEmpty
+          ? 'Confirmar asignación'
+          : 'Confirmar entregas anteriores y nueva ruta',
+      subtitle: pendingPrevious.isEmpty
+          ? '¿Quieres asignarte ${selectedList.length} pedido(s)? '
+              'Pasarán a En camino.\n\n'
+              'Pedidos: ${selectedList.map((id) => '#$id').join(', ')}'
+          : '${previousRouteConfirmationMessage(pendingPrevious)}\n\n'
+              'Nueva ruta: ${selectedList.map((id) => '#$id').join(', ')}',
       onConfirm: () async {
         final assigned = await ref
             .read(availableNotifierProvider.notifier)
-            .selfAssign(orderIds: selectedList);
+            .selfAssign(
+                orderIds: selectedList,
+                confirmedPreviousDeliveries: pendingPrevious);
         if (!mounted) return;
         await ref
             .read(routeNotifierProvider.notifier)
