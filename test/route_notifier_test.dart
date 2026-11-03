@@ -192,6 +192,30 @@ void main() {
     expect(notifier.state.pending.single['state'], 'conflict');
   });
 
+  test('a fresh local enqueue does not flash a syncing warning before its first attempt',
+      () async {
+    operations.queue = [
+      {
+        'state': 'pending',
+        'attempts': 0,
+        'payload': jsonEncode({'kind': 'deliver', 'orderId': 11})
+      }
+    ];
+    operations.fetch = () async => context(2, [11]);
+    await notifier.load();
+    expect(notifier.state.orders, isEmpty); // optimistic delivery
+    expect(notifier.state.pending, isEmpty); // no transient warning
+    operations.queue = [
+      {
+        'state': 'pending',
+        'attempts': 1,
+        'payload': jsonEncode({'kind': 'deliver', 'orderId': 11})
+      }
+    ];
+    await notifier.load();
+    expect(notifier.state.pending, hasLength(1));
+  });
+
   test('delivery cannot start until tracking is confirmed', () async {
     await expectLater(notifier.markOnTheWay(42), throwsStateError);
   });
