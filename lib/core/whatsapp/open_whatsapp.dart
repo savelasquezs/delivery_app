@@ -4,7 +4,7 @@ import 'package:url_launcher/url_launcher.dart';
 /// Alineado con el flujo de contacto del cliente en pedidos (CO móvil 3xx).
 String? waMeDigitsFromPhone(String raw) {
   final clean = raw.replaceAll(RegExp(r'[\s\-\(\)]'), '');
-  if (clean.isEmpty) return null;
+  if (clean.isEmpty || !RegExp(r'^\+?[0-9]+$').hasMatch(clean)) return null;
   final n = clean;
   if (n.startsWith('+57')) return n.replaceAll('+', '');
   if (n.startsWith('57') && n.length == 12) return n;
@@ -14,13 +14,24 @@ String? waMeDigitsFromPhone(String raw) {
   return noPlus;
 }
 
-Uri? buildWhatsAppUri(String phone, {String? message}) {
-  final digits = waMeDigitsFromPhone(phone);
-  if (digits == null || digits.isEmpty) return null;
+/// WhatsApp username: 3–35 caracteres ASCII (sin el @ inicial).
+/// Los nombres son distintos de los teléfonos y no se deben tratar como BSUID.
+String? waMeUsername(String raw) {
+  final candidate = raw.trim().replaceFirst(RegExp(r'^@'), '').toLowerCase();
+  if (!RegExp(r'^[a-z0-9._]{3,35}$').hasMatch(candidate) ||
+      RegExp(r'^[0-9]+$').hasMatch(candidate)) return null;
+  return candidate;
+}
+
+/// Abre por número o usuario. Los enlaces por username están sujetos
+/// a la disponibilidad de la función de WhatsApp en el dispositivo.
+Uri? buildWhatsAppUri(String contact, {String? message}) {
+  final target = waMeDigitsFromPhone(contact) ?? waMeUsername(contact);
+  if (target == null) return null;
   final text = message?.trim();
   return Uri.https(
     'wa.me',
-    '/$digits',
+    '/$target',
     text != null && text.isNotEmpty ? {'text': text} : null,
   );
 }
