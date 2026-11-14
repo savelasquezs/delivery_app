@@ -75,17 +75,21 @@ class OrderCustomer {
   final int id;
   final String name;
   final String? phone;
+  final String? whatsAppUsername;
 
   const OrderCustomer({
     required this.id,
     required this.name,
     this.phone,
+    this.whatsAppUsername,
   });
 
   factory OrderCustomer.fromJson(Map<String, dynamic> json) => OrderCustomer(
         id: json['id'] as int,
         name: json['name'] as String? ?? '',
         phone: json['phone'] as String?,
+        whatsAppUsername: json['whatsAppUsername'] as String? ??
+            json['whatsappUsername'] as String?,
       );
 }
 
@@ -313,13 +317,23 @@ class Order {
     final flatCustomerId = json['customerId'] as int?;
     final flatName = json['customerName'] as String?;
     final flatPhone = json['customerPhone'] as String?;
-    final customer = nestedCustomer ??
-        ((flatCustomerId != null && flatCustomerId > 0) ||
-                (flatName != null && flatName.isNotEmpty)
+    final flatUsername = json['customerWhatsAppUsername'] as String? ??
+        json['customerWhatsappUsername'] as String?;
+    final customer = nestedCustomer != null
+        ? OrderCustomer(
+            id: nestedCustomer.id,
+            name: nestedCustomer.name,
+            phone: nestedCustomer.phone ?? flatPhone,
+            whatsAppUsername: nestedCustomer.whatsAppUsername ?? flatUsername,
+          )
+        : ((flatCustomerId != null && flatCustomerId > 0) ||
+                (flatName != null && flatName.isNotEmpty) ||
+                (flatUsername != null && flatUsername.isNotEmpty)
             ? OrderCustomer(
                 id: flatCustomerId ?? 0,
                 name: flatName ?? '',
                 phone: flatPhone,
+                whatsAppUsername: flatUsername,
               )
             : null);
 
