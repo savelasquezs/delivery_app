@@ -235,7 +235,7 @@ class RouteNotifier extends StateNotifier<RouteState> {
     return changes.isEmpty ? RouteOrderChange.none : changes.single;
   }
 
-  Future<void> refreshAfterAssignment() async {
+  Future<void> refreshFromCache() async {
     try {
       final cached = await _repository.operations.cachedContext();
       if (cached != null) await _applyContext(cached);

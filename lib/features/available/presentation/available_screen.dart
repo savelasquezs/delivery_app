@@ -125,7 +125,7 @@ class _AvailableScreenState extends ConsumerState<AvailableScreen>
 
     if (confirmed && mounted) {
       setState(() => _selectedIds.clear());
-      unawaited(ref.read(routeNotifierProvider.notifier).refreshAfterAssignment());
+      unawaited(ref.read(routeNotifierProvider.notifier).refreshFromCache());
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Pedido(s) asignado(s) exitosamente ✓'),
@@ -148,7 +148,7 @@ class _AvailableScreenState extends ConsumerState<AvailableScreen>
           RouteProposalEditor(proposal: proposal, version: plan.version),
     );
     if (assigned != null && mounted) {
-      unawaited(ref.read(routeNotifierProvider.notifier).refreshAfterAssignment());
+      unawaited(ref.read(routeNotifierProvider.notifier).refreshFromCache());
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('Ruta asignada exitosamente ✓'),
         backgroundColor: AppColors.accentContainer,

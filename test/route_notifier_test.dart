@@ -111,7 +111,7 @@ void main() {
     final loading = notifier.load();
     await Future<void>.delayed(Duration.zero);
     operations.cached = context(5, [21], routeId: 20);
-    await notifier.refreshAfterAssignment();
+    await notifier.refreshFromCache();
     expect(notifier.state.orders.single.id, 21);
     expect(notifier.state.routeId, 20);
     response.complete(context(2, [11], routeId: 8));

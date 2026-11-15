@@ -367,8 +367,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       _visitedTabs.add(index);
     });
     if (homeResumeRefreshForTab(index) == HomeResumeRefresh.route) {
-      unawaited(ref.read(routeNotifierProvider.notifier)
-          .load(silently: true, ensureFresh: true));
+      unawaited(ref.read(routeNotifierProvider.notifier).refreshFromCache());
     }
   }
 
