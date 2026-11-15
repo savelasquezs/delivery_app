@@ -9,11 +9,17 @@ import 'package:delivery_app/features/routing/delivery_routing_repository.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _OrderRepository extends Fake implements OrderRepository {
-  _OrderRepository(this.read);
+  _OrderRepository(this.read, {this.assign});
   final Future<List<Order>> Function(CancelToken? cancellation) read;
+  final Future<List<Order>> Function()? assign;
 
   @override
   Future<List<Order>> getAvailableOrders({int? branchId, CancelToken? cancelToken}) => read(cancelToken);
+
+  @override
+  Future<List<Order>> selfAssignOrders({required List<int> orderIds,
+      int? proposalId, int? expectedPlanVersion, bool modifiedProposal = false,
+      String? selectionFingerprint, List<Order> confirmedPreviousDeliveries = const []}) => assign!();
 }
 
 class _PresenceVerifier extends Fake implements BranchPresenceVerifier {}
@@ -31,6 +37,16 @@ Order _ready(int id) => Order(
     );
 
 void main() {
+  test('disposing the Riverpod notifier does not turn a server ACK into an assignment error', () async {
+    final response = Completer<List<Order>>();
+    final notifier = AvailableNotifier(
+        _OrderRepository((_) async => [], assign: () => response.future),
+        _PresenceVerifier(), _RoutingRepository(), null, null, null, 50);
+    final taking = notifier.selfAssign(orderIds: [21]);
+    notifier.dispose();
+    response.complete([_ready(21)]);
+    expect((await taking).single.id, 21);
+  });
   test('una consulta antigua no resucita pedidos tomados y recupera los demás',
       () async {
     final firstResponse = Completer<List<Order>>();

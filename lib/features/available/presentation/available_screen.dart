@@ -115,20 +115,17 @@ class _AvailableScreenState extends ConsumerState<AvailableScreen>
           : '${previousRouteConfirmationMessage(pendingPrevious)}\n\n'
               'Nueva ruta: ${selectedList.map((id) => '#$id').join(', ')}',
       onConfirm: () async {
-        final assigned = await ref
+        await ref
             .read(availableNotifierProvider.notifier)
             .selfAssign(
                 orderIds: selectedList,
                 confirmedPreviousDeliveries: pendingPrevious);
-        if (!mounted) return;
-        await ref
-            .read(routeNotifierProvider.notifier)
-            .applyRealtimeOrders(assigned);
       },
     );
 
     if (confirmed && mounted) {
       setState(() => _selectedIds.clear());
+      unawaited(ref.read(routeNotifierProvider.notifier).refreshFromCache());
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Pedido(s) asignado(s) exitosamente ✓'),
@@ -151,10 +148,7 @@ class _AvailableScreenState extends ConsumerState<AvailableScreen>
           RouteProposalEditor(proposal: proposal, version: plan.version),
     );
     if (assigned != null && mounted) {
-      await ref
-          .read(routeNotifierProvider.notifier)
-          .applyRealtimeOrders(assigned);
-      if (!mounted) return;
+      unawaited(ref.read(routeNotifierProvider.notifier).refreshFromCache());
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('Ruta asignada exitosamente ✓'),
         backgroundColor: AppColors.accentContainer,

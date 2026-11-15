@@ -91,17 +91,24 @@ class _RouteScreenState extends ConsumerState<RouteScreen> {
 
   Future<void> _contactCustomer(Order order, {bool whatsapp = false}) async {
     final phone = order.customer?.phone?.trim();
-    if (phone == null || phone.isEmpty) return;
-    final opened = whatsapp
-        ? await openWhatsAppChat(phone,
-            message: buildDeliveryWhatsAppMessage(order))
-        : await openPhoneCall(phone);
-    if (!opened && mounted)
-      ErrorBanner.show(
-          context,
-          whatsapp
-              ? 'No pudimos abrir WhatsApp.'
-              : 'No pudimos iniciar la llamada.');
+    final username = order.customer?.whatsAppUsername?.trim();
+    if (whatsapp) {
+      final contact = whatsAppContact(phone: phone, username: username);
+      if (contact == null || contact.isEmpty) return;
+      final opened = await openWhatsAppChat(
+        contact,
+        message: buildDeliveryWhatsAppMessage(order),
+      );
+      if (!opened && mounted) {
+        ErrorBanner.show(context, 'No pudimos abrir WhatsApp.');
+      }
+    } else {
+      if (phone == null || waMeDigitsFromPhone(phone) == null) return;
+      final opened = await openPhoneCall(phone);
+      if (!opened && mounted) {
+        ErrorBanner.show(context, 'No pudimos iniciar la llamada.');
+      }
+    }
   }
 
   Future<void> _openRouteInMaps(List<Order> orders) async {
@@ -157,7 +164,11 @@ class _RouteScreenState extends ConsumerState<RouteScreen> {
   }
 
   bool _hasCustomerPhone(Order order) =>
-      order.customer?.phone?.trim().isNotEmpty == true;
+      waMeDigitsFromPhone(order.customer?.phone ?? '') != null;
+
+  bool _hasCustomerWhatsApp(Order order) =>
+      whatsAppContact(phone: order.customer?.phone,
+          username: order.customer?.whatsAppUsername) != null;
 
   Future<void> _reviewPending(Map<String, Object?> row) async {
     final payload = jsonDecode(row['payload'] as String) as Map;
@@ -407,7 +418,7 @@ class _RouteScreenState extends ConsumerState<RouteScreen> {
                               onTap: () => _openOrderDetail(order),
                               trailing: _OrderActions(
                                 onOpenMap: () => _openSingleOrderMap(order),
-                                onWhatsApp: _hasCustomerPhone(order)
+                                onWhatsApp: _hasCustomerWhatsApp(order)
                                     ? () =>
                                         _contactCustomer(order, whatsapp: true)
                                     : null,

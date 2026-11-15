@@ -287,14 +287,25 @@ class _DeliveryOrderDetailBodyState
                             fontSize: 15,
                           ),
                         ),
-                        if (_order.customer!.phone != null) ...[
+                        if (_order.customer!.phone?.isNotEmpty == true)
                           Text(
                             _order.customer!.phone!,
                             style: const TextStyle(
                                 color: AppColors.hint, fontSize: 13),
                           ),
+                        if (_order.customer!.whatsAppUsername?.isNotEmpty == true)
+                          Text(
+                            _order.customer!.whatsAppUsername!,
+                            style: const TextStyle(
+                                color: AppColors.hint, fontSize: 13),
+                          ),
+                        if (waMeDigitsFromPhone(_order.customer!.phone ?? '') != null ||
+                            waMeUsername(_order.customer!.whatsAppUsername ?? '') != null) ...[
                           const SizedBox(height: 8),
-                          _PhoneActions(phone: _order.customer!.phone!),
+                          CustomerContactActions(
+                            phone: _order.customer!.phone,
+                            username: _order.customer!.whatsAppUsername,
+                          ),
                         ],
                       ],
                     ),
@@ -1456,33 +1467,42 @@ class _CoordCard extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Botones de contacto: Llamar + WhatsApp + Copiar
+// Botones de contacto: llamada sólo por teléfono y chat por teléfono o usuario.
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _PhoneActions extends StatelessWidget {
-  final String phone;
-  const _PhoneActions({required this.phone});
+class CustomerContactActions extends StatelessWidget {
+  final String? phone;
+  final String? username;
+  const CustomerContactActions({super.key, this.phone, this.username});
 
   Future<void> _open(BuildContext context, bool whatsapp) async {
-    final opened =
-        whatsapp ? await openWhatsAppChat(phone) : await openPhoneCall(phone);
-    if (!opened && context.mounted)
+    final contact = whatsAppContact(phone: phone, username: username);
+    final opened = whatsapp
+        ? await openWhatsAppChat(contact ?? '')
+        : await openPhoneCall(phone ?? '');
+    if (!opened && context.mounted) {
       ErrorBanner.show(
           context,
           whatsapp
               ? 'No pudimos abrir WhatsApp.'
               : 'No pudimos iniciar la llamada.');
+    }
   }
 
   @override
-  Widget build(BuildContext context) => Wrap(spacing: 8, children: [
-        OutlinedButton.icon(
-            onPressed: () => _open(context, false),
-            icon: const Icon(Icons.call_outlined, size: 18),
-            label: const Text('Llamar')),
-        OutlinedButton.icon(
-            onPressed: () => _open(context, true),
-            icon: const Icon(Icons.chat_outlined, size: 18),
-            label: const Text('WhatsApp')),
-      ]);
+  Widget build(BuildContext context) => Wrap(
+        spacing: 8,
+        children: [
+          if (waMeDigitsFromPhone(phone ?? '') != null)
+            OutlinedButton.icon(
+                onPressed: () => _open(context, false),
+                icon: const Icon(Icons.call_outlined, size: 18),
+                label: const Text('Llamar')),
+          if (whatsAppContact(phone: phone, username: username) != null)
+            OutlinedButton.icon(
+                onPressed: () => _open(context, true),
+                icon: const Icon(Icons.chat_outlined, size: 18),
+                label: const Text('WhatsApp')),
+        ],
+      );
 }

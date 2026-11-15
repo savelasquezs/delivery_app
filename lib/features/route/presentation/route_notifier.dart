@@ -235,6 +235,18 @@ class RouteNotifier extends StateNotifier<RouteState> {
     return changes.isEmpty ? RouteOrderChange.none : changes.single;
   }
 
+  Future<void> refreshFromCache() async {
+    try {
+      final cached = await _repository.operations.cachedContext();
+      if (cached != null) await _applyContext(cached);
+    } catch (error) {
+      if (mounted) {
+        state = state.copyWith(error: userFacingErrorMessage(error));
+      }
+    }
+    if (mounted) unawaited(load(silently: true, ensureFresh: true));
+  }
+
   Future<List<RouteOrderChange>> applyRealtimeOrders(
       Iterable<Order> incoming) async {
     if (!mounted) return const [];

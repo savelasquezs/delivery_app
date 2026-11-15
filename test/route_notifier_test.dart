@@ -103,6 +103,24 @@ void main() {
     await Future.wait(requests);
     expect(calls, 1);
   });
+
+  test('assignment ACK restores the new route while an older GET is still pending', () async {
+    final response = Completer<Map<String, dynamic>>();
+    var calls = 0;
+    operations.fetch = () => ++calls == 1 ? response.future : Future.error(StateError('offline'));
+    final loading = notifier.load();
+    await Future<void>.delayed(Duration.zero);
+    operations.cached = context(5, [21], routeId: 20);
+    await notifier.refreshFromCache();
+    expect(notifier.state.orders.single.id, 21);
+    expect(notifier.state.routeId, 20);
+    response.complete(context(2, [11], routeId: 8));
+    await loading;
+    expect(notifier.state.orders.single.id, 21);
+    expect(notifier.state.routeId, 20);
+    expect(calls, 2);
+    expect(notifier.state.error, isNotNull);
+  });
   test('a stale response cannot replace the newer route or its GPS mode',
       () async {
     operations.cached = context(5, [12], routeId: 8);
