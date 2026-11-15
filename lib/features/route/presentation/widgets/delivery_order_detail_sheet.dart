@@ -302,7 +302,7 @@ class _DeliveryOrderDetailBodyState
                         if (waMeDigitsFromPhone(_order.customer!.phone ?? '') != null ||
                             waMeUsername(_order.customer!.whatsAppUsername ?? '') != null) ...[
                           const SizedBox(height: 8),
-                          _CustomerContactActions(
+                          CustomerContactActions(
                             phone: _order.customer!.phone,
                             username: _order.customer!.whatsAppUsername,
                           ),
@@ -1470,15 +1470,13 @@ class _CoordCard extends StatelessWidget {
 // Botones de contacto: llamada sólo por teléfono y chat por teléfono o usuario.
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _CustomerContactActions extends StatelessWidget {
+class CustomerContactActions extends StatelessWidget {
   final String? phone;
   final String? username;
-  const _CustomerContactActions({this.phone, this.username});
+  const CustomerContactActions({super.key, this.phone, this.username});
 
   Future<void> _open(BuildContext context, bool whatsapp) async {
-    final contact = waMeDigitsFromPhone(phone ?? '') != null
-        ? phone
-        : username;
+    final contact = whatsAppContact(phone: phone, username: username);
     final opened = whatsapp
         ? await openWhatsAppChat(contact ?? '')
         : await openPhoneCall(phone ?? '');
@@ -1500,8 +1498,7 @@ class _CustomerContactActions extends StatelessWidget {
                 onPressed: () => _open(context, false),
                 icon: const Icon(Icons.call_outlined, size: 18),
                 label: const Text('Llamar')),
-          if (waMeDigitsFromPhone(phone ?? '') != null ||
-              waMeUsername(username ?? '') != null)
+          if (whatsAppContact(phone: phone, username: username) != null)
             OutlinedButton.icon(
                 onPressed: () => _open(context, true),
                 icon: const Icon(Icons.chat_outlined, size: 18),

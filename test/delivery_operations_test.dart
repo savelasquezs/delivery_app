@@ -375,6 +375,146 @@ void main() {
   });
 
 
+  test('lost take response recovers the same selection without a second POST',
+      () async {
+    serverRoute();
+    client.respond = () async {
+      client.routeSnapshot = {
+        'revision': 9,
+        'routeId': 20,
+        'lastTakeId': client.sent.single['operationId'],
+        'orders': [
+          {...order.rawJson, 'id': 21, 'deliveryRouteId': 20}
+        ],
+      };
+      throw DioException(
+          requestOptions: RequestOptions(path: '/operations'),
+          type: DioExceptionType.receiveTimeout);
+    };
+    await expectLater(
+        operations.take({
+          'orderIds': [21]
+        }),
+        throwsStateError);
+    expect(await operations.pending(), hasLength(1));
+    final recovered = await operations.take({
+      'orderIds': [21]
+    });
+    expect(recovered.single.id, 21);
+    expect(client.sent, hasLength(1));
+    expect(await operations.pending(), isEmpty);
+  });
+
+  test('a take queued during an older sync is sent before returning', () async {
+    serverRoute();
+    await operations
+        .record(order, 'address', changes: {'additionalInfo': 'Torre 2'});
+    final firstStarted = Completer<void>();
+    final firstResponse = Completer<Map<String, dynamic>>();
+    client.respond = () {
+      if (client.sent.length == 1) {
+        firstStarted.complete();
+        return firstResponse.future;
+      }
+      return Future.value({
+        'context': {
+          'revision': 9,
+          'routeId': 20,
+          'lastTakeId': client.sent.last['operationId'],
+          'orders': [
+            {...order.rawJson, 'id': 21, 'deliveryRouteId': 20}
+          ],
+        }
+      });
+    };
+    final syncing = operations.sync();
+    await firstStarted.future;
+    final taking = operations.take({
+      'orderIds': [21]
+    });
+    while ((await operations.pending()).length < 2) {
+      await Future<void>.delayed(const Duration(milliseconds: 1));
+    }
+    firstResponse.complete({'context': client.routeSnapshot});
+    await syncing;
+    expect((await taking).single.id, 21);
+    expect(client.sent.map((p) => p['kind']), ['address', 'take']);
+    expect(await operations.pending(), isEmpty);
+  });
+
+  test(
+      'take deadline releases the UI but retains the in-flight intent and late ACK',
+      () async {
+    serverRoute();
+    operations = DeliveryOperations(client, storage,
+        outbox: outbox, takeTimeout: const Duration(milliseconds: 100));
+    final started = Completer<void>();
+    final response = Completer<Map<String, dynamic>>();
+    client.respond = () {
+      started.complete();
+      return response.future;
+    };
+    final timedOut = expectLater(
+        operations.take({
+          'orderIds': [21]
+        }),
+        throwsStateError);
+    await started.future;
+    await timedOut;
+    expect(await operations.pending(), hasLength(1));
+    await expectLater(
+        operations.take({
+          'orderIds': [22]
+        }),
+        throwsStateError);
+    expect(client.sent, hasLength(1));
+    response.complete({
+      'context': {
+        'revision': 9,
+        'routeId': 20,
+        'lastTakeId': client.sent.single['operationId'],
+        'orders': [
+          {...order.rawJson, 'id': 21, 'deliveryRouteId': 20}
+        ],
+      }
+    });
+    while ((await operations.pending()).isNotEmpty) {
+      await Future<void>.delayed(const Duration(milliseconds: 1));
+    }
+    expect((await operations.cachedContext())?['lastTakeId'],
+        client.sent.single['operationId']);
+    expect(client.sent, hasLength(1));
+  });
+
+  test('a completed ACK is still recovered after its outbox row is removed', () async {
+    serverRoute();
+    client.respond = () async => {'context': {
+      'revision': 9, 'routeId': 20,
+      'lastTakeId': client.sent.single['operationId'],
+      'orders': [{...order.rawJson, 'id': 21, 'deliveryRouteId': 20}],
+    }};
+    await operations.take({'orderIds': [21]});
+    expect(await operations.pending(), isEmpty);
+    client.routeSnapshot = await operations.cachedContext();
+    expect((await operations.take({'orderIds': [21]})).single.id, 21);
+    expect(client.sent, hasLength(1));
+  });
+
+  test('a late ACK after an account change cannot confirm the new account', () async {
+    serverRoute();
+    client.respond = () async {
+      storage.session = auth(10);
+      return {'context': {
+        'revision': 9, 'routeId': 20,
+        'lastTakeId': client.sent.single['operationId'],
+        'orders': [{...order.rawJson, 'id': 21, 'deliveryRouteId': 20}],
+      }};
+    };
+    await expectLater(operations.take({'orderIds': [21]}), throwsStateError);
+    expect(await operations.cachedContext(), isNull);
+    expect(client.sent, hasLength(1));
+  });
+
   test('old selection assigned to another driver no longer blocks', () async {
     serverRoute();
     await queuedTake([9393, 9394]);

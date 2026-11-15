@@ -85,7 +85,7 @@ class OrderCustomer {
   });
 
   factory OrderCustomer.fromJson(Map<String, dynamic> json) => OrderCustomer(
-        id: json['id'] as int,
+        id: json['id'] as int? ?? 0,
         name: json['name'] as String? ?? '',
         phone: json['phone'] as String?,
         whatsAppUsername: json['whatsAppUsername'] as String? ??
@@ -328,6 +328,7 @@ class Order {
           )
         : ((flatCustomerId != null && flatCustomerId > 0) ||
                 (flatName != null && flatName.isNotEmpty) ||
+                (flatPhone != null && flatPhone.isNotEmpty) ||
                 (flatUsername != null && flatUsername.isNotEmpty)
             ? OrderCustomer(
                 id: flatCustomerId ?? 0,

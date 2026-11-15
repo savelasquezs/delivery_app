@@ -27,7 +27,11 @@ class DeliveryOperations {
   final SecureStorage storage;
   final TrackingOutbox outbox;
   Future<void>? _syncing;
-  DeliveryOperations(this.client, this.storage, {TrackingOutbox? outbox})
+  Future<List<Order>>? _taking;
+  Map<String, dynamic>? _lastTake;
+  final Duration takeTimeout;
+  DeliveryOperations(this.client, this.storage,
+      {TrackingOutbox? outbox, this.takeTimeout = const Duration(seconds: 45)})
       : outbox = outbox ?? TrackingOutbox.shared;
 
   Future<String> owner() async {
@@ -204,13 +208,51 @@ class DeliveryOperations {
   }
 
   Future<List<Order>> take(Map<String, dynamic> selection,
+      {List<Order> confirmedPreviousDeliveries = const []}) {
+    if (_taking != null) {
+      return Future.error(StateError(
+          'La asignación anterior sigue en curso. Espera su confirmación.'));
+    }
+    final operation = _take(selection,
+        confirmedPreviousDeliveries: confirmedPreviousDeliveries);
+    _taking = operation;
+    operation.then((_) => _taking = null,
+        onError: (Object _, StackTrace __) => _taking = null);
+    return operation.timeout(takeTimeout, onTimeout: () {
+      throw StateError('La asignación aún no tiene respuesta confirmada. '
+          'Revisa tu conexión y la ruta antes de volver a intentarlo.');
+    });
+  }
+
+  Future<List<Order>> _take(Map<String, dynamic> selection,
       {List<Order> confirmedPreviousDeliveries = const []}) async {
+    final sessionId = (await storage.readSession())?.id;
     final key = await owner();
+    final previousTakes = (await outbox.operations(key))
+        .map((row) => jsonDecode(row['payload'] as String) as Map)
+        .where((payload) =>
+            payload['kind'] == 'take' &&
+            jsonEncode(payload['selection']) == jsonEncode(selection))
+        .toList();
+    final lastTake = _lastTake;
+    if (lastTake != null && lastTake['sessionId'] == sessionId &&
+        jsonEncode(lastTake['selection']) == jsonEncode(selection)) {
+      previousTakes.add(lastTake);
+    }
     await _resolveObsoleteTakes(key);
     final context = await refresh();
+    if (key != await owner() ||
+        (await storage.readSession())?.id != sessionId) {
+      throw StateError('La sesión cambió. Vuelve a abrir los pedidos.');
+    }
+    if (previousTakes
+        .any((take) => take['operationId'] == context['lastTakeId'])) {
+      return _ordersFromContext(context);
+    }
     final pending = _pendingFromContext(context);
     final confirmed = {
-      for (final order in confirmedPreviousDeliveries) order.id: order.managementVersion
+      for (final order in confirmedPreviousDeliveries)
+        order.id: order.managementVersion
     };
     if (confirmed.length != confirmedPreviousDeliveries.length ||
         confirmed.length != pending.length ||
@@ -218,7 +260,8 @@ class DeliveryOperations {
             order.status != OrderStatus.onTheWay ||
             order.managementVersion <= 0 ||
             confirmed[order.id] != order.managementVersion)) {
-      throw StateError('La ruta anterior cambió. Revisa sus pedidos antes de confirmar la nueva.');
+      throw StateError(
+          'La ruta anterior cambió. Revisa sus pedidos antes de confirmar la nueva.');
     }
     final session =
         jsonDecode((await storage.getWorkSessionData()) ?? '{}') as Map;
@@ -245,24 +288,40 @@ class DeliveryOperations {
             {'orderId': order.id, 'expectedVersion': order.managementVersion}
         ],
     };
+    if ((await storage.readSession())?.id != sessionId) {
+      throw StateError('La sesión cambió. Vuelve a abrir los pedidos.');
+    }
     await outbox.enqueueOperation(key, request, {});
+    _lastTake = {...request, 'sessionId': sessionId};
     await sync();
-    final remaining = (await outbox.operations(key))
-        .where((row) => row['id'] == id).toList();
+    final queued =
+        (await outbox.operations(key)).where((row) => row['id'] == id);
+    if (queued.isNotEmpty && (queued.single['attempts'] as num? ?? 0) == 0) {
+      await sync();
+    }
+    final remaining =
+        (await outbox.operations(key)).where((row) => row['id'] == id).toList();
     if (remaining.isNotEmpty) {
       throw StateError(remaining.single['state'] == 'conflict'
           ? 'La asignación fue rechazada. Actualiza los pedidos y vuelve a seleccionarlos.'
           : 'Confirmando el resultado de la toma. No vuelvas a asignarte los pedidos.');
     }
     final current = await outbox.cached(key, 'route');
+    if ((await storage.readSession())?.id != sessionId) {
+      throw StateError('La sesión cambió. Vuelve a abrir los pedidos.');
+    }
     if (current?['lastTakeId'] != id) {
       throw StateError(
           'El servidor no confirmó esta asignación. Actualiza los pedidos antes de reintentar.');
     }
-    return (current?['orders'] as List? ?? [])
-        .map((value) => Order.fromJson(Map<String, dynamic>.from(value as Map)))
-        .toList();
+    return _ordersFromContext(current!);
   }
+
+  static List<Order> _ordersFromContext(Map<String, dynamic> context) =>
+      (context['orders'] as List? ?? [])
+          .map((value) =>
+              Order.fromJson(Map<String, dynamic>.from(value as Map)))
+          .toList();
 
   Future<void> sync() =>
       _syncing ??= _synchronize().whenComplete(() => _syncing = null);
@@ -270,8 +329,8 @@ class DeliveryOperations {
   /// Only acknowledge a 409 when the authoritative server state proves the
   /// original intent already happened. Uncertain or reassigned work stays in
   /// SQLite for explicit review.
-  Future<bool> _alreadyConfirmed(Map<String, dynamic> payload,
-      Map<String, Object?> row) async {
+  Future<bool> _alreadyConfirmed(
+      Map<String, dynamic> payload, Map<String, Object?> row) async {
     try {
       if (payload['kind'] == 'take') {
         final context = await refresh();
@@ -309,9 +368,13 @@ class DeliveryOperations {
       final payload = Map<String, dynamic>.from(
           jsonDecode(row['payload'] as String) as Map);
       final orderId = payload['orderId'] as int?;
-      final addressId = (jsonDecode(row['display'] as String) as Map)['addressId'];
-      final resources = {'order:$orderId',
-        if (payload['kind'] == 'address' && addressId != null) 'address:$addressId'};
+      final addressId =
+          (jsonDecode(row['display'] as String) as Map)['addressId'];
+      final resources = {
+        'order:$orderId',
+        if (payload['kind'] == 'address' && addressId != null)
+          'address:$addressId'
+      };
       if (resources.any(blocked.contains)) continue;
       if (row['state'] == 'conflict') {
         blocked.addAll(resources);
@@ -324,11 +387,15 @@ class DeliveryOperations {
         continue;
       }
       try {
-        final response = await client.post<Map<String, dynamic>>(
-            '/deliverymen/me/operations',
-            data: payload,
-            fromJson: (value) => Map<String, dynamic>.from(value as Map),
-            options: Options(extra: {'_sessionId': auth.id}));
+        final response = await client
+            .post<Map<String, dynamic>>('/deliverymen/me/operations',
+                data: payload,
+                fromJson: (value) => Map<String, dynamic>.from(value as Map),
+                options: Options(
+                    sendTimeout: const Duration(seconds: 30),
+                    receiveTimeout: const Duration(seconds: 30),
+                    extra: {'_sessionId': auth.id}))
+            .timeout(const Duration(seconds: 35));
         await outbox.cache(key, 'route',
             Map<String, dynamic>.from(response['context'] as Map));
         await outbox.finishOperation(key, id);
@@ -338,10 +405,7 @@ class DeliveryOperations {
           await outbox.finishOperation(key, id);
           continue;
         }
-        if (status == 400 ||
-            status == 404 ||
-            status == 409 ||
-            status == 422) {
+        if (status == 400 || status == 404 || status == 409 || status == 422) {
           await outbox.finishOperation(key, id,
               conflict: userFacingErrorMessage(error));
           blocked.addAll(resources);

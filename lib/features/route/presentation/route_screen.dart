@@ -93,9 +93,7 @@ class _RouteScreenState extends ConsumerState<RouteScreen> {
     final phone = order.customer?.phone?.trim();
     final username = order.customer?.whatsAppUsername?.trim();
     if (whatsapp) {
-      final contact = waMeDigitsFromPhone(phone ?? '') != null
-          ? phone
-          : username;
+      final contact = whatsAppContact(phone: phone, username: username);
       if (contact == null || contact.isEmpty) return;
       final opened = await openWhatsAppChat(
         contact,
@@ -169,8 +167,8 @@ class _RouteScreenState extends ConsumerState<RouteScreen> {
       waMeDigitsFromPhone(order.customer?.phone ?? '') != null;
 
   bool _hasCustomerWhatsApp(Order order) =>
-      _hasCustomerPhone(order) ||
-      waMeUsername(order.customer?.whatsAppUsername ?? '') != null;
+      whatsAppContact(phone: order.customer?.phone,
+          username: order.customer?.whatsAppUsername) != null;
 
   Future<void> _reviewPending(Map<String, Object?> row) async {
     final payload = jsonDecode(row['payload'] as String) as Map;

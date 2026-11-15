@@ -103,7 +103,6 @@ class _AvailableScreenState extends ConsumerState<AvailableScreen>
       return;
     }
     if (!mounted) return;
-    List<Order> assignedOrders = const [];
     final confirmed = await ConfirmAssignmentDialog.show(
       context,
       title: pendingPrevious.isEmpty
@@ -116,8 +115,7 @@ class _AvailableScreenState extends ConsumerState<AvailableScreen>
           : '${previousRouteConfirmationMessage(pendingPrevious)}\n\n'
               'Nueva ruta: ${selectedList.map((id) => '#$id').join(', ')}',
       onConfirm: () async {
-        // Sólo la asignación de backend bloquea el diálogo de confirmación.
-        assignedOrders = await ref
+        await ref
             .read(availableNotifierProvider.notifier)
             .selfAssign(
                 orderIds: selectedList,
@@ -127,18 +125,7 @@ class _AvailableScreenState extends ConsumerState<AvailableScreen>
 
     if (confirmed && mounted) {
       setState(() => _selectedIds.clear());
-      // Refrescar la ruta no debe mantener bloqueado un pedido ya asignado.
-      // La pantalla "En ruta" recargará sus datos si esta lectura falla.
-      unawaited(() async {
-        try {
-          await ref
-              .read(routeNotifierProvider.notifier)
-              .applyRealtimeOrders(assignedOrders)
-              .timeout(const Duration(seconds: 12));
-        } catch (_) {
-          // La asignación ya fue confirmada: nunca repetirla por un fallo GET.
-        }
-      }());
+      unawaited(ref.read(routeNotifierProvider.notifier).refreshAfterAssignment());
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Pedido(s) asignado(s) exitosamente ✓'),
@@ -161,10 +148,7 @@ class _AvailableScreenState extends ConsumerState<AvailableScreen>
           RouteProposalEditor(proposal: proposal, version: plan.version),
     );
     if (assigned != null && mounted) {
-      await ref
-          .read(routeNotifierProvider.notifier)
-          .applyRealtimeOrders(assigned);
-      if (!mounted) return;
+      unawaited(ref.read(routeNotifierProvider.notifier).refreshAfterAssignment());
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('Ruta asignada exitosamente ✓'),
         backgroundColor: AppColors.accentContainer,

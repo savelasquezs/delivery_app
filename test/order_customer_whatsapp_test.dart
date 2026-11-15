@@ -2,6 +2,24 @@ import 'package:delivery_app/features/orders/models/order_models.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('API anterior y pedidos sin cliente conservan compatibilidad', () {
+    final guest = Order.fromJson({'id': 1});
+    expect(guest.customer, isNull);
+    final phoneOnly = Order.fromJson({'id': 2, 'customerPhone': '3001234567'});
+    expect(phoneOnly.customer?.phone, '3001234567');
+    expect(phoneOnly.customer?.whatsAppUsername, isNull);
+  });
+
+  test('JSON anidado admite usuario sin teléfono ni id', () {
+    final order = Order.fromJson({
+      'id': 1,
+      'customer': {
+        'whatsAppUsername': '@cliente_arroz',
+      }
+    });
+    expect(order.customer?.whatsAppUsername, '@cliente_arroz');
+    expect(order.customer?.phone, isNull);
+  });
   test('OrderDto plano admite cliente con username sin teléfono', () {
     final order = Order.fromJson({
       'id': 9831,

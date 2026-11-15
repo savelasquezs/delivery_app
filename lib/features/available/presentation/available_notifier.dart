@@ -487,7 +487,10 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
   }
 
   Future<List<Order>> pendingBeforeNextRoute() =>
-      _repository.operations.pendingBeforeNextRoute();
+      _repository.operations.pendingBeforeNextRoute().timeout(
+          const Duration(seconds: 45),
+          onTimeout: () => throw StateError(
+              'No pudimos comprobar tu ruta anterior. Revisa tu conexión.'));
 
   Future<List<Order>> selfAssign(
       {required List<int> orderIds,
@@ -503,7 +506,10 @@ class AvailableNotifier extends StateNotifier<AvailableState> {
       throw StateError(
           'El plan cambió. Actualiza las rutas o selecciona los pedidos manualmente.');
     }
-    if (_canBeginDelivery != null && !await _canBeginDelivery!()) {
+    if (_canBeginDelivery != null &&
+        !await _canBeginDelivery!().timeout(const Duration(seconds: 15),
+            onTimeout: () => throw StateError(
+                'No pudimos comprobar el seguimiento. Revisa la ubicación y vuelve a intentarlo.'))) {
       throw StateError(
           'No puedes tomar pedidos hasta que el seguimiento de ubicación esté activo.');
     }
